@@ -10,9 +10,15 @@ const SESSION_TTL_DAYS = 30;
 export const DEV_OTP_CODE = "0000";
 
 function secret(): Uint8Array {
-  return new TextEncoder().encode(
-    process.env.SESSION_SECRET ?? "dev-secret-change-in-production"
-  );
+  const raw = process.env.SESSION_SECRET;
+  if (!raw) {
+    // Тихий дефолт в проде означал бы подделываемые сессии
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SESSION_SECRET must be set in production");
+    }
+    return new TextEncoder().encode("dev-secret-change-in-production");
+  }
+  return new TextEncoder().encode(raw);
 }
 
 export type SessionUser = {

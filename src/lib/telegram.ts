@@ -1,6 +1,7 @@
 import { createHmac } from "crypto";
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+// Читаем лениво: env может подгружаться после импорта модуля (тесты, next dev)
+const botToken = () => process.env.TELEGRAM_BOT_TOKEN;
 
 export type TelegramInitUser = {
   id: number;
@@ -16,7 +17,8 @@ export type TelegramInitUser = {
  * либо бот не сконфигурирован.
  */
 export function verifyTelegramInitData(initData: string): TelegramInitUser | null {
-  if (!BOT_TOKEN) return null;
+  const token = botToken();
+  if (!token) return null;
 
   const params = new URLSearchParams(initData);
   const hash = params.get("hash");
@@ -28,7 +30,7 @@ export function verifyTelegramInitData(initData: string): TelegramInitUser | nul
     .sort()
     .join("\n");
 
-  const secretKey = createHmac("sha256", "WebAppData").update(BOT_TOKEN).digest();
+  const secretKey = createHmac("sha256", "WebAppData").update(token).digest();
   const computed = createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
   if (computed !== hash) return null;
 
@@ -44,9 +46,10 @@ export function verifyTelegramInitData(initData: string): TelegramInitUser | nul
 
 /** Уведомление пользователю через бота; no-op, если токен не задан. */
 export async function sendTelegramMessage(telegramId: string, text: string): Promise<void> {
-  if (!BOT_TOKEN) return;
+  const token = botToken();
+  if (!token) return;
   try {
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: telegramId, text, parse_mode: "HTML" }),

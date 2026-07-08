@@ -51,13 +51,19 @@ export type SessionUser = {
   role: string;
 };
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error ?? `Ошибка запроса (${res.status})`);
+  if (!res.ok) throw new ApiError(data.error ?? `Ошибка запроса (${res.status})`, res.status);
   return data as T;
 }
 

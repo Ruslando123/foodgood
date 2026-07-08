@@ -2,12 +2,18 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-function todayAt(hours: number, minutes = 0): Date {
-  const d = new Date();
-  d.setHours(hours, minutes, 0, 0);
-  // Если окно уже прошло сегодня — переносим на завтра, чтобы seed всегда давал активные пакеты
-  if (d < new Date()) d.setDate(d.getDate() + 1);
-  return d;
+// Окно выдачи переносится на завтра целиком, если сегодня оно уже закончилось —
+// иначе start мог бы уехать на завтра, а end остаться сегодня (end < start)
+function pickupWindow(startH: number, startM: number, endH: number, endM: number) {
+  const start = new Date();
+  start.setHours(startH, startM, 0, 0);
+  const end = new Date();
+  end.setHours(endH, endM, 0, 0);
+  if (end < new Date()) {
+    start.setDate(start.getDate() + 1);
+    end.setDate(end.getDate() + 1);
+  }
+  return { start, end };
 }
 
 async function main() {
@@ -103,10 +109,12 @@ async function main() {
     }),
   ]);
 
-  const eveningStart = todayAt(21, 0);
-  const eveningEnd = todayAt(22, 0);
-  const lateStart = todayAt(20, 30);
-  const lateEnd = todayAt(21, 30);
+  const evening = pickupWindow(21, 0, 22, 0);
+  const late = pickupWindow(20, 30, 21, 30);
+  const eveningStart = evening.start;
+  const eveningEnd = evening.end;
+  const lateStart = late.start;
+  const lateEnd = late.end;
 
   const bags = [
     {

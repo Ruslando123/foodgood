@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import BottomNav from "@/components/BottomNav";
 import QrCanvas from "@/components/QrCanvas";
-import { api, Order, formatPrice, formatPickupWindow } from "@/lib/client/api";
+import { api, ApiError, Order, formatPrice, formatPickupWindow } from "@/lib/client/api";
 
 const STATUS_LABEL: Record<Order["status"], string> = {
   PENDING_PAYMENT: "Ожидает оплаты",
@@ -25,7 +25,7 @@ function OrdersContent() {
     api<{ orders: Order[] }>("/api/orders")
       .then((d) => setOrders(d.orders))
       .catch((e) => {
-        if (String(e.message).includes("вход")) setNeedLogin(true);
+        if (e instanceof ApiError && e.status === 401) setNeedLogin(true);
         else setError(e.message);
       });
   }

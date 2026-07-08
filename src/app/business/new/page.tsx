@@ -33,7 +33,6 @@ export default function NewBagPage() {
     const [h, m] = hhmm.split(":").map(Number);
     const d = new Date();
     d.setHours(h, m, 0, 0);
-    if (d < new Date()) d.setDate(d.getDate() + 1); // окно на завтра, если время уже прошло
     return d;
   }
 
@@ -43,7 +42,14 @@ export default function NewBagPage() {
     try {
       const pickupStart = timeToday(startTime);
       const pickupEnd = timeToday(endTime);
+      // Окно через полночь (например, 23:00–00:30)
       if (pickupEnd <= pickupStart) pickupEnd.setDate(pickupEnd.getDate() + 1);
+      // Окно сегодня уже закончилось — публикуем на завтра;
+      // если оно ещё идёт, оставляем сегодняшним
+      if (pickupEnd <= new Date()) {
+        pickupStart.setDate(pickupStart.getDate() + 1);
+        pickupEnd.setDate(pickupEnd.getDate() + 1);
+      }
       await api("/api/business/bags", {
         method: "POST",
         body: JSON.stringify({
