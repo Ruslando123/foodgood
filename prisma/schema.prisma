@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         String   @id @default(cuid())
+  phone      String?  @unique
+  telegramId String?  @unique
+  name       String?
+  role       String   @default("CUSTOMER") // CUSTOMER | MERCHANT
+  createdAt  DateTime @default(now())
+
+  venues Venue[]
+  orders Order[]
+}
+
+model Venue {
+  id          String   @id @default(cuid())
+  name        String
+  description String   @default("")
+  address     String
+  lat         Float
+  lng         Float
+  category    String   @default("CAFE") // CAFE | BAKERY | SUPERMARKET | RESTAURANT
+  photo       String   @default("🍽️") // emoji or image URL
+  ownerId     String
+  createdAt   DateTime @default(now())
+
+  owner User  @relation(fields: [ownerId], references: [id])
+  bags  Bag[]
+}
+
+model Bag {
+  id            String   @id @default(cuid())
+  venueId       String
+  title         String
+  description   String   @default("")
+  price         Int // sale price, KZT
+  originalPrice Int // estimated original value, KZT
+  quantityTotal Int
+  quantityLeft  Int
+  pickupStart   DateTime
+  pickupEnd     DateTime
+  status        String   @default("ACTIVE") // ACTIVE | SOLD_OUT | EXPIRED | CANCELLED
+  createdAt     DateTime @default(now())
+
+  venue  Venue   @relation(fields: [venueId], references: [id])
+  orders Order[]
+
+  @@index([status, pickupEnd])
+}
+
+model Order {
+  id          String    @id @default(cuid())
+  bagId       String
+  userId      String
+  quantity    Int       @default(1)
+  totalPrice  Int // KZT
+  platformFee Int // KZT, snapshot at purchase time
+  status      String    @default("PENDING_PAYMENT") // PENDING_PAYMENT | PAID | COMPLETED | CANCELLED | EXPIRED
+  pickupCode  String    @unique
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  bag     Bag      @relation(fields: [bagId], references: [id])
+  user    User     @relation(fields: [userId], references: [id])
+  payment Payment?
+
+  @@index([userId, status])
+}
+
+model Payment {
+  id          String   @id @default(cuid())
+  orderId     String   @unique
+  provider    String   @default("mock")
+  providerRef String
+  amount      Int // KZT
+  status      String   @default("HELD") // HELD | CAPTURED | REFUNDED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id])
+}
