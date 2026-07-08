@@ -20,7 +20,7 @@ type FixtureOptions = {
   bagStatus?: string;
 };
 
-/** Мерчант + заведение + пакет + покупатель — базовый набор для сценариев. */
+/** Мерчант + завеkдение + пакет + покупатель — базовый набор для сценариев. */
 export async function createFixtures(opts: FixtureOptions = {}) {
   const merchant = await prisma.user.create({
     data: { phone: "+77010009999", role: "MERCHANT" },
