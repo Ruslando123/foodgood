@@ -5,6 +5,12 @@ import { generatePickupCode } from "@/lib/qr";
 import { normalizePhone } from "@/lib/auth";
 import { verifyTelegramInitData } from "@/lib/telegram";
 import { PLATFORM_FEE_PCT } from "@/lib/config";
+import { pluralRu } from "@/lib/client/api";
+import { safeInternalPath } from "@/shared/navigation";
+import { integer, requiredString } from "@/shared/validation";
+import { idempotentOrderRequest } from "@/modules/orders/idempotency";
+import { assertSameOrigin } from "@/shared/server/api";
+import { filterAndSortCatalog, parseCatalogQuery } from "@/modules/catalog/query";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -99,5 +105,129 @@ describe("бизнес-константы", () => {
   it("комиссия платформы в диапазоне 20–25%", () => {
     expect(PLATFORM_FEE_PCT).toBeGreaterThanOrEqual(0.2);
     expect(PLATFORM_FEE_PCT).toBeLessThanOrEqual(0.25);
+  });
+});
+
+describe("русские формы слов", () => {
+  it.each([
+    [1, "предложение"],
+    [2, "предложения"],
+    [5, "предложений"],
+    [11, "предложений"],
+    [21, "предложение"],
+  ])("выбирает форму для %s", (count, expected) => {
+    expect(pluralRu(count, "предложение", "предложения", "предложений")).toBe(expected);
+  });
+});
+
+describe("границы безопасности", () => {
+  it.each([
+    ["/orders?new=123", "/orders?new=123"],
+    ["https://evil.example", "/"],
+    ["//evil.example/path", "/"],
+    ["javascript:alert(1)", "/"],
+    [null, "/"],
+  ])("безопасный redirect %s → %s", (input, expected) => {
+    expect(safeInternalPath(input)).toBe(expected);
+  });
+
+  it("валидирует строки и целые числа на серверной границе", () => {
+    expect(requiredString("  Пекарня  ", "name", { max: 20 })).toBe("Пекарня");
+    expect(integer("5", "quantity", { min: 1, max: 10 })).toBe(5);
+    expect(() => integer(11, "quantity", { min: 1, max: 10 })).toThrow("quantity");
+    expect(() => requiredString("", "name")).toThrow("name");
+  });
+
+  it("блокирует mutation с чужого origin", () => {
+    const sameOrigin = new Request("https://foodgood.kz/api/orders", {
+      headers: { origin: "https://foodgood.kz" },
+    });
+    const crossOrigin = new Request("https://foodgood.kz/api/orders", {
+      headers: { origin: "https://evil.example" },
+    });
+    expect(() => assertSameOrigin(sameOrigin)).not.toThrow();
+    expect(() => assertSameOrigin(crossOrigin)).toThrow("не разрешён");
+  });
+
+  it("объединяет параллельные запросы с одним idempotency key", async () => {
+    let calls = 0;
+    const work = async () => {
+      calls += 1;
+      return { id: "order-1" };
+    };
+    const key = `test-user:${crypto.randomUUID()}`;
+    const [first, second] = await Promise.all([
+      idempotentOrderRequest(key, "bag-1:1", work),
+      idempotentOrderRequest(key, "bag-1:1", work),
+    ]);
+    expect(first).toEqual(second);
+    expect(calls).toBe(1);
+  });
+
+  it("отклоняет повторное использование ключа с другим payload", async () => {
+    const key = `test-user:${crypto.randomUUID()}`;
+    await idempotentOrderRequest(key, "bag-1:1", async () => ({ id: "order-1" }));
+    expect(() =>
+      idempotentOrderRequest(key, "bag-2:1", async () => ({ id: "order-2" }))
+    ).toThrow("другими параметрами");
+  });
+});
+
+describe("каталог покупателя", () => {
+  const now = new Date("2026-07-11T12:00:00.000Z");
+  const bags = [
+    {
+      id: "bakery",
+      title: "Вечерняя выпечка",
+      price: 1200,
+      originalPrice: 4000,
+      pickupStart: new Date("2026-07-11T11:00:00.000Z"),
+      pickupEnd: new Date("2026-07-11T13:00:00.000Z"),
+      distanceKm: 1.2,
+      venue: { name: "Булочная", address: "Абая 1", category: "BAKERY" },
+    },
+    {
+      id: "cafe",
+      title: "Кофе и десерт",
+      price: 800,
+      originalPrice: 1600,
+      pickupStart: new Date("2026-07-11T14:00:00.000Z"),
+      pickupEnd: new Date("2026-07-11T15:00:00.000Z"),
+      distanceKm: 0.5,
+      venue: { name: "Кофейня", address: "Достык 2", category: "CAFE" },
+    },
+  ];
+
+  it("фильтрует по поиску, категории, скидке и текущему окну", () => {
+    const query = parseCatalogQuery(
+      new URLSearchParams({ q: "выпечка", category: "BAKERY", minDiscount: "60", availableNow: "1" })
+    );
+    expect(filterAndSortCatalog(bags, query, now).map((bag) => bag.id)).toEqual(["bakery"]);
+  });
+
+  it("сортирует по цене и расстоянию", () => {
+    const byPrice = parseCatalogQuery(new URLSearchParams({ sort: "price" }));
+    const byDistance = parseCatalogQuery(new URLSearchParams({ sort: "distance" }));
+    expect(filterAndSortCatalog(bags, byPrice, now)[0].id).toBe("cafe");
+    expect(filterAndSortCatalog(bags, byDistance, now)[0].id).toBe("cafe");
+  });
+
+  it("фильтрует пакеты на сегодня", () => {
+    const today = parseCatalogQuery(new URLSearchParams({ today: "1" }));
+    expect(filterAndSortCatalog(bags, today, now).map((bag) => bag.id)).toEqual([
+      "bakery",
+      "cafe",
+    ]);
+    const tomorrow = new Date("2026-07-12T12:00:00.000Z");
+    expect(filterAndSortCatalog(bags, today, tomorrow)).toHaveLength(0);
+  });
+
+  it("отклоняет неизвестные query-параметры", () => {
+    expect(() => parseCatalogQuery(new URLSearchParams({ category: "UNKNOWN" }))).toThrow(
+      "Неизвестная категория"
+    );
+    expect(() => parseCatalogQuery(new URLSearchParams({ maxPrice: "free" }))).toThrow(
+      "maxPrice"
+    );
   });
 });

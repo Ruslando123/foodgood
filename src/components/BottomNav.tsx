@@ -2,31 +2,29 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { IconReceipt, IconShoppingBag, IconUser } from "@tabler/icons-react";
 
 const items = [
-  { href: "/", label: "Пакеты", icon: "🛍️" },
-  { href: "/orders", label: "Мои заказы", icon: "🧾" },
-  { href: "/login", label: "Профиль", icon: "👤" },
+  { href: "/", label: "Пакеты", Icon: IconShoppingBag },
+  { href: "/orders", label: "Мои заказы", Icon: IconReceipt },
+  { href: "/login", label: "Профиль", Icon: IconUser },
 ];
 
 export default function BottomNav() {
   const pathname = usePathname();
   return (
-    <nav className="fixed bottom-0 inset-x-0 z-20 bg-card border-t border-black/5 shadow-[0_-2px_10px_rgba(0,0,0,0.05)]">
-      <div className="max-w-md mx-auto flex">
-        {items.map((item) => {
-          const active =
-            item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+    <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-black/[0.07] bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl">
+      <div className="mx-auto flex h-[68px] max-w-md">
+        {items.map(({ href, label, Icon }) => {
+          const active = href === "/" ? pathname === "/" || pathname.startsWith("/bag/") || pathname.startsWith("/venue/") : pathname.startsWith(href);
           return (
             <Link
-              key={item.href}
-              href={item.href}
-              className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 text-xs ${
-                active ? "text-primary font-semibold" : "text-muted"
-              }`}
+              key={href}
+              href={href}
+              className={`flex flex-1 flex-col items-center justify-center gap-1 text-[11px] transition-colors ${active ? "font-semibold text-primary" : "text-[#6d7470]"}`}
             >
-              <span className="text-lg leading-none">{item.icon}</span>
-              {item.label}
+              <Icon size={24} stroke={active ? 2.35 : 1.75} aria-hidden="true" />
+              {label}
             </Link>
           );
         })}

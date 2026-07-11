@@ -1,22 +1,20 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/auth";
-import { redeemOrder, OrderError } from "@/lib/orders";
+import { NextRequest } from "next/server";
+import { requireMerchant } from "@/modules/auth/server";
+import { redeemOrder, throwOrderApiError } from "@/modules/orders";
+import { apiRoute, json, readJsonObject } from "@/shared/server/api";
+import { requiredString } from "@/shared/validation";
 
 /** Выдача заказа на кассе: сканирование/ввод pickup-кода. */
 export async function POST(req: NextRequest) {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
-
-  const { code } = await req.json().catch(() => ({}));
-  if (!code) return NextResponse.json({ error: "Введите код" }, { status: 400 });
-
-  try {
-    const order = await redeemOrder(user.id, String(code));
-    return NextResponse.json({ order });
-  } catch (e) {
-    if (e instanceof OrderError) {
-      return NextResponse.json({ error: e.message }, { status: 409 });
+  return apiRoute(async () => {
+    const user = await requireMerchant();
+    const body = await readJsonObject(req);
+    const code = requiredString(body.code, "code", { min: 6, max: 6 }).toUpperCase();
+    try {
+      const order = await redeemOrder(user.id, code);
+      return json({ order });
+    } catch (error) {
+      throwOrderApiError(error);
     }
-    throw e;
-  }
+  });
 }

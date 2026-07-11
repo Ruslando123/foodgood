@@ -52,7 +52,12 @@ export type SessionUser = {
 };
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly status: number) {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code = "UNKNOWN_ERROR",
+    public readonly details?: unknown
+  ) {
     super(message);
   }
 }
@@ -63,7 +68,16 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(data.error ?? `Ошибка запроса (${res.status})`, res.status);
+  if (!res.ok) {
+    const structured = data?.error && typeof data.error === "object" ? data.error : null;
+    throw new ApiError(
+      structured?.message ??
+        (typeof data?.error === "string" ? data.error : `Ошибка запроса (${res.status})`),
+      res.status,
+      structured?.code ?? "UNKNOWN_ERROR",
+      structured?.details
+    );
+  }
   return data as T;
 }
 
@@ -86,4 +100,19 @@ export function formatPickupWindow(startIso: string, endIso: string): string {
 export function discountPct(bag: Pick<Bag, "price" | "originalPrice">): number {
   if (bag.originalPrice <= 0) return 0;
   return Math.round((1 - bag.price / bag.originalPrice) * 100);
+}
+
+export function pluralRu(count: number, one: string, few: string, many: string): string {
+  const mod100 = Math.abs(count) % 100;
+  const mod10 = mod100 % 10;
+  if (mod100 >= 11 && mod100 <= 19) return many;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+}
+
+export function venueImage(category: string): string {
+  if (category === "CAFE") return "/images/food-coffee.jpg";
+  if (category === "BAKERY") return "/images/food-bread.jpg";
+  return "/images/food-bowl.jpg";
 }

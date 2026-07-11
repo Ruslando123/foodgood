@@ -1,13 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f6f8f4;
-  --foreground: #14231a;
-  --primary: #1a7f4e;
-  --primary-dark: #135c39;
-  --accent: #ffb84d;
+  --background: #f8faf8;
+  --foreground: #111713;
+  --primary: #087b40;
+  --primary-dark: #075f34;
+  --accent: #e9f5ed;
   --card: #ffffff;
-  --muted: #5f7268;
+  --muted: #707772;
 }
 
 @theme inline {
@@ -31,6 +31,22 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+a,
+input,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 /* Карта не должна перекрывать шапку и нижнюю навигацию */

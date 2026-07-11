@@ -7,7 +7,7 @@ import {
   expireStale,
   cancelBagWithRefunds,
   OrderError,
-} from "@/lib/orders";
+} from "@/modules/orders";
 import { PLATFORM_FEE_PCT } from "@/lib/config";
 import { resetDb, createFixtures, inMinutes } from "./helpers";
 

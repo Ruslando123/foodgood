@@ -1,48 +1,49 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
 import { VENUE_CATEGORIES } from "@/lib/config";
+import { requireUser } from "@/modules/auth/server";
+import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
+import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
 
 export async function GET() {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
-
-  const venues = await prisma.venue.findMany({ where: { ownerId: user.id } });
-  return NextResponse.json({ venues });
+  return apiRoute(async () => {
+    const user = await requireUser();
+    const venues = await prisma.venue.findMany({ where: { ownerId: user.id } });
+    return json({ venues });
+  });
 }
 
 /** Регистрация заведения; пользователь при этом становится мерчантом. */
 export async function POST(req: NextRequest) {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  return apiRoute(async () => {
+    const user = await requireUser();
+    const body = await readJsonObject(req);
+    const name = requiredString(body.name, "name", { max: 120 });
+    const address = requiredString(body.address, "address", { max: 300 });
+    const lat = finiteNumber(body.lat, "lat", { min: -90, max: 90 });
+    const lng = finiteNumber(body.lng, "lng", { min: -180, max: 180 });
+    const cat = requiredString(body.category ?? "CAFE", "category", { max: 40 });
+    const description = optionalString(body.description, "description", 1000);
+    const photo = optionalString(body.photo, "photo", 200) || "🍽️";
+    if (!(cat in VENUE_CATEGORIES)) {
+      throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
+    }
 
-  const body = await req.json().catch(() => ({}));
-  const { name, address, lat, lng, category, description, photo } = body;
-  if (!name || !address || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
-    return NextResponse.json(
-      { error: "Нужны название, адрес и точка на карте" },
-      { status: 400 }
-    );
-  }
-  const cat = String(category ?? "CAFE");
-  if (!(cat in VENUE_CATEGORIES)) {
-    return NextResponse.json({ error: "Неизвестная категория" }, { status: 400 });
-  }
-
-  const [venue] = await prisma.$transaction([
-    prisma.venue.create({
-      data: {
-        name: String(name),
-        address: String(address),
-        lat: Number(lat),
-        lng: Number(lng),
-        category: cat,
-        description: String(description ?? ""),
-        photo: String(photo ?? "🍽️"),
-        ownerId: user.id,
-      },
-    }),
-    prisma.user.update({ where: { id: user.id }, data: { role: "MERCHANT" } }),
-  ]);
-  return NextResponse.json({ venue }, { status: 201 });
+    const [venue] = await prisma.$transaction([
+      prisma.venue.create({
+        data: {
+          name,
+          address,
+          lat,
+          lng,
+          category: cat,
+          description,
+          photo,
+          ownerId: user.id,
+        },
+      }),
+      prisma.user.update({ where: { id: user.id }, data: { role: "MERCHANT" } }),
+    ]);
+    return json({ venue }, { status: 201 });
+  });
 }

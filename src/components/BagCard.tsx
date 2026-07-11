@@ -1,42 +1,46 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { Bag, formatPrice, formatPickupWindow, discountPct } from "@/lib/client/api";
+import { IconClock, IconMapPin } from "@tabler/icons-react";
+import { Bag, discountPct, formatPickupWindow, formatPrice, venueImage } from "@/lib/client/api";
 import { formatDistance } from "@/lib/geo";
 
 export default function BagCard({ bag }: { bag: Bag }) {
   return (
-    <Link
-      href={`/bag/${bag.id}`}
-      className="block bg-card rounded-2xl shadow-sm border border-black/5 overflow-hidden active:scale-[0.99] transition-transform"
-    >
-      <div className="flex gap-3 p-3">
-        <div className="w-20 h-20 shrink-0 rounded-xl bg-primary/10 flex items-center justify-center text-4xl">
-          {bag.venue.photo}
+    <article className="grid min-h-[154px] grid-cols-[128px_minmax(0,1fr)] overflow-hidden rounded-[17px] border border-black/[0.07] bg-white shadow-[0_3px_14px_rgba(20,40,28,0.06)]">
+      <Link href={`/bag/${bag.id}`} className="relative block min-h-[154px] overflow-hidden bg-[#eef1ee]">
+        <Image src={venueImage(bag.venue.category)} alt="" fill sizes="128px" className="object-cover" />
+      </Link>
+      <div className="flex min-w-0 flex-col px-3 py-2.5">
+        <div className="flex items-start gap-2">
+          <Link href={`/bag/${bag.id}`} className="min-w-0 flex-1">
+            <h3 className="truncate text-[15px] font-bold leading-5 tracking-[-0.01em]">{bag.venue.name}</h3>
+            <p className="truncate text-[12px] text-muted">{bag.title}</p>
+          </Link>
+          <span className="shrink-0 rounded-full bg-primary px-2 py-1 text-[11px] font-bold leading-none text-white">
+            −{discountPct(bag)}%
+          </span>
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <p className="font-semibold truncate">{bag.venue.name}</p>
-            <span className="shrink-0 text-xs font-bold text-white bg-primary rounded-full px-2 py-0.5">
-              −{discountPct(bag)}%
-            </span>
+
+        <div className="mt-1.5 space-y-1 text-[11px] text-muted">
+          <p className="flex items-center gap-1"><IconClock size={13} stroke={1.8} />{formatPickupWindow(bag.pickupStart, bag.pickupEnd)}</p>
+          {bag.distanceKm != null && <p className="flex items-center gap-1"><IconMapPin size={13} stroke={1.8} />{formatDistance(bag.distanceKm)}</p>}
+        </div>
+
+        <div className="mt-auto flex items-end justify-between gap-2 pt-1.5">
+          <div className="min-w-0">
+            <span className="whitespace-nowrap text-[15px] font-bold text-primary">{formatPrice(bag.price)}</span>
+            <span className="ml-1 whitespace-nowrap text-[10px] text-muted line-through">{formatPrice(bag.originalPrice)}</span>
           </div>
-          <p className="text-sm text-muted truncate">{bag.title}</p>
-          <p className="text-xs text-muted mt-1">
-            ⏰ {formatPickupWindow(bag.pickupStart, bag.pickupEnd)}
-            {bag.distanceKm != null && <> · 📍 {formatDistance(bag.distanceKm)}</>}
-          </p>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="font-bold text-primary">{formatPrice(bag.price)}</span>
-            <span className="text-xs text-muted line-through">
-              {formatPrice(bag.originalPrice)}
-            </span>
-            <span className="ml-auto text-xs text-muted">
-              осталось {bag.quantityLeft} шт
-            </span>
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <span className="rounded-full bg-[#edf7f1] px-2 py-1 text-[10px] text-[#327354]">Осталось {bag.quantityLeft} шт</span>
+            <Link href={`/bag/${bag.id}`} className="rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm">
+              Забронировать
+            </Link>
           </div>
         </div>
       </div>
-    </Link>
+    </article>
   );
 }

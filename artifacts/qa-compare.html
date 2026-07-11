@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>FoodGood design QA</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #e9ecea; color: #172019; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: 1520px; margin: 0 auto; padding: 28px; }
+    h1 { margin: 0 0 22px; font-size: 22px; }
+    .comparison { display: grid; grid-template-columns: 680px 1fr; gap: 28px; align-items: start; }
+    .panel { background: white; border-radius: 18px; padding: 18px; box-shadow: 0 8px 30px rgba(15, 40, 25, .08); }
+    .label { margin: 0 0 12px; font-weight: 700; }
+    .reference img { display: block; width: 100%; height: auto; }
+    .screens { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .screen img { display: block; width: 100%; height: auto; border: 1px solid #d9ddda; border-radius: 12px; }
+    .screen p { margin: 8px 0 0; color: #657068; text-align: center; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>FoodGood — reference and 390×844 implementation</h1>
+    <div class="comparison">
+      <section class="panel reference">
+        <p class="label">Source visual truth</p>
+        <img src="reference-design.png" alt="Reference design" />
+      </section>
+      <section class="panel">
+        <p class="label">Rendered implementation</p>
+        <div class="screens">
+          <div class="screen"><img src="home-redesign.png" alt="Home implementation" /><p>Catalog</p></div>
+          <div class="screen"><img src="orders-redesign.png" alt="Orders implementation" /><p>Orders empty state</p></div>
+          <div class="screen"><img src="profile-redesign.png" alt="Profile implementation" /><p>Profile</p></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

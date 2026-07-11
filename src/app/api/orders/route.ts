@@ -1,35 +1,46 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
-import { createOrder, expireStale, OrderError } from "@/lib/orders";
+import { requireUser } from "@/modules/auth/server";
+import { createOrder, expireStale, throwOrderApiError } from "@/modules/orders";
+import { idempotentOrderRequest } from "@/modules/orders/idempotency";
+import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
+import { integer, requiredString } from "@/shared/validation";
 
 export async function GET() {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
-
-  await expireStale();
-  const orders = await prisma.order.findMany({
-    where: { userId: user.id },
-    include: { bag: { include: { venue: true } }, payment: true },
-    orderBy: { createdAt: "desc" },
+  return apiRoute(async () => {
+    const user = await requireUser();
+    await expireStale();
+    const orders = await prisma.order.findMany({
+      where: { userId: user.id },
+      include: { bag: { include: { venue: true } }, payment: true },
+      orderBy: { createdAt: "desc" },
+    });
+    return json({ orders });
   });
-  return NextResponse.json({ orders });
 }
 
 export async function POST(req: NextRequest) {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
-
-  const { bagId, quantity } = await req.json().catch(() => ({}));
-  if (!bagId) return NextResponse.json({ error: "Не указан пакет" }, { status: 400 });
-
-  try {
-    const order = await createOrder(user.id, String(bagId), Number(quantity ?? 1));
-    return NextResponse.json({ order }, { status: 201 });
-  } catch (e) {
-    if (e instanceof OrderError) {
-      return NextResponse.json({ error: e.message }, { status: 409 });
+  return apiRoute(async () => {
+    const user = await requireUser();
+    const body = await readJsonObject(req);
+    const bagId = requiredString(body.bagId, "bagId", { max: 64 });
+    const quantity = integer(body.quantity ?? 1, "quantity", { min: 1, max: 10 });
+    const idempotencyKey = req.headers.get("idempotency-key");
+    if (idempotencyKey !== null && (idempotencyKey.length < 8 || idempotencyKey.length > 128)) {
+      throw new ApiError(400, "INVALID_IDEMPOTENCY_KEY", "Некорректный Idempotency-Key");
     }
-    throw e;
-  }
+    try {
+      const create = () => createOrder(user.id, bagId, quantity);
+      const order = idempotencyKey
+        ? await idempotentOrderRequest(
+            `${user.id}:${idempotencyKey}`,
+            `${bagId}:${quantity}`,
+            create
+          )
+        : await create();
+      return json({ order }, { status: 201 });
+    } catch (error) {
+      throwOrderApiError(error);
+    }
+  });
 }

@@ -18,20 +18,39 @@ export default function BusinessDashboard() {
   const [venuesCount, setVenuesCount] = useState<number | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [bags, setBags] = useState<BusinessBag[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api<{ user: SessionUser | null }>("/api/auth/me").then(async ({ user }) => {
-      setUser(user);
-      if (!user) return;
-      const [{ venues }, { stats }, { bags }] = await Promise.all([
-        api<{ venues: unknown[] }>("/api/business/venues"),
-        api<{ stats: Stats }>("/api/business/stats"),
-        api<{ bags: BusinessBag[] }>("/api/business/bags"),
-      ]);
-      setVenuesCount(venues.length);
-      setStats(stats);
-      setBags(bags);
-    });
+    let active = true;
+    (async () => {
+      try {
+        const { user } = await api<{ user: SessionUser | null }>("/api/auth/me");
+        if (!active) return;
+        setUser(user);
+        if (!user) return;
+
+        const { venues } = await api<{ venues: unknown[] }>("/api/business/venues");
+        if (!active) return;
+        setVenuesCount(venues.length);
+        if (venues.length === 0) return;
+
+        const [{ stats }, { bags }] = await Promise.all([
+          api<{ stats: Stats }>("/api/business/stats"),
+          api<{ bags: BusinessBag[] }>("/api/business/bags"),
+        ]);
+        if (!active) return;
+        setStats(stats);
+        setBags(bags);
+      } catch (e) {
+        if (active) {
+          setError(e instanceof Error ? e.message : "Не удалось загрузить кабинет");
+          setUser((current) => current ?? null);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (user === undefined) {
@@ -72,6 +91,11 @@ export default function BusinessDashboard() {
   return (
     <Shell>
       <main className="px-4 space-y-4">
+        {error && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {error}
+          </div>
+        )}
         {stats && (
           <div className="grid grid-cols-2 gap-3">
             <StatCard label="К выплате" value={formatPrice(stats.net)} accent />

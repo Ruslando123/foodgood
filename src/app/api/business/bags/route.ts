@@ -1,61 +1,63 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
-import { expireStale } from "@/lib/orders";
+import { requireMerchant } from "@/modules/auth/server";
+import { expireStale } from "@/modules/orders";
+import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
+import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 
 export async function GET() {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
-
-  await expireStale();
-  const bags = await prisma.bag.findMany({
-    where: { venue: { ownerId: user.id } },
-    include: { venue: true, orders: { where: { status: { in: ["PAID", "COMPLETED"] } } } },
-    orderBy: { createdAt: "desc" },
-    take: 50,
+  return apiRoute(async () => {
+    const user = await requireMerchant();
+    await expireStale();
+    const bags = await prisma.bag.findMany({
+      where: { venue: { ownerId: user.id } },
+      include: { venue: true, orders: { where: { status: { in: ["PAID", "COMPLETED"] } } } },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    });
+    return json({ bags });
   });
-  return NextResponse.json({ bags });
 }
 
 /** Публикация пакета-сюрприза «в 2 клика». */
 export async function POST(req: NextRequest) {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  return apiRoute(async () => {
+    const user = await requireMerchant();
+    const body = await readJsonObject(req);
+    const venueId = requiredString(body.venueId, "venueId", { max: 64 });
+    const title = requiredString(body.title, "title", { max: 120 });
+    const description = optionalString(body.description, "description", 1000);
+    const priceNum = integer(body.price, "price", { min: 1, max: 10_000_000 });
+    const originalNum = integer(body.originalPrice, "originalPrice", {
+      min: priceNum,
+      max: 10_000_000,
+    });
+    const qty = integer(body.quantity, "quantity", { min: 1, max: 10_000 });
+    const start = dateValue(body.pickupStart, "pickupStart");
+    const end = dateValue(body.pickupEnd, "pickupEnd");
 
-  const body = await req.json().catch(() => ({}));
-  const { venueId, title, description, price, originalPrice, quantity, pickupStart, pickupEnd } = body;
+    const venue = await prisma.venue.findUnique({ where: { id: venueId } });
+    if (!venue || venue.ownerId !== user.id) {
+      throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
+    }
+    if (end <= start || end <= new Date()) {
+      throw new ApiError(400, "INVALID_PICKUP_WINDOW", "Некорректное окно выдачи");
+    }
 
-  const venue = await prisma.venue.findUnique({ where: { id: String(venueId ?? "") } });
-  if (!venue || venue.ownerId !== user.id) {
-    return NextResponse.json({ error: "Заведение не найдено" }, { status: 404 });
-  }
-
-  const priceNum = Math.round(Number(price));
-  const originalNum = Math.round(Number(originalPrice));
-  const qty = Math.round(Number(quantity));
-  const start = new Date(pickupStart);
-  const end = new Date(pickupEnd);
-
-  if (!title || !Number.isFinite(priceNum) || priceNum <= 0 || !Number.isFinite(qty) || qty <= 0) {
-    return NextResponse.json({ error: "Заполните название, цену и количество" }, { status: 400 });
-  }
-  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start || end <= new Date()) {
-    return NextResponse.json({ error: "Некорректное окно выдачи" }, { status: 400 });
-  }
-
-  const bag = await prisma.bag.create({
-    data: {
-      venueId: venue.id,
-      title: String(title),
-      description: String(description ?? ""),
-      price: priceNum,
-      originalPrice: Number.isFinite(originalNum) && originalNum > priceNum ? originalNum : priceNum * 3,
-      quantityTotal: qty,
-      quantityLeft: qty,
-      pickupStart: start,
-      pickupEnd: end,
-    },
-    include: { venue: true },
+    const bag = await prisma.bag.create({
+      data: {
+        venueId: venue.id,
+        title,
+        description,
+        price: priceNum,
+        originalPrice: originalNum,
+        quantityTotal: qty,
+        quantityLeft: qty,
+        pickupStart: start,
+        pickupEnd: end,
+      },
+      include: { venue: true },
+    });
+    return json({ bag }, { status: 201 });
   });
-  return NextResponse.json({ bag }, { status: 201 });
 }

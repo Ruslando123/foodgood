@@ -9,10 +9,11 @@
     "lint": "eslint",
     "db:push": "prisma db push",
     "seed": "tsx prisma/seed.ts",
-    "test": "rm -f prisma/test.db && DATABASE_URL=file:./test.db prisma db push --skip-generate && DATABASE_URL=file:./test.db vitest run"
+    "test": "rm -f prisma/test.db && RUST_LOG=debug DATABASE_URL=file:$(pwd)/prisma/test.db prisma db push --skip-generate && DATABASE_URL=file:$(pwd)/prisma/test.db vitest run"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@tabler/icons-react": "^3.44.0",
     "jose": "^6.2.3",
     "leaflet": "^1.9.4",
     "next": "15.5.20",

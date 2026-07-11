@@ -1,9 +1,12 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { IconArrowLeft, IconClock, IconGift, IconMapPin, IconMinus, IconPackage, IconPlus, IconReceipt, IconShieldCheck } from "@tabler/icons-react";
 import BottomNav from "@/components/BottomNav";
+import BagCard from "@/components/BagCard";
 import {
   api,
   Bag,
@@ -12,6 +15,7 @@ import {
   formatPrice,
   formatPickupWindow,
   discountPct,
+  venueImage,
 } from "@/lib/client/api";
 
 export default function BagPage({ params }: { params: Promise<{ id: string }> }) {
@@ -23,21 +27,67 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const [quantity, setQuantity] = useState(1);
   const [paying, setPaying] = useState(false); // показ мок-экрана оплаты
   const [processing, setProcessing] = useState(false);
+  const checkoutKey = useRef<string | null>(null);
+  const [similar, setSimilar] = useState<Bag[]>([]);
 
   useEffect(() => {
-    api<{ bag: Bag }>(`/api/bags/${id}`)
-      .then((d) => setBag(d.bag))
-      .catch((e) => setError(e.message));
+    let active = true;
+    async function load() {
+      try {
+        const data = await api<{ bag: Bag }>(`/api/bags/${id}`);
+        if (!active) return;
+        setBag(data.bag);
+        setQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1)));
+      } catch (e) {
+        if (active) setError(e instanceof Error ? e.message : "Не удалось загрузить пакет");
+      }
+    }
+    load();
+    const timer = window.setInterval(load, 20_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
   }, [id]);
 
+  useEffect(() => {
+    if (!bag) return;
+    const query = new URLSearchParams({
+      lat: String(bag.venue.lat),
+      lng: String(bag.venue.lng),
+      category: bag.venue.category,
+      sort: "distance",
+    });
+    api<{ bags: Bag[] }>(`/api/bags?${query}`)
+      .then(({ bags }) => setSimilar(bags.filter((item) => item.id !== bag.id).slice(0, 3)))
+      .catch(() => setSimilar([]));
+  }, [bag]);
+
   async function startCheckout() {
-    const { user } = await api<{ user: SessionUser | null }>("/api/auth/me");
-    if (!user) {
-      router.push(`/login?next=/bag/${id}`);
-      return;
-    }
+    setProcessing(true);
     setError(null);
-    setPaying(true);
+    try {
+      const [{ user }, { bag: latest }] = await Promise.all([
+        api<{ user: SessionUser | null }>("/api/auth/me"),
+        api<{ bag: Bag }>(`/api/bags/${id}`),
+      ]);
+      setBag(latest);
+      if (!user) {
+        router.push(`/login?next=/bag/${id}`);
+        return;
+      }
+      if (latest.status !== "ACTIVE" || latest.quantityLeft < quantity) {
+        setQuantity(Math.max(1, Math.min(quantity, latest.quantityLeft || 1)));
+        setError("Остаток изменился. Проверьте количество и попробуйте снова.");
+        return;
+      }
+      checkoutKey.current = crypto.randomUUID();
+      setPaying(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось начать оформление");
+    } finally {
+      setProcessing(false);
+    }
   }
 
   async function confirmPayment() {
@@ -46,6 +96,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
     try {
       const { order } = await api<{ order: Order }>("/api/orders", {
         method: "POST",
+        headers: { "Idempotency-Key": checkoutKey.current ?? crypto.randomUUID() },
         body: JSON.stringify({ bagId: id, quantity }),
       });
       router.push(`/orders?new=${order.id}`);
@@ -69,54 +120,75 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
 
   const available = bag.status === "ACTIVE" && bag.quantityLeft > 0;
   const total = bag.price * quantity;
+  const now = new Date();
+  const pickupStarted = new Date(bag.pickupStart) <= now;
+  const pickupEnded = new Date(bag.pickupEnd) <= now;
+  const routeUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${bag.venue.lat},${bag.venue.lng}`)}`;
 
   return (
-    <div className="max-w-md mx-auto min-h-dvh pb-24">
-      <div className="relative h-44 bg-primary/10 flex items-center justify-center text-7xl">
-        {bag.venue.photo}
+    <div className="mx-auto min-h-dvh max-w-md bg-white pb-28">
+      <div className="relative h-[250px] overflow-hidden bg-[#eef1ee]">
+        <Image src={venueImage(bag.venue.category)} alt="" fill priority sizes="(max-width: 448px) 100vw, 448px" className="object-cover" />
+        <div className="absolute inset-x-0 top-0 h-24 bg-black/20" />
         <Link
           href="/"
-          className="absolute top-4 left-4 bg-card rounded-full w-9 h-9 flex items-center justify-center shadow"
+          className="absolute left-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-foreground shadow-sm"
         >
-          ←
+          <IconArrowLeft size={22} />
         </Link>
-        <span className="absolute bottom-3 right-4 text-sm font-bold text-white bg-primary rounded-full px-3 py-1">
+        <span className="absolute bottom-4 right-4 rounded-full bg-primary px-3 py-1.5 text-[12px] font-bold text-white shadow-sm">
           −{discountPct(bag)}%
         </span>
       </div>
 
-      <main className="px-4 pt-4 space-y-4">
+      <main className="space-y-4 px-4 pt-5">
         <div>
-          <h1 className="text-lg font-bold">{bag.title}</h1>
-          <p className="text-sm text-muted">{bag.venue.name} · {bag.venue.address}</p>
+          <h1 className="text-[22px] font-bold leading-7 tracking-[-0.03em]">{bag.title}</h1>
+          <Link href={`/venue/${bag.venue.id}`} className="mt-1 inline-block text-[14px] font-semibold text-primary">
+            {bag.venue.name} →
+          </Link>
+          <p className="mt-0.5 text-[12px] text-muted">{bag.venue.address}</p>
         </div>
 
-        <div className="bg-card rounded-2xl border border-black/5 p-4 space-y-2 text-sm">
-          <p>🎁 <b>Что внутри?</b> {bag.description || "Сюрприз из свежей еды на витрине."}</p>
-          <p className="text-muted">
+        <div className="space-y-3 rounded-[17px] border border-black/[0.07] bg-white p-4 text-[13px] shadow-[0_2px_10px_rgba(20,40,28,0.04)]">
+          <p className="flex gap-2"><IconGift size={19} className="shrink-0 text-primary" /><span><b>Что внутри?</b> {bag.description || "Сюрприз из свежей еды на витрине."}</span></p>
+          <p className="pl-7 text-[12px] text-muted">
             Заведение гарантирует: ценность содержимого минимум{" "}
             {formatPrice(bag.originalPrice)} — вы платите {formatPrice(bag.price)}.
           </p>
-          <p>⏰ Забрать: <b>{formatPickupWindow(bag.pickupStart, bag.pickupEnd)}</b></p>
-          <p>📦 Осталось: <b>{bag.quantityLeft} шт</b></p>
+          <p className="flex items-center gap-2"><IconClock size={19} className="text-primary" />Забрать: <b>{formatPickupWindow(bag.pickupStart, bag.pickupEnd)}</b></p>
+          <p className="pl-7 text-[12px] text-muted">
+            {pickupEnded ? "Окно выдачи завершено" : pickupStarted ? "Уже можно забирать" : "Выдача начнётся в указанное время"}
+          </p>
+          <p className="flex items-center gap-2"><IconPackage size={19} className="text-primary" />Осталось: <b>{bag.quantityLeft} шт</b></p>
+          <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 font-semibold text-primary">
+            <IconMapPin size={19} />Построить маршрут ↗
+          </a>
+        </div>
+
+        <div className="space-y-2.5 rounded-[17px] border border-black/[0.07] bg-[#fafbfa] p-4 text-[12px]">
+          <h2 className="text-[14px] font-bold">Важно перед покупкой</h2>
+          <p className="flex gap-2"><IconGift size={17} className="shrink-0 text-primary" />Состав пакета заранее неизвестен и зависит от оставшейся свежей еды.</p>
+          <p className="flex gap-2"><IconReceipt size={17} className="shrink-0 text-primary" />Покажите QR-код или шестизначный код сотруднику.</p>
+          <p className="flex gap-2"><IconShieldCheck size={17} className="shrink-0 text-primary" />Бесплатная отмена доступна до начала окна выдачи.</p>
         </div>
 
         {available && (
-          <div className="flex items-center justify-between bg-card rounded-2xl border border-black/5 p-4">
-            <span className="text-sm font-medium">Количество</span>
+          <div className="flex items-center justify-between rounded-[17px] border border-black/[0.07] bg-white p-4">
+            <span className="text-[13px] font-medium">Количество</span>
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                className="w-9 h-9 rounded-full bg-black/5 font-bold"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f2f4f2]"
               >
-                −
+                <IconMinus size={18} />
               </button>
               <span className="font-bold w-5 text-center">{quantity}</span>
               <button
                 onClick={() => setQuantity((q) => Math.min(bag.quantityLeft, q + 1))}
-                className="w-9 h-9 rounded-full bg-black/5 font-bold"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f2f4f2]"
               >
-                +
+                <IconPlus size={18} />
               </button>
             </div>
           </div>
@@ -125,20 +197,27 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         {error && <p className="text-red-600 text-sm">{error}</p>}
       </main>
 
-      <div className="fixed bottom-16 inset-x-0 px-4 max-w-md mx-auto">
+      <div className="fixed inset-x-0 bottom-[68px] z-10 mx-auto max-w-md border-t border-black/[0.05] bg-white/95 px-4 py-3 backdrop-blur-xl">
         <button
           onClick={startCheckout}
-          disabled={!available}
-          className="w-full py-3.5 rounded-2xl bg-primary text-white font-bold shadow-lg disabled:bg-black/20"
+          disabled={!available || processing}
+          className="w-full rounded-[13px] bg-primary py-3.5 text-[14px] font-semibold text-white shadow-sm disabled:bg-black/20"
         >
-          {available ? `Забронировать за ${formatPrice(total)}` : "Разобрали 😔"}
+          {processing ? "Проверяем наличие…" : available ? `Забронировать за ${formatPrice(total)}` : "Недоступно 😔"}
         </button>
       </div>
+
+      {similar.length > 0 && (
+        <section className="space-y-3 px-4 pt-5">
+          <h2 className="text-[17px] font-bold">Похожие пакеты рядом</h2>
+          {similar.map((item) => <BagCard key={item.id} bag={item} />)}
+        </section>
+      )}
 
       {paying && (
         <div className="fixed inset-0 z-30 bg-black/50 flex items-end justify-center" onClick={() => !processing && setPaying(false)}>
           <div
-            className="bg-card w-full max-w-md rounded-t-3xl p-6 space-y-4"
+            className="w-full max-w-md space-y-4 rounded-t-[24px] bg-white p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="font-bold text-lg">Оплата</h2>
@@ -153,7 +232,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
             <button
               onClick={confirmPayment}
               disabled={processing}
-              className="w-full py-3.5 rounded-2xl bg-primary text-white font-bold disabled:opacity-60"
+              className="w-full rounded-[13px] bg-primary py-3.5 font-semibold text-white disabled:opacity-60"
             >
               {processing ? "Обработка…" : `Оплатить ${formatPrice(total)}`}
             </button>

@@ -17,6 +17,8 @@ model User {
 
   venues Venue[]
   orders Order[]
+  auditLogs AuditLog[]
+  notifications Notification[]
 }
 
 model Venue {
@@ -70,8 +72,11 @@ model Order {
   bag     Bag      @relation(fields: [bagId], references: [id])
   user    User     @relation(fields: [userId], references: [id])
   payment Payment?
+  paymentEvents PaymentEvent[]
 
   @@index([userId, status])
+  @@index([bagId, status])
+  @@index([createdAt])
 }
 
 model Payment {
@@ -85,4 +90,61 @@ model Payment {
   updatedAt   DateTime @updatedAt
 
   order Order @relation(fields: [orderId], references: [id])
+  events PaymentEvent[]
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorId      String?
+  action       String
+  entityType   String
+  entityId     String?
+  metadataJson String   @default("{}")
+  createdAt    DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@index([action, createdAt])
+}
+
+model PaymentEvent {
+  id           String   @id @default(cuid())
+  paymentId    String?
+  orderId      String?
+  provider     String
+  providerRef  String?
+  type         String // HOLD | CAPTURE | REFUND | WEBHOOK | RECONCILIATION
+  status       String // SUCCEEDED | FAILED | PENDING
+  amount       Int?
+  metadataJson String   @default("{}")
+  createdAt    DateTime @default(now())
+
+  payment Payment? @relation(fields: [paymentId], references: [id])
+  order   Order?   @relation(fields: [orderId], references: [id])
+
+  @@index([paymentId, createdAt])
+  @@index([orderId, createdAt])
+  @@index([provider, providerRef])
+  @@index([type, status, createdAt])
+}
+
+model Notification {
+  id           String    @id @default(cuid())
+  userId       String?
+  channel      String // SMS | TELEGRAM | PUSH | EMAIL
+  recipient    String
+  type         String
+  status       String    @default("PENDING") // PENDING | SENT | FAILED | SKIPPED
+  payloadJson  String    @default("{}")
+  error        String?
+  createdAt    DateTime  @default(now())
+  sentAt       DateTime?
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([channel, status, createdAt])
+  @@index([type, createdAt])
 }

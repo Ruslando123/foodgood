@@ -44,26 +44,46 @@ export default function MapView({ bags, userLocation }: Props) {
       }
 
       for (const bag of bags) {
+        const markerContent = document.createElement("div");
+        markerContent.style.cssText =
+          "width:40px;height:40px;border-radius:50%;background:#fff;border:2px solid #1a7f4e;display:flex;align-items:center;justify-content:center;font-size:20px;box-shadow:0 2px 6px rgba(0,0,0,.25)";
+        markerContent.textContent = bag.venue.photo;
         const icon = L.divIcon({
           className: "",
-          html: `<div style="display:flex;flex-direction:column;align-items:center;">
-              <div style="width:40px;height:40px;border-radius:50%;background:#fff;border:2px solid #1a7f4e;display:flex;align-items:center;justify-content:center;font-size:20px;box-shadow:0 2px 6px rgba(0,0,0,.25)">${bag.venue.photo}</div>
-            </div>`,
+          html: markerContent,
           iconSize: [40, 40],
           iconAnchor: [20, 40],
           popupAnchor: [0, -40],
         });
-        L.marker([bag.venue.lat, bag.venue.lng], { icon })
-          .addTo(map)
-          .bindPopup(
-            `<div style="min-width:180px">
-              <b>${bag.venue.name}</b><br/>
-              <span style="color:#5f7268">${bag.title}</span><br/>
-              <b style="color:#1a7f4e">${formatPrice(bag.price)}</b>
-              <s style="color:#999;font-size:12px">${formatPrice(bag.originalPrice)}</s><br/>
-              <a href="/bag/${bag.id}" style="color:#1a7f4e;font-weight:600">Забронировать →</a>
-            </div>`
-          );
+        const popup = document.createElement("div");
+        popup.style.minWidth = "180px";
+
+        const venueName = document.createElement("strong");
+        venueName.textContent = bag.venue.name;
+        const title = document.createElement("div");
+        title.style.color = "#5f7268";
+        title.textContent = bag.title;
+        const prices = document.createElement("div");
+        const price = document.createElement("strong");
+        price.style.color = "#1a7f4e";
+        price.textContent = formatPrice(bag.price);
+        const originalPrice = document.createElement("s");
+        originalPrice.style.cssText = "color:#999;font-size:12px;margin-left:6px";
+        originalPrice.textContent = formatPrice(bag.originalPrice);
+        prices.append(price, originalPrice);
+        const link = document.createElement("a");
+        link.href = `/bag/${encodeURIComponent(bag.id)}`;
+        link.style.cssText = "color:#1a7f4e;font-weight:600";
+        link.textContent = "Забронировать →";
+        const routeLink = document.createElement("a");
+        routeLink.href = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${bag.venue.lat},${bag.venue.lng}`)}`;
+        routeLink.target = "_blank";
+        routeLink.rel = "noopener noreferrer";
+        routeLink.style.cssText = "display:block;color:#5f7268;margin-top:4px";
+        routeLink.textContent = "Построить маршрут ↗";
+        popup.append(venueName, title, prices, link, routeLink);
+
+        L.marker([bag.venue.lat, bag.venue.lng], { icon }).addTo(map).bindPopup(popup);
       }
     })();
 
