@@ -84,14 +84,36 @@ model Payment {
   id          String   @id @default(cuid())
   orderId     String   @unique
   provider    String   @default("mock")
-  providerRef String
+  providerRef String?
   amount      Int // KZT
-  status      String   @default("HELD") // HELD | CAPTURED | REFUNDED
+  status      String   @default("PENDING_HOLD") // PENDING_HOLD | HELD | CAPTURED | REFUNDED
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  order  Order          @relation(fields: [orderId], references: [id])
-  events PaymentEvent[]
+  order      Order              @relation(fields: [orderId], references: [id])
+  events     PaymentEvent[]
+  operations PaymentOperation[]
+}
+
+model PaymentOperation {
+  id             String    @id @default(cuid())
+  paymentId      String
+  type           String // HOLD | CAPTURE | REFUND
+  idempotencyKey String    @unique
+  status         String    @default("PENDING") // PENDING | PROCESSING | RETRY | SUCCEEDED | NEEDS_REVIEW
+  attempts       Int       @default(0)
+  nextAttemptAt  DateTime  @default(now())
+  leaseOwner     String?
+  leaseExpiresAt DateTime?
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@unique([paymentId, type])
+  @@index([status, nextAttemptAt])
+  @@index([leaseExpiresAt])
 }
 
 model AuditLog {

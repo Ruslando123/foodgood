@@ -6,9 +6,17 @@ MVP фудшеринг-платформы для Казахстана: кофе�
 
 ```bash
 npm install
-npm run db:push   # создаёт SQLite-базу (prisma/dev.db)
+npm run db:generate
+npm run db:push   # применяет схему к PostgreSQL из DATABASE_URL
 npm run seed      # демо-данные: 6 заведений Алматы + пакеты на вечер
 npm run dev       # http://localhost:3000
+```
+
+Для существующей PostgreSQL-базы, ранее созданной через `prisma db push`, один раз выполните:
+
+```bash
+DATABASE_URL="..." npx prisma migrate resolve --applied 20260711134610_init
+DATABASE_URL="..." npx prisma migrate deploy
 ```
 
 Демо-аккаунты (код подтверждения всегда `0000`):
@@ -23,15 +31,17 @@ npm run dev       # http://localhost:3000
 
 - **Покупатель** (`/`) — список и карта пакетов поблизости (геолокация + сортировка по расстоянию), карточка пакета, мок-оплата с холдированием, «Мои заказы» с QR-кодом для выдачи, отмена с возвратом денег.
 - **Заведение** (`/business`) — дашборд (выручка, комиссия, «спасено пакетов»), публикация пакета-сюрприза в пару кликов, выдача заказа по коду с кассы, регистрация заведения с точкой на карте.
-- **API** (`/api/*`) — REST на route handlers; статус-машина заказа: `PENDING_PAYMENT → PAID (холд) → COMPLETED (capture)` или `CANCELLED/EXPIRED (refund)`. Просроченные пакеты и заказы обрабатываются лениво при чтении (без cron).
+- **API** (`/api/*`) — REST на route handlers; платёжные операции имеют уникальный idempotency key, статусы `CAPTURE_PENDING`/`REFUND_PENDING` и lease-based reconciliation для безопасных повторов.
 
 ## Тесты
 
 ```bash
-npm test   # vitest: юнит + интеграционные на отдельной SQLite-базе (prisma/test.db)
+npm test   # поднимает временный PostgreSQL через Docker Compose, применяет миграции и запускает Vitest
 ```
 
-41 тест покрывает бизнес-логику: жизненный цикл заказа (резерв остатка → холд → capture/refund), запрет двойной выдачи и перепродажи, отмену пакета мерчантом с возвратом денег покупателям, ленивое истечение (идемпотентное), верификацию Telegram `initData`, нормализацию телефонов КЗ, гео-расчёты.
+Для CI или уже запущенной БД достаточно передать `TEST_DATABASE_URL` — Docker тогда не используется.
+
+Тесты покрывают жизненный цикл заказа, отказ провайдера, recovery после сбоя БД и параллельные worker retry.
 
 ## Текущее состояние
 
@@ -73,7 +83,7 @@ npm test   # vitest: юнит + интеграционные на отдельн
 
 ## Стек
 
-Next.js 15 (App Router, TypeScript) · Prisma + SQLite (схема совместима с PostgreSQL) · Tailwind CSS 4 · Leaflet + OpenStreetMap · JWT-сессии в httpOnly-cookie (`jose`).
+Next.js 15 (App Router, TypeScript) · Prisma + PostgreSQL · Tailwind CSS 4 · Leaflet + OpenStreetMap · JWT-сессии в httpOnly-cookie (`jose`).
 
 ## Ключевые модули
 

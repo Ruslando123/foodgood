@@ -7,6 +7,7 @@ import {
   redeemOrder,
   expireStale,
   cancelBagWithRefunds,
+  reconcilePendingPayments,
   OrderError,
 } from "@/modules/orders";
 import { PLATFORM_FEE_PCT } from "@/lib/config";
@@ -117,12 +118,35 @@ describe("redeemOrder (выдача по коду)", () => {
     await expect(redeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("уже выдан");
   });
 
+  it("reconciliation восстанавливает capture после сбоя БД и два worker не дублируют claim", async () => {
+    const { customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
+    expect(payment.providerRef).not.toBeNull();
+    await paymentProvider.capture(payment.providerRef!, "provider-succeeded-before-db-failure");
+    await prisma.order.update({ where: { id: order.id }, data: { status: "CAPTURE_PENDING" } });
+    const operation = await prisma.paymentOperation.create({
+      data: { paymentId: payment.id, type: "CAPTURE", idempotencyKey: crypto.randomUUID(), status: "RETRY" },
+    });
+
+    await Promise.all([
+      reconcilePendingPayments(10, "worker-a"),
+      reconcilePendingPayments(10, "worker-b"),
+    ]);
+
+    await expect(prisma.paymentOperation.findUniqueOrThrow({ where: { id: operation.id } }))
+      .resolves.toMatchObject({ status: "SUCCEEDED", attempts: 0 });
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
+      .resolves.toMatchObject({ status: "COMPLETED" });
+  });
+
   it("не помечает заказ выданным, если capture не подтверждён", async () => {
     const { merchant, customer, bag } = await createFixtures();
     const order = await createOrder(customer.id, bag.id, 1);
     vi.spyOn(paymentProvider, "capture").mockRejectedValueOnce(new Error("provider timeout"));
 
-    await expect(redeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("передан на сверку");
+    const queued = await redeemOrder(merchant.id, order.pickupCode);
+    expect(queued.status).toBe("CAPTURE_PENDING");
 
     const pending = await prisma.order.findUniqueOrThrow({
       where: { id: order.id },
@@ -130,11 +154,13 @@ describe("redeemOrder (выдача по коду)", () => {
     });
     expect(pending.status).toBe("CAPTURE_PENDING");
     expect(pending.payment?.status).toBe("HELD");
-    await expect(
-      prisma.paymentEvent.findFirstOrThrow({
-        where: { orderId: order.id, type: "CAPTURE", status: "FAILED" },
-      })
-    ).resolves.toBeDefined();
+    await prisma.paymentOperation.updateMany({
+      where: { paymentId: pending.payment!.id, type: "CAPTURE" },
+      data: { nextAttemptAt: new Date(0) },
+    });
+    await reconcilePendingPayments();
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
+      .resolves.toMatchObject({ status: "COMPLETED" });
   });
 
   it("чужой мерчант не может выдать заказ", async () => {
@@ -203,7 +229,8 @@ describe("cancelOrder (отмена покупателем)", () => {
     const order = await createOrder(customer.id, bag.id, 1);
     vi.spyOn(paymentProvider, "refund").mockRejectedValueOnce(new Error("provider timeout"));
 
-    await expect(cancelOrder(customer.id, order.id)).rejects.toThrow("повторную обработку");
+    const queued = await cancelOrder(customer.id, order.id);
+    expect(queued.status).toBe("REFUND_PENDING");
 
     const pending = await prisma.order.findUniqueOrThrow({
       where: { id: order.id },
@@ -212,6 +239,13 @@ describe("cancelOrder (отмена покупателем)", () => {
     expect(pending.status).toBe("REFUND_PENDING");
     expect(pending.refundTargetStatus).toBe("CANCELLED");
     expect(pending.payment?.status).toBe("HELD");
+    await prisma.paymentOperation.updateMany({
+      where: { paymentId: pending.payment!.id, type: "REFUND" },
+      data: { nextAttemptAt: new Date(0) },
+    });
+    await reconcilePendingPayments();
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
+      .resolves.toMatchObject({ status: "CANCELLED" });
   });
 });
 

@@ -1,0 +1,31 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: foodgood
+          POSTGRES_PASSWORD: foodgood
+          POSTGRES_DB: foodgood_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U foodgood -d foodgood_test"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql://foodgood:foodgood@localhost:5432/foodgood_test?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx prisma migrate deploy
+        env: { DATABASE_URL: postgresql://foodgood:foodgood@localhost:5432/foodgood_test?schema=public }
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build

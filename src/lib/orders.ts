@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "crypto";
 import { prisma } from "./db";
 import { paymentProvider } from "./payments";
 import { generatePickupCode } from "./qr";
@@ -64,67 +65,23 @@ export async function createOrder(userId: string, bagId: string, quantity: numbe
     }
 
     const totalPrice = bag.price * quantity;
-    return createOrderRowWithUniqueCode(tx, {
+    const created = await createOrderRowWithUniqueCode(tx, {
       bagId,
       userId,
       quantity,
       totalPrice,
       platformFee: Math.round(totalPrice * PLATFORM_FEE_PCT),
     });
+    const payment = await tx.payment.create({
+      data: { orderId: created.id, provider: paymentProvider.name, amount: totalPrice },
+    });
+    await tx.paymentOperation.create({
+      data: { paymentId: payment.id, type: "HOLD", idempotencyKey: randomUUID(), nextAttemptAt: new Date(0) },
+    });
+    return created;
   });
 
-  let providerRef: string;
-  try {
-    ({ providerRef } = await paymentProvider.hold(order.totalPrice, order.id));
-  } catch (cause) {
-    await cancelUnpaidOrderAndReleaseQuantity(order.id, order.bagId, order.quantity);
-    throw new OrderError("Оплата не прошла, попробуйте ещё раз", { cause });
-  }
-
-  let payment: { id: string; provider: string; providerRef: string; amount: number };
-  try {
-    payment = await prisma.payment.create({
-      data: {
-        orderId: order.id,
-        provider: paymentProvider.name,
-        providerRef,
-        amount: order.totalPrice,
-        status: "HELD",
-      },
-    });
-    await recordPaymentEvent({
-      paymentId: payment.id,
-      orderId: order.id,
-      provider: payment.provider,
-      providerRef: payment.providerRef,
-      type: "HOLD",
-      status: "SUCCEEDED",
-      amount: payment.amount,
-    });
-  } catch (cause) {
-    // Если БД не зафиксировала reference, единственный безопасный вариант —
-    // сразу попытаться снять hold и вернуть резерв остатка.
-    try {
-      await paymentProvider.refund(providerRef);
-    } catch (refundError) {
-      console.error("Could not release unpersisted payment hold", { orderId: order.id, refundError });
-    }
-    await cancelUnpaidOrderAndReleaseQuantity(order.id, order.bagId, order.quantity);
-    throw new OrderError("Не удалось подтвердить оплату, попробуйте ещё раз", { cause });
-  }
-
-  const confirmation = await confirmHeldPayment(order.id);
-  if (!confirmation.confirmed) {
-    try {
-      await settleRefund(order.id, payment.id, confirmation.finalStatus);
-    } catch (refundError) {
-      console.error("Could not refund payment for unavailable bag", {
-        orderId: order.id,
-        refundError,
-      });
-    }
-    throw new OrderError("Пакет стал недоступен. Возврат по оплате уже запущен");
-  }
+  await reconcilePendingPayments(1, `request-${randomUUID()}`);
 
   return prisma.order.findUniqueOrThrow({
     where: { id: order.id },
@@ -146,8 +103,9 @@ export async function cancelOrder(userId: string, orderId: string) {
 
   const cancelled = await refundIfClaimed(order.id, order.payment?.id, "CANCELLED");
   if (!cancelled) throw new OrderError("Заказ уже обрабатывается");
-
-  await releaseQuantity(order.bagId, order.quantity);
+  await reconcilePendingPayments(1, `request-${randomUUID()}`);
+  const settled = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+  if (settled.status === "CANCELLED") await releaseQuantity(order.bagId, order.quantity);
   return prisma.order.findUniqueOrThrow({
     where: { id: orderId },
     include: { bag: { include: { venue: true } }, payment: true },
@@ -171,6 +129,8 @@ export async function redeemOrder(merchantId: string, pickupCode: string) {
   if (order.status !== "PAID") throw new OrderError("Заказ не оплачен или отменён");
   if (!order.payment) throw new OrderError("Для заказа не найден платёж");
   const payment = order.payment;
+  if (!payment.providerRef) throw new OrderError("Для заказа не найден reference платежа");
+  const captureOperation = await ensureOperation(payment.id, "CAPTURE");
 
   // Не выдаём товар до успешного capture: при сбое статус остаётся
   // CAPTURE_PENDING и его можно сверить с платёжным провайдером.
@@ -180,56 +140,12 @@ export async function redeemOrder(merchantId: string, pickupCode: string) {
   });
   if (claimed.count === 0) throw new OrderError("Заказ уже обрабатывается");
 
-  try {
-    await paymentProvider.capture(payment.providerRef);
-  } catch (cause) {
-    await recordPaymentEvent({
-      paymentId: payment.id,
-      orderId: order.id,
-      provider: payment.provider,
-      providerRef: payment.providerRef,
-      type: "CAPTURE",
-      status: "FAILED",
-      amount: payment.amount,
-      metadata: { message: errorMessage(cause) },
-    });
-    throw new OrderError("Списание не подтверждено. Заказ передан на сверку", { cause });
-  }
-
-  const completed = await prisma.$transaction(async (tx) => {
-    const transitioned = await tx.order.updateMany({
-      where: { id: order.id, status: "CAPTURE_PENDING" },
-      data: { status: "COMPLETED", completedAt: new Date() },
-    });
-    if (transitioned.count === 0) throw new OrderError("Заказ уже обрабатывается");
-    await tx.payment.updateMany({
-      where: { id: payment.id, status: "HELD" },
-      data: { status: "CAPTURED" },
-    });
-    await tx.paymentEvent.create({
-      data: {
-        paymentId: payment.id,
-        orderId: order.id,
-        provider: payment.provider,
-        providerRef: payment.providerRef,
-        type: "CAPTURE",
-        status: "SUCCEEDED",
-        amount: payment.amount,
-      },
-    });
-    return tx.order.findUniqueOrThrow({
-      where: { id: order.id },
-      include: { bag: { include: { venue: true } }, payment: true, user: true },
-    });
+  void captureOperation;
+  await reconcilePendingPayments(1, `request-${randomUUID()}`);
+  return prisma.order.findUniqueOrThrow({
+    where: { id: order.id },
+    include: { bag: { include: { venue: true } }, payment: true, user: true },
   });
-
-  if (completed.user.telegramId) {
-    await sendTelegramMessage(
-      completed.user.telegramId,
-      `✅ Заказ в «${completed.bag.venue.name}» выдан. Приятного аппетита!`
-    );
-  }
-  return completed;
 }
 
 /** Снятие пакета с продажи: pending-заказы отменяются, paid — возвращаются. */
@@ -262,6 +178,7 @@ export async function cancelBagWithRefunds(merchantId: string, bagId: string) {
       console.error("Could not refund cancelled bag order", { orderId: order.id, error });
     }
   }
+  await reconcilePendingPayments(50, `request-${randomUUID()}`);
 
   return prisma.bag.findUniqueOrThrow({ where: { id: bagId }, include: { venue: true } });
 }
@@ -277,8 +194,7 @@ async function refundIfClaimed(
     data: { status: "REFUND_PENDING", refundTargetStatus: finalStatus },
   });
   if (claimed.count === 0) return false;
-
-  await settleRefund(orderId, paymentId, finalStatus);
+  if (paymentId) await ensureOperation(paymentId, "REFUND");
   return true;
 }
 
@@ -320,17 +236,19 @@ async function settleRefund(
   finalStatus: FinalRefundStatus
 ): Promise<boolean> {
   const payment = paymentId ? await prisma.payment.findUnique({ where: { id: paymentId } }) : null;
+  const refundOperation = payment ? await ensureOperation(payment.id, "REFUND") : null;
   try {
-    if (payment?.status === "HELD") {
-      await paymentProvider.refund(payment.providerRef);
+    if (payment?.status === "HELD" && payment.providerRef && refundOperation) {
+      await paymentProvider.refund(payment.providerRef, refundOperation.idempotencyKey);
     }
   } catch (cause) {
+    if (refundOperation) await retryOperation(refundOperation.id, cause);
     if (payment) {
       await recordPaymentEvent({
         paymentId: payment.id,
         orderId,
         provider: payment.provider,
-        providerRef: payment.providerRef,
+        providerRef: payment.providerRef ?? undefined,
         type: "REFUND",
         status: "FAILED",
         amount: payment.amount,
@@ -340,7 +258,7 @@ async function settleRefund(
     throw new OrderError("Возврат передан на повторную обработку", { cause });
   }
 
-  return prisma.$transaction(async (tx) => {
+  const settled = await prisma.$transaction(async (tx) => {
     const completed = await tx.order.updateMany({
       where: { id: orderId, status: "REFUND_PENDING" },
       data: { status: finalStatus },
@@ -366,6 +284,8 @@ async function settleRefund(
     }
     return true;
   });
+  if (settled && refundOperation) await succeedOperation(refundOperation.id);
+  return settled;
 }
 
 async function retryPendingRefunds(): Promise<void> {
@@ -411,6 +331,125 @@ async function cancelUnpaidOrderAndReleaseQuantity(
     data: { status: finalStatus },
   });
   if (cancelled.count > 0) await releaseQuantity(bagId, quantity);
+}
+
+const MAX_PAYMENT_ATTEMPTS = 5;
+const LEASE_MS = 60_000;
+
+async function ensureOperation(paymentId: string, type: "HOLD" | "CAPTURE" | "REFUND") {
+  return prisma.paymentOperation.upsert({
+    where: { paymentId_type: { paymentId, type } },
+    update: {},
+    create: { paymentId, type, idempotencyKey: randomUUID(), nextAttemptAt: new Date(0) },
+  });
+}
+
+async function succeedOperation(id: string): Promise<void> {
+  await prisma.paymentOperation.update({
+    where: { id },
+    data: { status: "SUCCEEDED", leaseOwner: null, leaseExpiresAt: null, lastError: null },
+  });
+}
+
+async function retryOperation(id: string, error: unknown): Promise<void> {
+  const operation = await prisma.paymentOperation.findUniqueOrThrow({ where: { id } });
+  const attempts = operation.attempts + 1;
+  const exhausted = attempts >= MAX_PAYMENT_ATTEMPTS;
+  const delayMs = Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1));
+  await prisma.paymentOperation.update({
+    where: { id },
+    data: {
+      attempts,
+      status: exhausted ? "NEEDS_REVIEW" : "RETRY",
+      nextAttemptAt: new Date(Date.now() + delayMs),
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      lastError: errorMessage(error),
+    },
+  });
+  if (exhausted) console.error("PAYMENT_OPERATION_NEEDS_REVIEW", { operationId: id });
+}
+
+/** Worker entrypoint: claim через lease и reconciliation по состоянию провайдера. */
+export async function reconcilePendingPayments(limit = 50, workerId: string = randomUUID()): Promise<number> {
+  const now = new Date(Date.now() + 1_000);
+  const candidates = await prisma.paymentOperation.findMany({
+    where: {
+      status: { in: ["PENDING", "RETRY", "PROCESSING"] },
+      nextAttemptAt: { lte: now },
+      OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }],
+    },
+    orderBy: { nextAttemptAt: "asc" },
+    take: limit,
+  });
+  let processed = 0;
+  for (const candidate of candidates) {
+    const claimed = await prisma.paymentOperation.updateMany({
+      where: {
+        id: candidate.id,
+        status: { in: ["PENDING", "RETRY", "PROCESSING"] },
+        nextAttemptAt: { lte: now },
+        OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }],
+      },
+      data: { status: "PROCESSING", leaseOwner: workerId, leaseExpiresAt: new Date(Date.now() + LEASE_MS) },
+    });
+    if (!claimed.count) continue;
+    processed += 1;
+    const operation = await prisma.paymentOperation.findUniqueOrThrow({
+      where: { id: candidate.id },
+      include: { payment: { include: { order: { include: { bag: true } } } } },
+    });
+    try {
+      const payment = operation.payment;
+      if (operation.type === "HOLD") {
+        const hold = await paymentProvider.hold(payment.amount, payment.orderId, operation.idempotencyKey);
+        await prisma.payment.update({ where: { id: payment.id }, data: { providerRef: hold.providerRef, status: "HELD" } });
+        const confirmation = await confirmHeldPayment(payment.orderId);
+        if (!confirmation.confirmed) {
+          await ensureOperation(payment.id, "REFUND");
+        }
+      } else if (!payment.providerRef) {
+        throw new Error("Missing provider reference");
+      } else {
+        const status = await paymentProvider.getStatus(payment.providerRef);
+        if (operation.type === "CAPTURE" && status === "CAPTURED") {
+          await prisma.$transaction([
+            prisma.payment.update({ where: { id: payment.id }, data: { status: "CAPTURED" } }),
+            prisma.order.updateMany({ where: { id: payment.orderId, status: "CAPTURE_PENDING" }, data: { status: "COMPLETED", completedAt: new Date() } }),
+          ]);
+        } else if (operation.type === "REFUND" && status === "REFUNDED") {
+          await prisma.$transaction([
+            prisma.payment.update({ where: { id: payment.id }, data: { status: "REFUNDED" } }),
+            prisma.order.updateMany({ where: { id: payment.orderId, status: "REFUND_PENDING" }, data: { status: payment.order.refundTargetStatus ?? "CANCELLED" } }),
+          ]);
+        } else if (operation.type === "CAPTURE" && status === "HELD") {
+          await paymentProvider.capture(payment.providerRef, operation.idempotencyKey);
+          if ((await paymentProvider.getStatus(payment.providerRef)) !== "CAPTURED") {
+            throw new Error("Capture was not confirmed by provider");
+          }
+          await prisma.$transaction([
+            prisma.payment.update({ where: { id: payment.id }, data: { status: "CAPTURED" } }),
+            prisma.order.updateMany({ where: { id: payment.orderId, status: "CAPTURE_PENDING" }, data: { status: "COMPLETED", completedAt: new Date() } }),
+          ]);
+        } else if (operation.type === "REFUND" && status === "HELD") {
+          await paymentProvider.refund(payment.providerRef, operation.idempotencyKey);
+          if ((await paymentProvider.getStatus(payment.providerRef)) !== "REFUNDED") {
+            throw new Error("Refund was not confirmed by provider");
+          }
+          await prisma.$transaction([
+            prisma.payment.update({ where: { id: payment.id }, data: { status: "REFUNDED" } }),
+            prisma.order.updateMany({ where: { id: payment.orderId, status: "REFUND_PENDING" }, data: { status: payment.order.refundTargetStatus ?? "CANCELLED" } }),
+          ]);
+        } else {
+          throw new Error(`Unexpected provider status ${status}`);
+        }
+      }
+      await succeedOperation(operation.id);
+    } catch (error) {
+      await retryOperation(operation.id, error);
+    }
+  }
+  return processed;
 }
 
 async function recordPaymentEvent(input: {
