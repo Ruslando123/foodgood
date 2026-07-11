@@ -1,22 +1,22 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { VENUE_CATEGORIES } from "@/lib/config";
-import { requireUser } from "@/modules/auth/server";
+import { requireMerchant, requireUser } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
 
 export async function GET() {
   return apiRoute(async () => {
     const user = await requireUser();
-    const venues = await prisma.venue.findMany({ where: { ownerId: user.id } });
+    const venues = await prisma.venue.findMany({ where: user.role === "ADMIN" ? {} : { ownerId: user.id } });
     return json({ venues });
   });
 }
 
-/** Регистрация заведения; пользователь при этом становится мерчантом. */
+/** Владелец создаёт заведение сам после того, как админ выдал ему доступ. */
 export async function POST(req: NextRequest) {
   return apiRoute(async () => {
-    const user = await requireUser();
+    const owner = await requireMerchant();
     const body = await readJsonObject(req);
     const name = requiredString(body.name, "name", { max: 120 });
     const address = requiredString(body.address, "address", { max: 300 });
@@ -28,22 +28,9 @@ export async function POST(req: NextRequest) {
     if (!(cat in VENUE_CATEGORIES)) {
       throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
     }
-
-    const [venue] = await prisma.$transaction([
-      prisma.venue.create({
-        data: {
-          name,
-          address,
-          lat,
-          lng,
-          category: cat,
-          description,
-          photo,
-          ownerId: user.id,
-        },
-      }),
-      prisma.user.update({ where: { id: user.id }, data: { role: "MERCHANT" } }),
-    ]);
+    const venue = await prisma.venue.create({
+      data: { name, address, lat, lng, category: cat, description, photo, ownerId: owner.id },
+    });
     return json({ venue }, { status: 201 });
   });
 }

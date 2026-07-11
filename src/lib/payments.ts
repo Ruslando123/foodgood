@@ -1,6 +1,13 @@
 import { randomUUID } from "crypto";
 
 export type ProviderPaymentStatus = "HELD" | "CAPTURED" | "REFUNDED" | "NOT_FOUND";
+export type PaymentProviderErrorCode = "DECLINED" | "UNKNOWN" | "TIMEOUT";
+
+export class PaymentProviderError extends Error {
+  constructor(public readonly code: PaymentProviderErrorCode, message: string) {
+    super(message);
+  }
+}
 
 /** Все мутации обязаны быть идемпотентны по ключу: worker безопасно повторяет их. */
 export interface PaymentProvider {
@@ -9,6 +16,7 @@ export interface PaymentProvider {
   capture(providerRef: string, idempotencyKey: string): Promise<void>;
   refund(providerRef: string, idempotencyKey: string): Promise<void>;
   getStatus(providerRef: string): Promise<ProviderPaymentStatus>;
+  findHoldByIdempotencyKey(idempotencyKey: string): Promise<{ providerRef: string; status: ProviderPaymentStatus } | null>;
 }
 
 class MockPaymentProvider implements PaymentProvider {
@@ -41,6 +49,11 @@ class MockPaymentProvider implements PaymentProvider {
 
   async getStatus(providerRef: string): Promise<ProviderPaymentStatus> {
     return this.statuses.get(providerRef) ?? "NOT_FOUND";
+  }
+
+  async findHoldByIdempotencyKey(idempotencyKey: string) {
+    const providerRef = this.refsByKey.get(idempotencyKey);
+    return providerRef ? { providerRef, status: await this.getStatus(providerRef) } : null;
   }
 }
 

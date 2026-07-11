@@ -331,6 +331,7 @@ describe("expireStale (ленивое истечение)", () => {
     });
 
     await expireStale();
+    await reconcilePendingPayments();
 
     const expiredBag = await prisma.bag.findUniqueOrThrow({ where: { id: bag.id } });
     expect(expiredBag.status).toBe("EXPIRED");
@@ -353,6 +354,7 @@ describe("expireStale (ленивое истечение)", () => {
     });
 
     await expireStale();
+    await reconcilePendingPayments();
 
     const expiredOrder = await prisma.order.findUniqueOrThrow({
       where: { id: order.id },
@@ -385,7 +387,9 @@ describe("expireStale (ленивое истечение)", () => {
     });
 
     await expireStale();
+    await reconcilePendingPayments();
     await expireStale(); // повторный вызов не должен ломаться и дублировать refund
+    await reconcilePendingPayments();
 
     const payments = await prisma.payment.findMany();
     expect(payments).toHaveLength(1);

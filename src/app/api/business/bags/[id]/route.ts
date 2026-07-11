@@ -45,11 +45,16 @@ export async function PATCH(
       min: 0,
       max: bag.quantityLeft,
     });
-    const updated = await prisma.bag.update({
-      where: { id },
+    // Optimistic concurrency: не затираем резерв покупателя абсолютным
+    // значением, которое мерчант увидел до параллельной покупки.
+    const updated = await prisma.bag.updateMany({
+      where: { id, quantityLeft: bag.quantityLeft, status: bag.status },
       data: { quantityLeft: qty, status: qty === 0 ? "SOLD_OUT" : "ACTIVE" },
-      include: { venue: true },
     });
-    return json({ bag: updated });
+    if (updated.count === 0) {
+      throw new ApiError(409, "BAG_CHANGED", "Остаток изменился, обновите данные и повторите действие");
+    }
+    const current = await prisma.bag.findUniqueOrThrow({ where: { id }, include: { venue: true } });
+    return json({ bag: current });
   });
 }

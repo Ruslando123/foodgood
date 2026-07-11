@@ -71,16 +71,11 @@ export default function BusinessDashboard() {
       <Shell>
         <div className="text-center py-16 space-y-3 px-4">
           <p className="text-4xl">🏪</p>
-          <p className="font-semibold">У вас пока нет заведения</p>
+          <p className="font-semibold">Добавьте первое заведение</p>
           <p className="text-sm text-muted">
-            Зарегистрируйте кофейню, пекарню или кулинарию — и превращайте списания в выручку.
+            Заполните информацию о заведении — после этого можно будет публиковать пакеты-сюрпризы.
           </p>
-          <Link
-            href="/business/venue"
-            className="inline-block px-6 py-3 rounded-2xl bg-primary text-white font-bold"
-          >
-            Добавить заведение
-          </Link>
+          <Link href="/business/venue" className="inline-block rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white">+ Новое заведение</Link>
         </div>
       </Shell>
     );

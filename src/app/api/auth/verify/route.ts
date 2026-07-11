@@ -26,10 +26,13 @@ export async function POST(req: NextRequest) {
       throw new ApiError(401, "INVALID_OTP", "Неверный код");
     }
 
+    // Номер администратора хранится вне кода. Это позволяет выдать доступ
+    // конкретному владельцу проекта без отдельной формы регистрации.
+    const isAdminPhone = normalized === normalizePhone(process.env.ADMIN_PHONE ?? "");
     const user = await prisma.user.upsert({
       where: { phone: normalized },
-      update: {},
-      create: { phone: normalized },
+      update: isAdminPhone ? { role: "ADMIN" } : {},
+      create: { phone: normalized, role: isAdminPhone ? "ADMIN" : "CUSTOMER" },
     });
     await createSession(user.id);
     return json({

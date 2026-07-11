@@ -17,6 +17,9 @@ function pickupWindow(startH: number, startM: number, endH: number, endM: number
 }
 
 async function main() {
+  await prisma.outboxMessage.deleteMany();
+  await prisma.paymentEvent.deleteMany();
+  await prisma.paymentOperation.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.order.deleteMany();
   await prisma.bag.deleteMany();
@@ -32,6 +35,7 @@ async function main() {
   await prisma.user.create({
     data: { phone: "+77070000001", name: "Демо-покупатель", role: "CUSTOMER" },
   });
+  await prisma.user.create({ data: { phone: "+77010000003", name: "Демо-админ", role: "ADMIN" } });
 
   // Заведения Алматы (координаты — центр города и окрестности)
   const venues = await Promise.all([

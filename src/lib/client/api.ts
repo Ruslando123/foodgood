@@ -94,13 +94,13 @@ export function formatPrice(kzt: number): string {
 
 export function formatPickupWindow(startIso: string, endIso: string): string {
   const fmt = (iso: string) =>
-    new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Almaty" });
   const start = new Date(startIso);
   const today = new Date();
   const dayLabel =
     start.toDateString() === today.toDateString()
       ? "сегодня"
-      : start.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+      : start.toLocaleDateString("ru-RU", { day: "numeric", month: "short", timeZone: "Asia/Almaty" });
   return `${dayLabel} ${fmt(startIso)}–${fmt(endIso)}`;
 }
 

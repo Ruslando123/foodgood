@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
     if (!venue || venue.ownerId !== user.id) {
       throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
     }
+    if (venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
     if (end <= start || end <= new Date()) {
       throw new ApiError(400, "INVALID_PICKUP_WINDOW", "Некорректное окно выдачи");
     }

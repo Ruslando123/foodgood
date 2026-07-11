@@ -12,12 +12,16 @@ npm run seed      # демо-данные: 6 заведений Алматы + �
 npm run dev       # http://localhost:3000
 ```
 
-Для существующей PostgreSQL-базы, ранее созданной через `prisma db push`, один раз выполните:
+`20260711134610_init` — полная baseline-миграция, включая `PaymentOperation`. Не отмечайте её
+как applied на существующей базе: Prisma пропустит создание новой таблицы. Для локальной базы
+разработчика безопаснее пересоздать схему:
 
 ```bash
-DATABASE_URL="..." npx prisma migrate resolve --applied 20260711134610_init
-DATABASE_URL="..." npx prisma migrate deploy
+DATABASE_URL="..." npx prisma migrate reset
 ```
+
+Для production-базы с данными нужна отдельная проверенная data migration/бэкап; не применяйте
+baseline через `migrate resolve` без сверки фактической схемы.
 
 Демо-аккаунты (код подтверждения всегда `0000`):
 

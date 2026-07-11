@@ -1,136 +1,29 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { Map as LeafletMap, Marker } from "leaflet";
-import "leaflet/dist/leaflet.css";
+import { useState } from "react";
 import { api } from "@/lib/client/api";
-import { DEFAULT_CENTER, VENUE_CATEGORIES } from "@/lib/config";
 
-const CATEGORY_EMOJI: Record<string, string> = {
-  CAFE: "☕",
-  BAKERY: "🥐",
-  SUPERMARKET: "🛒",
-  RESTAURANT: "🍽️",
-};
-
-/** Регистрация заведения: данные + точка на карте (клик по карте). */
-export default function VenueRegisterPage() {
+export default function VenueRegistrationPage() {
   const router = useRouter();
-  const mapContainer = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<LeafletMap | null>(null);
-  const markerRef = useRef<Marker | null>(null);
-
-  const [name, setName] = useState("");
-  const [address, setAddress] = useState("");
-  const [category, setCategory] = useState("CAFE");
-  const [description, setDescription] = useState("");
-  const [point, setPoint] = useState(DEFAULT_CENTER);
-  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ name: "", address: "", category: "CAFE", lat: "43.2389", lng: "76.8897", description: "", photo: "🍽️" });
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const set = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const L = (await import("leaflet")).default;
-      if (cancelled || !mapContainer.current || mapRef.current) return;
-      const map = L.map(mapContainer.current).setView([DEFAULT_CENTER.lat, DEFAULT_CENTER.lng], 12);
-      mapRef.current = map;
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }).addTo(map);
-
-      const icon = L.divIcon({
-        className: "",
-        html: '<div style="font-size:32px;line-height:32px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.3))">📍</div>',
-        iconSize: [32, 32],
-        iconAnchor: [16, 32],
-      });
-      const marker = L.marker([DEFAULT_CENTER.lat, DEFAULT_CENTER.lng], { icon, draggable: true }).addTo(map);
-      markerRef.current = marker;
-
-      marker.on("dragend", () => {
-        const p = marker.getLatLng();
-        setPoint({ lat: p.lat, lng: p.lng });
-      });
-      map.on("click", (e) => {
-        marker.setLatLng(e.latlng);
-        setPoint({ lat: e.latlng.lat, lng: e.latlng.lng });
-      });
-    })();
-    return () => {
-      cancelled = true;
-      mapRef.current?.remove();
-      mapRef.current = null;
-    };
-  }, []);
-
-  async function submit() {
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await api("/api/business/venues", {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          address,
-          category,
-          description,
-          photo: CATEGORY_EMOJI[category],
-          lat: point.lat,
-          lng: point.lng,
-        }),
-      });
-      router.push("/business");
+      await api("/api/business/venues", { method: "POST", body: JSON.stringify(form) });
+      router.replace("/business");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      setError(e instanceof Error ? e.message : "Не удалось добавить заведение");
       setBusy(false);
     }
   }
 
-  const input = "w-full bg-card border border-black/10 rounded-xl px-3 py-3";
-
-  return (
-    <div className="max-w-md mx-auto min-h-dvh pb-8">
-      <header className="sticky top-0 z-10 bg-background/90 backdrop-blur px-4 pt-4 pb-3 flex items-center gap-3">
-        <Link href="/business" className="text-primary">←</Link>
-        <h1 className="text-xl font-bold">Новое заведение</h1>
-      </header>
-
-      <main className="px-4 space-y-3">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Название" className={input} />
-        <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Адрес" className={input} />
-        <select value={category} onChange={(e) => setCategory(e.target.value)} className={input}>
-          {Object.entries(VENUE_CATEGORIES).map(([key, label]) => (
-            <option key={key} value={key}>{CATEGORY_EMOJI[key]} {label}</option>
-          ))}
-        </select>
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Короткое описание"
-          rows={2}
-          className={input}
-        />
-
-        <div>
-          <p className="text-xs font-semibold text-muted mb-1">
-            Точка на карте (нажмите или перетащите маркер)
-          </p>
-          <div ref={mapContainer} className="h-56 rounded-2xl overflow-hidden border border-black/10" />
-        </div>
-
-        {error && <p className="text-red-600 text-sm">{error}</p>}
-
-        <button
-          onClick={submit}
-          disabled={busy || !name || !address}
-          className="w-full py-3.5 rounded-2xl bg-primary text-white font-bold disabled:opacity-50"
-        >
-          {busy ? "Сохраняем…" : "Зарегистрировать"}
-        </button>
-      </main>
-    </div>
-  );
+  return <main className="mx-auto min-h-dvh max-w-md p-5"><Link href="/business" className="text-sm font-semibold text-primary">← В кабинет</Link><h1 className="mb-1 mt-3 text-xl font-bold">Новое заведение</h1><p className="mb-4 text-sm text-muted">Эти данные будут видны покупателям.</p><form onSubmit={submit} className="space-y-3">{(["name", "address", "lat", "lng"] as const).map((key) => <input key={key} required value={form[key]} onChange={(event) => set(key, event.target.value)} placeholder={{ name: "Название", address: "Адрес", lat: "Широта", lng: "Долгота" }[key]} className="w-full rounded-xl border p-3" />)}<textarea value={form.description} onChange={(event) => set("description", event.target.value)} placeholder="Короткое описание" rows={3} className="w-full rounded-xl border p-3" /><input value={form.photo} onChange={(event) => set("photo", event.target.value)} placeholder="Эмодзи или ссылка на фото" className="w-full rounded-xl border p-3" /><select value={form.category} onChange={(event) => set("category", event.target.value)} className="w-full rounded-xl border p-3"><option value="CAFE">Кофейня</option><option value="BAKERY">Пекарня</option><option value="SUPERMARKET">Супермаркет</option><option value="RESTAURANT">Ресторан</option></select>{error && <p className="text-sm text-red-600">{error}</p>}<button disabled={busy} className="w-full rounded-xl bg-primary p-3 font-bold text-white">{busy ? "Добавляем…" : "Добавить заведение"}</button></form></main>;
 }

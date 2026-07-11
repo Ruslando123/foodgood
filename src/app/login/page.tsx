@@ -39,6 +39,12 @@ function LoginContent() {
       .then(async (data) => {
         setUser(data.user);
         setName(data.user?.name ?? "");
+        // У администратора нет сценария профиля покупателя: при любой
+        // активной сессии сразу открываем рабочую админ-панель.
+        if (data.user?.role === "ADMIN") {
+          router.replace("/admin/venues");
+          return;
+        }
         if (data.user) {
           const result = await api<{ orders: Order[] }>("/api/orders").catch(() => ({ orders: [] }));
           setOrders(result.orders);
@@ -49,7 +55,7 @@ function LoginContent() {
     if (saved) {
       try { setNotifications(JSON.parse(saved)); } catch {}
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -78,7 +84,9 @@ function LoginContent() {
     try {
       const { user } = await api<{ user: SessionUser }>("/api/auth/verify", { method: "POST", body: JSON.stringify({ phone, code }) });
       setUser(user);
-      router.push(next);
+      // Администратор всегда попадает в рабочий кабинет, даже если ранее
+      // открывал профиль или пришёл с параметром next.
+      router.replace(user.role === "ADMIN" ? "/admin/venues" : next);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -147,7 +155,7 @@ function LoginContent() {
           <Preference label="Напоминать о выдаче" description="Чтобы успеть забрать пакет" checked={notifications.reminders} onChange={(value) => updateNotifications("reminders", value)} />
           <Preference label="Новые пакеты и скидки" description="Подборки выгодных предложений" checked={notifications.offers} onChange={(value) => updateNotifications("offers", value)} />
           <MenuRow icon={<IconCreditCard />} label="Способы оплаты" />
-          <MenuLink href="/business" icon={<IconBuildingStore />} label="Кабинет заведения" />
+          {user.role === "ADMIN" ? <MenuLink href="/admin/venues" icon={<IconBuildingStore />} label="Панель администратора" /> : <MenuLink href="/business" icon={<IconBuildingStore />} label="Кабинет заведения" />}
           <MenuRow icon={<IconHelpCircle />} label="Помощь" />
           <MenuRow icon={<IconInfoCircle />} label="О приложении" />
         </section>

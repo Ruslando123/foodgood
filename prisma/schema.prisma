@@ -30,6 +30,8 @@ model Venue {
   lng         Float
   category    String   @default("CAFE") // CAFE | BAKERY | SUPERMARKET | RESTAURANT
   photo       String   @default("🍽️") // emoji or image URL
+  status      String   @default("ACTIVE") // ACTIVE | SUSPENDED
+  suspensionReason String?
   ownerId     String
   createdAt   DateTime @default(now())
 
@@ -74,6 +76,7 @@ model Order {
   user          User           @relation(fields: [userId], references: [id])
   payment       Payment?
   paymentEvents PaymentEvent[]
+  outboxMessages OutboxMessage[]
 
   @@index([userId, status])
   @@index([bagId, status])
@@ -110,6 +113,8 @@ model PaymentOperation {
   updatedAt      DateTime  @updatedAt
 
   payment Payment @relation(fields: [paymentId], references: [id])
+  events PaymentEvent[]
+  outboxMessages OutboxMessage[]
 
   @@unique([paymentId, type])
   @@index([status, nextAttemptAt])
@@ -135,6 +140,7 @@ model AuditLog {
 model PaymentEvent {
   id           String   @id @default(cuid())
   paymentId    String?
+  operationId  String? @unique
   orderId      String?
   provider     String
   providerRef  String?
@@ -145,12 +151,35 @@ model PaymentEvent {
   createdAt    DateTime @default(now())
 
   payment Payment? @relation(fields: [paymentId], references: [id])
+  operation PaymentOperation? @relation(fields: [operationId], references: [id])
   order   Order?   @relation(fields: [orderId], references: [id])
 
   @@index([paymentId, createdAt])
   @@index([orderId, createdAt])
   @@index([provider, providerRef])
   @@index([type, status, createdAt])
+}
+
+model OutboxMessage {
+  id             String   @id @default(cuid())
+  operationId    String
+  orderId        String?
+  type           String
+  payloadJson    String
+  status         String   @default("PENDING")
+  attempts       Int      @default(0)
+  nextAttemptAt  DateTime @default(now())
+  leaseOwner     String?
+  leaseExpiresAt DateTime?
+  sentAt         DateTime?
+  lastError      String?
+  createdAt      DateTime @default(now())
+
+  operation PaymentOperation @relation(fields: [operationId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id])
+
+  @@unique([operationId, type])
+  @@index([status, nextAttemptAt])
 }
 
 model Notification {

@@ -17,9 +17,10 @@ export async function GET(req: NextRequest) {
     const query = parseCatalogQuery(req.nextUrl.searchParams);
 
     const bags = await prisma.bag.findMany({
-      where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() } },
+      where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() }, venue: { status: "ACTIVE" } },
       include: { venue: true },
       orderBy: { pickupEnd: "asc" },
+      take: 100,
     });
 
     const items = bags.map((bag) => ({
@@ -29,7 +30,6 @@ export async function GET(req: NextRequest) {
         : null,
     }));
     const filtered = filterAndSortCatalog(items, query);
-
-    return json({ bags: filtered });
+    return json({ bags: filtered, nextCursor: null });
   });
 }

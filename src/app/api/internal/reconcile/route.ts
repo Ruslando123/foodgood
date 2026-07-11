@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { reconcilePendingPayments } from "@/modules/orders";
+import { dispatchOutbox } from "@/lib/outbox";
 import { ApiError, apiRoute, json } from "@/shared/server/api";
 
 /** Invoke from a platform cron every minute with CRON_SECRET bearer token. */
@@ -10,6 +11,7 @@ export async function POST(request: NextRequest) {
       throw new ApiError(401, "CRON_AUTH_REQUIRED", "Недействительный cron token");
     }
     const processed = await reconcilePendingPayments();
-    return json({ processed });
+    const dispatched = await dispatchOutbox();
+    return json({ processed, dispatched });
   });
 }
