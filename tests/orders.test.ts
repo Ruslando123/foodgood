@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
+import { paymentProvider } from "@/lib/payments";
 import {
   createOrder,
   cancelOrder,
@@ -12,6 +13,7 @@ import { PLATFORM_FEE_PCT } from "@/lib/config";
 import { resetDb, createFixtures, inMinutes } from "./helpers";
 
 beforeEach(resetDb);
+afterEach(() => vi.restoreAllMocks());
 
 describe("createOrder", () => {
   it("резервирует остаток, холдирует оплату и фиксирует комиссию", async () => {
@@ -115,6 +117,26 @@ describe("redeemOrder (выдача по коду)", () => {
     await expect(redeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("уже выдан");
   });
 
+  it("не помечает заказ выданным, если capture не подтверждён", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    vi.spyOn(paymentProvider, "capture").mockRejectedValueOnce(new Error("provider timeout"));
+
+    await expect(redeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("передан на сверку");
+
+    const pending = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+      include: { payment: true },
+    });
+    expect(pending.status).toBe("CAPTURE_PENDING");
+    expect(pending.payment?.status).toBe("HELD");
+    await expect(
+      prisma.paymentEvent.findFirstOrThrow({
+        where: { orderId: order.id, type: "CAPTURE", status: "FAILED" },
+      })
+    ).resolves.toBeDefined();
+  });
+
   it("чужой мерчант не может выдать заказ", async () => {
     const { customer, bag } = await createFixtures();
     const stranger = await prisma.user.create({
@@ -175,6 +197,22 @@ describe("cancelOrder (отмена покупателем)", () => {
 
     await expect(cancelOrder(customer.id, order.id)).rejects.toThrow("нельзя отменить");
   });
+
+  it("оставляет возврат в обработке при ошибке провайдера", async () => {
+    const { customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    vi.spyOn(paymentProvider, "refund").mockRejectedValueOnce(new Error("provider timeout"));
+
+    await expect(cancelOrder(customer.id, order.id)).rejects.toThrow("повторную обработку");
+
+    const pending = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+      include: { payment: true },
+    });
+    expect(pending.status).toBe("REFUND_PENDING");
+    expect(pending.refundTargetStatus).toBe("CANCELLED");
+    expect(pending.payment?.status).toBe("HELD");
+  });
 });
 
 describe("cancelBagWithRefunds (мерчант снимает пакет)", () => {
@@ -223,6 +261,27 @@ describe("cancelBagWithRefunds (мерчант снимает пакет)", () =
     const { merchant, customer, bag } = await createFixtures();
     await cancelBagWithRefunds(merchant.id, bag.id);
     await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("недоступен");
+  });
+
+  it("отменяет заказ, ожидающий фиксации оплаты", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const pending = await prisma.order.create({
+      data: {
+        bagId: bag.id,
+        userId: customer.id,
+        quantity: 1,
+        totalPrice: bag.price,
+        platformFee: Math.round(bag.price * PLATFORM_FEE_PCT),
+        pickupCode: "PENDING",
+        status: "PENDING_PAYMENT",
+      },
+    });
+
+    await cancelBagWithRefunds(merchant.id, bag.id);
+
+    await expect(
+      prisma.order.findUniqueOrThrow({ where: { id: pending.id } })
+    ).resolves.toMatchObject({ status: "CANCELLED" });
   });
 });
 

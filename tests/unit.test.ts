@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createHmac } from "crypto";
 import { haversineKm, formatDistance } from "@/lib/geo";
 import { generatePickupCode } from "@/lib/qr";
-import { normalizePhone } from "@/lib/auth";
+import { isDevOtpEnabled, normalizePhone } from "@/lib/auth";
 import { verifyTelegramInitData } from "@/lib/telegram";
 import { PLATFORM_FEE_PCT } from "@/lib/config";
 import { pluralRu } from "@/lib/client/api";
@@ -55,6 +55,17 @@ describe("normalizePhone (номера Казахстана)", () => {
       expect(normalizePhone(input)).toBeNull();
     }
   );
+});
+
+describe("dev OTP", () => {
+  it("никогда не включается в production", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      expect(isDevOtpEnabled()).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("verifyTelegramInitData", () => {

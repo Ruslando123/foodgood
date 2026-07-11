@@ -4,6 +4,7 @@ import { requireUser } from "@/modules/auth/server";
 import { createOrder, expireStale, throwOrderApiError } from "@/modules/orders";
 import { idempotentOrderRequest } from "@/modules/orders/idempotency";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
+import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { integer, requiredString } from "@/shared/validation";
 
 export async function GET() {
@@ -22,6 +23,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   return apiRoute(async () => {
     const user = await requireUser();
+    consumeRateLimit(`order:create:${user.id}`, { limit: 10, windowMs: 60 * 1000 });
     const body = await readJsonObject(req);
     const bagId = requiredString(body.bagId, "bagId", { max: 64 });
     const quantity = integer(body.quantity ?? 1, "quantity", { min: 1, max: 10 });

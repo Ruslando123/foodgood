@@ -11,7 +11,10 @@ export async function GET() {
     await expireStale();
     const bags = await prisma.bag.findMany({
       where: { venue: { ownerId: user.id } },
-      include: { venue: true, orders: { where: { status: { in: ["PAID", "COMPLETED"] } } } },
+      include: {
+        venue: true,
+        orders: { where: { status: { in: ["PAID", "CAPTURE_PENDING", "COMPLETED"] } } },
+      },
       orderBy: { createdAt: "desc" },
       take: 50,
     });

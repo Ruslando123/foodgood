@@ -12,7 +12,9 @@ import { api, ApiError, Order, formatPrice, formatPickupWindow } from "@/lib/cli
 const STATUS_LABEL: Record<Order["status"], string> = {
   PENDING_PAYMENT: "Ожидает оплаты",
   PAID: "Оплачен · ждёт выдачи",
+  CAPTURE_PENDING: "Выдача подтверждается",
   COMPLETED: "Выдан",
+  REFUND_PENDING: "Возврат обрабатывается",
   CANCELLED: "Отменён · возврат оформлен",
   EXPIRED: "Не забран · деньги возвращены",
 };
@@ -68,11 +70,17 @@ function OrdersContent() {
   }
 
   const active = useMemo(
-    () => (orders ?? []).filter((order) => order.status === "PAID" || order.status === "PENDING_PAYMENT"),
+    () =>
+      (orders ?? []).filter((order) =>
+        ["PAID", "PENDING_PAYMENT", "CAPTURE_PENDING", "REFUND_PENDING"].includes(order.status)
+      ),
     [orders]
   );
   const history = useMemo(
-    () => (orders ?? []).filter((order) => order.status !== "PAID" && order.status !== "PENDING_PAYMENT"),
+    () =>
+      (orders ?? []).filter(
+        (order) => !["PAID", "PENDING_PAYMENT", "CAPTURE_PENDING", "REFUND_PENDING"].includes(order.status)
+      ),
     [orders]
   );
   const visibleOrders = tab === "active" ? active : history;

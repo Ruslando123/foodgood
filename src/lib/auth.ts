@@ -9,6 +9,15 @@ const SESSION_TTL_DAYS = 30;
 // подключается здесь же, не трогая остальной код.
 export const DEV_OTP_CODE = "0000";
 
+/**
+ * Заглушка допустима только локально или в тестовом окружении. В production
+ * телефонный вход должен быть подключён к SMS-провайдеру: иначе любой, кто
+ * знает номер, получает доступ к аккаунту.
+ */
+export function isDevOtpEnabled(): boolean {
+  return process.env.NODE_ENV !== "production" && process.env.FOODGOOD_DISABLE_DEV_OTP !== "true";
+}
+
 function secret(): Uint8Array {
   const raw = process.env.SESSION_SECRET;
   if (!raw) {

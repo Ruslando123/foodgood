@@ -37,7 +37,14 @@ export type Order = {
   quantity: number;
   totalPrice: number;
   platformFee: number;
-  status: "PENDING_PAYMENT" | "PAID" | "COMPLETED" | "CANCELLED" | "EXPIRED";
+  status:
+    | "PENDING_PAYMENT"
+    | "PAID"
+    | "CAPTURE_PENDING"
+    | "COMPLETED"
+    | "REFUND_PENDING"
+    | "CANCELLED"
+    | "EXPIRED";
   pickupCode: string;
   createdAt: string;
   bag: Bag;

@@ -5,7 +5,11 @@ import { cancelBagWithRefunds, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { integer } from "@/shared/validation";
 
-/** Изменение остатка или снятие пакета с продажи (с возвратом денег покупателям). */
+/**
+ * Уменьшение остатка или снятие пакета с продажи (с возвратом денег покупателям).
+ * Увеличение не разрешено: иначе можно повторно выставить уже зарезервированные
+ * позиции и продать больше, чем было опубликовано.
+ */
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -39,7 +43,7 @@ export async function PATCH(
     }
     const qty = integer(body.quantityLeft, "quantityLeft", {
       min: 0,
-      max: bag.quantityTotal,
+      max: bag.quantityLeft,
     });
     const updated = await prisma.bag.update({
       where: { id },

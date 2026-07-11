@@ -1,10 +1,13 @@
 import { prisma } from "@/lib/db";
 
 export async function resetDb() {
+  await prisma.paymentEvent.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.order.deleteMany();
   await prisma.bag.deleteMany();
   await prisma.venue.deleteMany();
+  await prisma.notification.deleteMany();
+  await prisma.auditLog.deleteMany();
   await prisma.user.deleteMany();
 }
 
