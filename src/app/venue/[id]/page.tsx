@@ -49,6 +49,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
           <p className="text-[12px] text-white/80">{VENUE_CATEGORIES[venue.category] ?? "Заведение"}</p>
           <h1 className="mt-0.5 text-[24px] font-bold tracking-[-0.03em]">{venue.name}</h1>
           <p className="mt-1 text-[13px] text-white/85">{venue.address}</p>
+          <p className="mt-2 text-[13px] font-semibold text-amber-300">★ {venue.reviews.length ? (venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1) : "Новый"} · {venue.reviews.length} отзывов</p>
         </div>
       </header>
 

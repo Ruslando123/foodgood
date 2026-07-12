@@ -10,6 +10,8 @@ export type Venue = {
   category: string;
   photo: string;
   rating?: number | null;
+  reviewCount?: number;
+  reviews?: Array<{ id: string; rating: number; comment: string; createdAt: string; user: { name: string | null } }>;
 };
 
 export type Bag = {

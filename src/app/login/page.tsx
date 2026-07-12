@@ -160,7 +160,8 @@ function LoginContent() {
           <Preference label="Напоминать о выдаче" description="Чтобы успеть забрать пакет" checked={notifications.reminders} onChange={(value) => updateNotifications("reminders", value)} />
           <Preference label="Новые пакеты и скидки" description="Подборки выгодных предложений" checked={notifications.offers} onChange={(value) => updateNotifications("offers", value)} />
           <MenuRow icon={<IconCreditCard />} label="Способы оплаты" />
-          {user.role === "ADMIN" ? <MenuLink href="/admin/venues" icon={<IconBuildingStore />} label="Панель администратора" /> : <MenuLink href="/business" icon={<IconBuildingStore />} label="Кабинет заведения" />}
+          {user.role === "ADMIN" && <MenuLink href="/admin/venues" icon={<IconBuildingStore />} label="Панель администратора" />}
+          {user.role === "MERCHANT" && <MenuLink href="/business" icon={<IconBuildingStore />} label="Кабинет заведения" />}
           <MenuRow icon={<IconHelpCircle />} label="Помощь" />
           <MenuRow icon={<IconInfoCircle />} label="О приложении" />
         </section>
