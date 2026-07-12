@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import type { Map as LeafletMap } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Bag, formatPrice } from "@/lib/client/api";
-import { DEFAULT_CENTER } from "@/lib/config";
+import { KAZAKHSTAN_CENTER } from "@/lib/kazakhstan";
 
 type Props = {
   bags: Bag[];
@@ -23,8 +23,8 @@ export default function MapView({ bags, userLocation }: Props) {
       const L = (await import("leaflet")).default;
       if (cancelled || !containerRef.current || mapRef.current) return;
 
-      const center = userLocation ?? DEFAULT_CENTER;
-      const map = L.map(containerRef.current).setView([center.lat, center.lng], 13);
+      const center = userLocation ?? KAZAKHSTAN_CENTER;
+      const map = L.map(containerRef.current).setView([center.lat, center.lng], userLocation ? 13 : 5);
       mapRef.current = map;
 
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {

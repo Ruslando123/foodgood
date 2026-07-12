@@ -19,17 +19,21 @@ import BagCard from "@/components/BagCard";
 import BottomNav from "@/components/BottomNav";
 import BrandMark from "@/components/BrandMark";
 import { api, Bag, pluralRu } from "@/lib/client/api";
-import { DEFAULT_CENTER, VENUE_CATEGORIES } from "@/lib/config";
+import { VENUE_CATEGORIES } from "@/lib/config";
+import { isInKazakhstan, KAZAKHSTAN_CITIES, KazakhstanCity, nearestKazakhstanCity } from "@/lib/kazakhstan";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
-type GeoState = "requesting" | "ready" | "denied" | "unavailable";
+const LOCATION_STORAGE_KEY = "foodgood-location";
+type GeoState = "requesting" | "ready" | "manual" | "denied" | "unavailable" | "outside";
 type Sort = "soon" | "distance" | "price" | "discount";
 
 export default function HomePage() {
   const [bags, setBags] = useState<Bag[] | null>(null);
   const [view, setView] = useState<"list" | "map">("list");
-  const [location, setLocation] = useState<{ lat: number; lng: number } | null>(DEFAULT_CENTER);
-  const [, setGeoState] = useState<GeoState>("requesting");
+  const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [city, setCity] = useState<KazakhstanCity | null>(null);
+  const [geoState, setGeoState] = useState<GeoState>("requesting");
+  const [locationOpen, setLocationOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
@@ -51,16 +55,75 @@ export default function HomePage() {
     setGeoState("requesting");
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        setLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
+        const point = { lat: position.coords.latitude, lng: position.coords.longitude };
+        if (!isInKazakhstan(point.lat, point.lng)) {
+          setLocation(null);
+          setCity(null);
+          setGeoState("outside");
+          return;
+        }
+        const nearestCity = nearestKazakhstanCity(point.lat, point.lng);
+        setLocation(point);
+        setCity(nearestCity);
         setGeoState("ready");
+        setLocationOpen(false);
+        window.localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify({ ...point, cityId: nearestCity.id }));
         setSort((current) => (current === "soon" ? "distance" : current));
       },
       () => setGeoState("denied"),
-      { timeout: 8000, maximumAge: 5 * 60 * 1000 }
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 5 * 60 * 1000 }
     );
   }, []);
 
-  useEffect(() => requestLocation(), [requestLocation]);
+  useEffect(() => {
+    const saved = window.localStorage.getItem(LOCATION_STORAGE_KEY);
+    if (saved) {
+      try {
+        const value = JSON.parse(saved) as { lat?: number; lng?: number; cityId?: string };
+        if (typeof value.lat === "number" && typeof value.lng === "number" && isInKazakhstan(value.lat, value.lng)) {
+          setLocation({ lat: value.lat, lng: value.lng });
+          setCity(KAZAKHSTAN_CITIES.find((item) => item.id === value.cityId) ?? nearestKazakhstanCity(value.lat, value.lng));
+          setGeoState("manual");
+          setSort("distance");
+        }
+      } catch {
+        window.localStorage.removeItem(LOCATION_STORAGE_KEY);
+      }
+    }
+    requestLocation();
+  }, [requestLocation]);
+
+  function selectCity(cityId: string) {
+    const selected = KAZAKHSTAN_CITIES.find((item) => item.id === cityId);
+    if (!selected) return;
+    const point = { lat: selected.lat, lng: selected.lng };
+    setLocation(point);
+    setCity(selected);
+    setGeoState("manual");
+    setLocationOpen(false);
+    setSort((current) => (current === "soon" ? "distance" : current));
+    window.localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify({ ...point, cityId: selected.id }));
+  }
+
+  function clearLocation() {
+    setLocation(null);
+    setCity(null);
+    setGeoState("denied");
+    setMaxDistance("");
+    setSort("soon");
+    window.localStorage.removeItem(LOCATION_STORAGE_KEY);
+  }
+
+  const locationLabel = city?.name ?? (geoState === "requesting" ? "Определяем город…" : geoState === "outside" ? "Только Казахстан" : "Выберите город");
+  const locationHint = geoState === "denied"
+    ? "Доступ к геолокации закрыт. Разрешите его в браузере или выберите город вручную."
+    : geoState === "unavailable"
+      ? "Геолокация недоступна на этом устройстве. Выберите город вручную."
+      : geoState === "outside"
+        ? "FoodGood сейчас работает только в Казахстане. Выберите город Казахстана."
+        : geoState === "ready"
+          ? "Используем вашу точную геопозицию, чтобы показать ближайшие пакеты."
+          : "Определим местоположение автоматически или выберите город вручную.";
 
   const queryString = useMemo(() => {
     const query = new URLSearchParams();
@@ -121,8 +184,8 @@ export default function HomePage() {
         <div className="flex items-start justify-between">
           <div>
             <BrandMark />
-            <button className="mt-0.5 flex items-center gap-0.5 text-[12px] text-muted">
-              Алматы <IconChevronDown size={14} stroke={1.8} />
+            <button type="button" onClick={() => setLocationOpen((value) => !value)} className="mt-0.5 flex items-center gap-0.5 text-[12px] text-muted" aria-expanded={locationOpen} aria-controls="location-picker">
+              {locationLabel} <IconChevronDown size={14} stroke={1.8} />
             </button>
           </div>
           <Link href="/notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full" aria-label="Уведомления">
@@ -130,6 +193,23 @@ export default function HomePage() {
             <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-red-500" />
           </Link>
         </div>
+
+        {locationOpen && (
+          <section id="location-picker" className="space-y-2 rounded-[15px] border border-black/[0.08] bg-[#fafbfa] p-3 shadow-sm">
+            <p className="text-[11px] leading-4 text-muted" role="status">{locationHint}</p>
+            <button type="button" onClick={requestLocation} disabled={geoState === "requesting"} className="w-full rounded-[11px] bg-primary px-3 py-2.5 text-[12px] font-semibold text-white disabled:opacity-50">
+              {geoState === "requesting" ? "Определяем…" : "Определить автоматически"}
+            </button>
+            <label className="block">
+              <span className="mb-1 block text-[10px] text-muted">Или выберите город Казахстана</span>
+              <select value={geoState === "manual" ? city?.id ?? "" : ""} onChange={(event) => selectCity(event.target.value)} className="w-full rounded-[11px] border border-black/[0.09] bg-white px-3 py-2.5 text-[12px] outline-none">
+                <option value="">Выберите город</option>
+                {KAZAKHSTAN_CITIES.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+            {city && <button type="button" onClick={clearLocation} className="w-full py-1 text-[11px] font-semibold text-muted">Сбросить выбранный город</button>}
+          </section>
+        )}
 
         <label className="relative block">
           <span className="sr-only">Поиск</span>
@@ -198,7 +278,7 @@ export default function HomePage() {
         <main className="space-y-2.5 px-4">
           {bags && bags.length > 0 && (
             <div className="rounded-[10px] bg-[#edf7f1] px-3 py-2 text-[11px] font-medium text-[#226442]">
-              Найдено {bags.length} {pluralRu(bags.length, "пакет", "пакета", "пакетов")} рядом · можно сэкономить до {totalSaved.toLocaleString("ru-RU")} ₸
+              Найдено {bags.length} {pluralRu(bags.length, "пакет", "пакета", "пакетов")} {location ? "с учётом местоположения" : "по Казахстану"} · можно сэкономить до {totalSaved.toLocaleString("ru-RU")} ₸
             </div>
           )}
           {error && (

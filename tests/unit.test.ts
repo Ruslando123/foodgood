@@ -13,6 +13,7 @@ import { integer, requiredString } from "@/shared/validation";
 import { idempotentOrderRequest } from "@/modules/orders/idempotency";
 import { assertSameOrigin } from "@/shared/server/api";
 import { filterAndSortCatalog, parseCatalogQuery } from "@/modules/catalog/query";
+import { isInKazakhstan, nearestKazakhstanCity } from "@/lib/kazakhstan";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -28,6 +29,18 @@ describe("geo", () => {
   it("форматирует метры и километры", () => {
     expect(formatDistance(0.25)).toBe("250 м");
     expect(formatDistance(1.5)).toBe("1.5 км");
+  });
+
+  it("определяет ближайший город Казахстана", () => {
+    expect(nearestKazakhstanCity(51.18, 71.43).name).toBe("Астана");
+    expect(nearestKazakhstanCity(43.25, 76.95).name).toBe("Алматы");
+    expect(nearestKazakhstanCity(47.1, 51.9).name).toBe("Атырау");
+  });
+
+  it("не принимает координаты за пределами Казахстана", () => {
+    expect(isInKazakhstan(51.18, 71.43)).toBe(true);
+    expect(isInKazakhstan(41.3, 69.2)).toBe(false);
+    expect(isInKazakhstan(55.75, 37.62)).toBe(false);
   });
 });
 
