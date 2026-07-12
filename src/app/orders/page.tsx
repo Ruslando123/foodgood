@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -23,51 +23,72 @@ const STATUS_LABEL: Record<Order["status"], string> = {
   EXPIRED: "Не забран · деньги возвращены",
 };
 
+type OrderScope = "active" | "history";
+type OrderPage = { orders: Order[] | null; nextCursor: string | null };
+
 function OrdersContent() {
-  const [orders, setOrders] = useState<Order[] | null>(null);
+  const [pages, setPages] = useState<Record<OrderScope, OrderPage>>({ active: { orders: null, nextCursor: null }, history: { orders: null, nextCursor: null } });
   const [needLogin, setNeedLogin] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"active" | "history">("active");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [tab, setTab] = useState<OrderScope>("active");
   const [now, setNow] = useState(Date.now());
-  const ordersRequest = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 });
+  const ordersRequest = useRef<Record<OrderScope, { controller: AbortController | null; sequence: number }>>({ active: { controller: null, sequence: 0 }, history: { controller: null, sequence: 0 } });
   const newOrderId = useSearchParams().get("new");
 
-  const load = useCallback(async (silent = false) => {
-    ordersRequest.current.controller?.abort();
+  const load = useCallback(async (scope: OrderScope, silent = false, cursor?: string) => {
+    const requestState = ordersRequest.current[scope];
+    requestState.controller?.abort();
     const controller = new AbortController();
-    const sequence = ++ordersRequest.current.sequence;
-    ordersRequest.current.controller = controller;
+    const sequence = ++requestState.sequence;
+    requestState.controller = controller;
+    if (cursor) setLoadingMore(true);
     if (!silent) setError(null);
     try {
-      const data = await api<{ orders: Order[] }>("/api/orders", { signal: controller.signal });
-      if (sequence !== ordersRequest.current.sequence) return;
-      setOrders(data.orders);
+      const query = new URLSearchParams({ scope });
+      if (cursor) query.set("cursor", cursor);
+      const data = await api<{ orders: Order[]; nextCursor: string | null }>(`/api/orders?${query}`, { signal: controller.signal });
+      if (sequence !== requestState.sequence) return;
+      setPages((current) => ({
+        ...current,
+        [scope]: {
+          orders: cursor ? [...(current[scope].orders ?? []), ...data.orders] : data.orders,
+          nextCursor: data.nextCursor,
+        },
+      }));
       setNeedLogin(false);
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
-      if (sequence !== ordersRequest.current.sequence) return;
+      if (sequence !== requestState.sequence) return;
       if (e instanceof ApiError && e.status === 401) setNeedLogin(true);
       else if (!silent) setError(e instanceof Error ? e.message : "Не удалось загрузить заказы");
+    } finally {
+      if (cursor) setLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
-    const request = ordersRequest.current;
-    load();
-    const refreshTimer = window.setInterval(() => load(true), 30_000);
+    const requests = ordersRequest.current;
+    load("active");
+    const refreshTimer = window.setInterval(() => load("active", true), 30_000);
     const clockTimer = window.setInterval(() => setNow(Date.now()), 15_000);
     const onVisibility = () => {
-      if (document.visibilityState === "visible") load(true);
+      if (document.visibilityState === "visible") load("active", true);
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.clearInterval(refreshTimer);
       window.clearInterval(clockTimer);
-      request.controller?.abort();
+      requests.active.controller?.abort();
+      requests.history.controller?.abort();
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [load]);
+
+  useEffect(() => {
+    if (pages[tab].orders === null) void load(tab);
+  }, [load, pages, tab]);
 
   async function cancel(orderId: string) {
     if (!confirm("Отменить заказ? Деньги будут возвращены на карту.")) return;
@@ -75,7 +96,8 @@ function OrdersContent() {
     setError(null);
     try {
       await api(`/api/orders/${orderId}/cancel`, { method: "POST" });
-      await load(true);
+      await load("active", true);
+      setPages((current) => ({ ...current, history: { orders: null, nextCursor: null } }));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не получилось отменить заказ");
     } finally {
@@ -83,21 +105,7 @@ function OrdersContent() {
     }
   }
 
-  const active = useMemo(
-    () =>
-      (orders ?? []).filter((order) =>
-        ["PAID", "READY_FOR_PICKUP", "PENDING_PAYMENT", "CAPTURE_PENDING", "REFUND_PENDING"].includes(order.status)
-      ),
-    [orders]
-  );
-  const history = useMemo(
-    () =>
-      (orders ?? []).filter(
-        (order) => !["PAID", "READY_FOR_PICKUP", "PENDING_PAYMENT", "CAPTURE_PENDING", "REFUND_PENDING"].includes(order.status)
-      ),
-    [orders]
-  );
-  const visibleOrders = tab === "active" ? active : history;
+  const visibleOrders = pages[tab].orders;
 
   if (needLogin) {
     return (
@@ -120,15 +128,15 @@ function OrdersContent() {
       {error && (
         <div className="rounded-[14px] border border-red-200 bg-red-50 p-3 text-[12px] text-red-700">
           <p>{error}</p>
-          <button onClick={() => load()} className="mt-2 font-bold">Повторить</button>
+          <button onClick={() => load(tab)} className="mt-2 font-bold">Повторить</button>
         </div>
       )}
-      {orders === null && !error && (
+      {visibleOrders === null && !error && (
         <div className="space-y-3">
           {[1, 2].map((item) => <div key={item} className="h-56 animate-pulse rounded-[17px] bg-black/[0.05]" />)}
         </div>
       )}
-      {orders !== null && visibleOrders.length === 0 && (
+      {visibleOrders !== null && visibleOrders.length === 0 && (
         <div className="flex min-h-[590px] flex-col items-center justify-start px-7 pb-14 pt-16 text-center">
           <Image src="/images/empty-orders.jpg" alt="" width={280} height={280} className="h-[270px] w-[270px] object-contain" />
           <h2 className="mt-1 text-[20px] font-bold tracking-[-0.02em]">{tab === "active" ? "Пока нет активных заказов" : "История пока пуста"}</h2>
@@ -138,7 +146,7 @@ function OrdersContent() {
         </div>
       )}
 
-      {visibleOrders.map((order) => (
+      {(visibleOrders ?? []).map((order) => (
         <OrderCard
           key={order.id}
           order={order}
@@ -148,6 +156,7 @@ function OrdersContent() {
           onCancel={() => cancel(order.id)}
         />
       ))}
+      {pages[tab].nextCursor && <button type="button" disabled={loadingMore} onClick={() => load(tab, false, pages[tab].nextCursor ?? undefined)} className="w-full rounded-xl border border-black/[0.09] py-3 text-sm font-semibold text-primary disabled:opacity-50">{loadingMore ? "Загружаем…" : "Показать ещё"}</button>}
     </main>
   );
 }

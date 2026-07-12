@@ -38,6 +38,12 @@ services:
         sync: false
       - key: FREEDOMPAY_SECRET_KEY
         sync: false
+      - key: VENUE_UPLOAD_DIR
+        value: /var/data/foodgood/venue-photos
+    disk:
+      name: foodgood-venue-photos
+      mountPath: /var/data/foodgood
+      sizeGB: 5
 
   - type: cron
     name: foodgood-reconcile

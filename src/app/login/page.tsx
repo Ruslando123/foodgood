@@ -19,7 +19,7 @@ import {
   IconPhone,
 } from "@tabler/icons-react";
 import BottomNav from "@/components/BottomNav";
-import { api, Order, SessionUser, formatPrice } from "@/lib/client/api";
+import { api, SessionUser, formatPrice } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
 import SettingsPreferences from "@/components/SettingsPreferences";
 
@@ -50,25 +50,22 @@ function LoginContent() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [stats, setStats] = useState({ bagsSaved: 0, moneySaved: 0 });
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
   const phoneValid = phone.replace(/\D/g, "").length === 11;
 
   useEffect(() => {
-    api<{ user: SessionUser | null }>("/api/auth/me")
+    api<{ user: SessionUser | null; stats: { bagsSaved: number; moneySaved: number } }>("/api/auth/me")
       .then(async (data) => {
         setUser(data.user);
+        setStats(data.stats);
         setName(data.user?.name ?? "");
         // У администратора нет сценария профиля покупателя: при любой
         // активной сессии сразу открываем рабочую админ-панель.
         if (data.user?.role === "ADMIN") {
           router.replace("/admin/venues");
           return;
-        }
-        if (data.user) {
-          const result = await api<{ orders: Order[] }>("/api/orders").catch(() => ({ orders: [] }));
-          setOrders(result.orders);
         }
       })
       .catch(() => setUser(null));
@@ -122,7 +119,7 @@ function LoginContent() {
     await api("/api/auth/logout", { method: "POST" });
     setUser(null);
     setStep("phone");
-    setOrders([]);
+    setStats({ bagsSaved: 0, moneySaved: 0 });
   }
 
   async function saveName() {
@@ -142,9 +139,7 @@ function LoginContent() {
   if (user === undefined) return <div className="space-y-3 px-4"><div className="h-32 animate-pulse rounded-[18px] bg-black/[0.05]" /><div className="h-24 animate-pulse rounded-[17px] bg-black/[0.05]" /></div>;
 
   if (user) {
-    const completed = orders.filter((order) => order.status === "COMPLETED");
-    const bagsSaved = completed.reduce((sum, order) => sum + order.quantity, 0);
-    const moneySaved = completed.reduce((sum, order) => sum + (order.bag.originalPrice - order.bag.price) * order.quantity, 0);
+    const { bagsSaved, moneySaved } = stats;
     return (
       <main className="space-y-3 px-4">
         <section className="rounded-[18px] bg-primary p-4 text-white shadow-sm">

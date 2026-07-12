@@ -6,15 +6,25 @@ import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { requiredString } from "@/shared/validation";
 
 /** Список номеров, которым администратор уже выдал доступ владельца. */
-export async function GET() {
+export async function GET(request: NextRequest) {
   return apiRoute(async () => {
     await requireAdmin();
+    const params = request.nextUrl.searchParams;
+    const query = (params.get("q") ?? "").trim();
+    const requestedPage = Math.max(1, Number.parseInt(params.get("page") ?? "1", 10) || 1);
+    const pageSize = 10;
+    const where = { role: "MERCHANT", ...(query ? { OR: [{ phone: { contains: query } }, { name: { contains: query, mode: "insensitive" as const } }] } : {}) };
+    const total = await prisma.user.count({ where });
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, pages);
     const owners = await prisma.user.findMany({
-      where: { role: "MERCHANT" },
+      where,
       select: { id: true, phone: true, name: true, createdAt: true, _count: { select: { venues: true } } },
       orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
     });
-    return json({ owners });
+    return json({ owners, page, pages, total });
   });
 }
 

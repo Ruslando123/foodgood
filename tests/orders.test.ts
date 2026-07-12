@@ -86,6 +86,22 @@ describe("внутренние уведомления", () => {
     await createOrder(customer.id, bag.id, 1);
     await expect(createPickupReminders()).resolves.toBe(0);
   });
+
+  it("обрабатывает больше одного пакета по 500 заказов", async () => {
+    const { customer, bag } = await createFixtures({ pickupStart: inMinutes(30), pickupEnd: inMinutes(90) });
+    await prisma.order.createMany({
+      data: Array.from({ length: 501 }, (_, index) => ({
+        bagId: bag.id,
+        userId: customer.id,
+        totalPrice: bag.price,
+        platformFee: 0,
+        status: "PAID",
+        pickupCode: `R${String(index).padStart(5, "0")}`,
+      })),
+    });
+    await expect(createPickupReminders()).resolves.toBe(501);
+    await expect(prisma.notification.count({ where: { type: "PICKUP_REMINDER" } })).resolves.toBe(501);
+  });
 });
 
 describe("createOrder", () => {

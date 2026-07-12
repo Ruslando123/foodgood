@@ -18,6 +18,7 @@ import { assertSameOrigin } from "@/shared/server/api";
 import { filterAndSortCatalog, parseCatalogQuery } from "@/modules/catalog/query";
 import { isInKazakhstan, kazakhstanCityById, nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { readVenuePhoto, removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
+import { csvCell, parseFinanceDateRange } from "@/lib/csv";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -105,6 +106,19 @@ describe("venue photos", () => {
       vi.unstubAllEnvs();
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("finance CSV", () => {
+  it("нейтрализует формулы Excel", () => {
+    expect(csvCell("=HYPERLINK(\"https://evil.example\")")).toBe("\"'=HYPERLINK(\"\"https://evil.example\"\")\"");
+    expect(csvCell("Обычное название")).toBe("\"Обычное название\"");
+  });
+
+  it("валидирует диапазон и ограничивает его одним годом", () => {
+    const range = parseFinanceDateRange("https://foodgood.kz/export?from=2026-01-01&to=2026-01-31");
+    expect(range.label).toBe("2026-01-01_2026-01-31");
+    expect(() => parseFinanceDateRange("https://foodgood.kz/export?from=2024-01-01&to=2026-01-01")).toThrow("366");
   });
 });
 
