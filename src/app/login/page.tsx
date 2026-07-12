@@ -167,7 +167,7 @@ function LoginContent() {
                   <div className="flex gap-3 text-[12px] font-semibold"><button onClick={saveName} disabled={busy}>Сохранить</button><button onClick={() => setEditingName(false)} className="text-white/70">Отмена</button></div>
                 </div>
               ) : (
-                <button onClick={() => setEditingName(true)} className="truncate text-left text-[18px] font-bold">{user.name ?? "Гость FoodGood"}</button>
+                <button onClick={() => setEditingName(true)} className="truncate text-left text-[18px] font-bold" aria-label="Изменить имя">{user.name ?? "Пользователь FoodGood"}</button>
               )}
               {user.phone && <p className="mt-0.5 text-[13px] text-white/90">{user.phone}</p>}
               <p className="mt-3 flex items-center gap-1.5 text-[12px] text-white/80"><IconSeedlingFilled size={16} />Вы уже спасли {bagsSaved} пакетов</p>
@@ -179,14 +179,14 @@ function LoginContent() {
 
         <section className="overflow-hidden rounded-[17px] border border-black/[0.08] bg-white">
           <MenuLink href="/orders" icon={<IconReceipt />} label="Мои заказы" />
-          <MenuRow icon={<IconBell />} label="Уведомления" />
+          <MenuLink href="/notifications" icon={<IconBell />} label="Уведомления" />
           <Preference label="Напоминать о выдаче" description="Чтобы успеть забрать пакет" checked={notifications.reminders} onChange={(value) => updateNotifications("reminders", value)} />
           <Preference label="Новые пакеты и скидки" description="Подборки выгодных предложений" checked={notifications.offers} onChange={(value) => updateNotifications("offers", value)} />
-          <MenuRow icon={<IconCreditCard />} label="Способы оплаты" />
+          <MenuLink href="/payment-methods" icon={<IconCreditCard />} label="Способы оплаты" />
           {user.role === "ADMIN" && <MenuLink href="/admin/venues" icon={<IconBuildingStore />} label="Панель администратора" />}
           {user.role === "MERCHANT" && <MenuLink href="/business" icon={<IconBuildingStore />} label="Кабинет заведения" />}
-          <MenuRow icon={<IconHelpCircle />} label="Помощь" />
-          <MenuRow icon={<IconInfoCircle />} label="О приложении" />
+          <MenuLink href="/help" icon={<IconHelpCircle />} label="Помощь" />
+          <MenuLink href="/about" icon={<IconInfoCircle />} label="О приложении" />
         </section>
         {error && <p className="text-center text-[12px] text-red-600">{error}</p>}
         <button onClick={logout} className="flex w-full items-center justify-center gap-2 rounded-[14px] border border-black/[0.08] bg-white py-3.5 text-[14px] font-semibold text-red-500"><IconLogout size={20} />Выйти</button>
@@ -227,10 +227,6 @@ function ProfileStat({ label, value, suffix }: { label: string; value: string; s
   return <div className="rounded-[16px] border border-black/[0.08] bg-white p-3.5 shadow-[0_2px_9px_rgba(20,40,28,0.04)]"><p className="text-[11px] text-muted">{label}</p><p className="mt-1 flex items-center gap-1 text-[19px] font-bold text-primary">{value}{suffix}</p></div>;
 }
 
-function MenuRow({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return <div className="flex h-[46px] items-center gap-3 border-b border-black/[0.07] px-4 text-[13px] [&_svg]:h-5 [&_svg]:w-5 [&_svg]:stroke-[1.8]"><span>{icon}</span><span className="flex-1">{label}</span><IconChevronRight size={17} className="text-muted" /></div>;
-}
-
 function MenuLink({ href, icon, label }: { href: string; icon: React.ReactNode; label: string }) {
   return <Link href={href} className="flex h-[46px] items-center gap-3 border-b border-black/[0.07] px-4 text-[13px] [&_svg]:h-5 [&_svg]:w-5 [&_svg]:stroke-[1.8]"><span>{icon}</span><span className="flex-1">{label}</span><IconChevronRight size={17} className="text-muted" /></Link>;
 }
@@ -247,7 +243,7 @@ function Preference({ label, description, checked, onChange }: { label: string; 
 export default function LoginPage() {
   return (
     <div className="mx-auto min-h-dvh max-w-md bg-white pb-20">
-      <header className="sticky top-0 z-10 flex items-center justify-between bg-white/95 px-4 pb-3 pt-4 backdrop-blur-xl"><h1 className="text-[22px] font-bold tracking-[-0.03em]">Профиль</h1><button className="flex h-9 w-9 items-center justify-center" aria-label="Настройки"><IconSettings size={25} stroke={1.8} /></button></header>
+      <header className="sticky top-0 z-10 flex items-center justify-between bg-white/95 px-4 pb-3 pt-4 backdrop-blur-xl"><h1 className="text-[22px] font-bold tracking-[-0.03em]">Профиль</h1><Link href="/settings" className="flex h-9 w-9 items-center justify-center" aria-label="Настройки"><IconSettings size={25} stroke={1.8} /></Link></header>
       <Suspense><LoginContent /></Suspense>
       <BottomNav />
     </div>
