@@ -21,7 +21,7 @@ export interface PaymentProvider {
   findHoldByIdempotencyKey(idempotencyKey: string): Promise<{ providerRef: string; status: ProviderPaymentStatus } | null>;
 }
 
-class MockPaymentProvider implements PaymentProvider {
+export class MockPaymentProvider implements PaymentProvider {
   name = "mock";
   private readonly refsByKey = new Map<string, string>();
   private readonly statuses = new Map<string, ProviderPaymentStatus>();
@@ -39,18 +39,20 @@ class MockPaymentProvider implements PaymentProvider {
     const key = `capture:${idempotencyKey}`;
     if (this.refsByKey.has(key)) return;
     this.refsByKey.set(key, providerRef);
-    if (this.statuses.get(providerRef) === "HELD") this.statuses.set(providerRef, "CAPTURED");
+    const status = this.statuses.get(providerRef);
+    if (status === undefined || status === "HELD") this.statuses.set(providerRef, "CAPTURED");
   }
 
   async refund(providerRef: string, idempotencyKey: string) {
     const key = `refund:${idempotencyKey}`;
     if (this.refsByKey.has(key)) return;
     this.refsByKey.set(key, providerRef);
-    if (this.statuses.get(providerRef) === "HELD") this.statuses.set(providerRef, "REFUNDED");
+    const status = this.statuses.get(providerRef);
+    if (status === undefined || status === "HELD") this.statuses.set(providerRef, "REFUNDED");
   }
 
   async getStatus(providerRef: string): Promise<ProviderPaymentStatus> {
-    return this.statuses.get(providerRef) ?? "NOT_FOUND";
+    return this.statuses.get(providerRef) ?? (providerRef.startsWith("mock_") ? "HELD" : "NOT_FOUND");
   }
 
   async findHoldByIdempotencyKey(idempotencyKey: string) {

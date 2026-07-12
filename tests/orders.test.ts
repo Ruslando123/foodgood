@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
-import { paymentProvider } from "@/lib/payments";
+import { MockPaymentProvider, paymentProvider } from "@/lib/payments";
 import {
   createOrder as queueOrder,
   cancelOrder as queueCancelOrder,
@@ -523,5 +523,22 @@ describe("расширенные продуктовые сценарии", () =>
     await redeemOrder(merchant.id, order.pickupCode);
     const review = await prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 5, comment: "Отлично" } });
     expect(review).toMatchObject({ rating: 5, moderationStatus: "PUBLISHED" });
+  });
+});
+
+describe("mock payment provider после перезапуска", () => {
+  it("восстанавливает неизвестный mock reference и выполняет capture", async () => {
+    const provider = new MockPaymentProvider();
+    const reference = "mock_order_after_restart";
+    expect(await provider.getStatus(reference)).toBe("HELD");
+    await provider.capture(reference, "capture-key");
+    expect(await provider.getStatus(reference)).toBe("CAPTURED");
+  });
+
+  it("восстанавливает неизвестный mock reference и выполняет refund", async () => {
+    const provider = new MockPaymentProvider();
+    const reference = "mock_order_after_restart";
+    await provider.refund(reference, "refund-key");
+    expect(await provider.getStatus(reference)).toBe("REFUNDED");
   });
 });

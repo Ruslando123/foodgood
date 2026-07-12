@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireMerchant } from "@/modules/auth/server";
-import { redeemOrder, throwOrderApiError } from "@/modules/orders";
+import { prisma } from "@/lib/db";
+import { reconcilePendingPayments, redeemOrder, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { requiredString } from "@/shared/validation";
@@ -13,7 +14,11 @@ export async function POST(req: NextRequest) {
     const body = await readJsonObject(req);
     const code = requiredString(body.code, "code", { min: 6, max: 6 }).toUpperCase();
     try {
-      const order = await redeemOrder(user.id, code);
+      let order = await redeemOrder(user.id, code);
+      if (process.env.NODE_ENV !== "production") {
+        await reconcilePendingPayments(10);
+        order = await prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { bag: { include: { venue: true } }, payment: true, user: true } });
+      }
       return json({ order });
     } catch (error) {
       throwOrderApiError(error);
