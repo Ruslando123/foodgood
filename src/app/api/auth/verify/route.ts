@@ -33,6 +33,9 @@ export async function POST(req: NextRequest) {
       update: isAdminPhone ? { role: "ADMIN" } : {},
       create: { phone: normalized, role: isAdminPhone ? "ADMIN" : "CUSTOMER" },
     });
+    if (user.status === "BLOCKED") {
+      throw new ApiError(403, "ACCOUNT_BLOCKED", "Аккаунт заблокирован администратором");
+    }
     await createSession(user.id);
     return json({
       ok: true,

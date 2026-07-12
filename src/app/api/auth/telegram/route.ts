@@ -28,6 +28,9 @@ export async function POST(req: NextRequest) {
       update: { name },
       create: { telegramId: String(tgUser.id), name },
     });
+    if (user.status === "BLOCKED") {
+      throw new ApiError(403, "ACCOUNT_BLOCKED", "Аккаунт заблокирован администратором");
+    }
     await createSession(user.id);
     return json({
       ok: true,

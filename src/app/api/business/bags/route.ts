@@ -46,22 +46,37 @@ export async function POST(req: NextRequest) {
       throw new ApiError(400, "INVALID_PICKUP_WINDOW", "Некорректное окно выдачи");
     }
 
-    const bag = await prisma.bag.create({
-      data: {
-        venueId: venue.id,
-        title,
-        description,
-        price: priceNum,
-        originalPrice: originalNum,
-        quantityTotal: qty,
-        quantityLeft: qty,
-        pickupStart: start,
-        pickupEnd: end,
-      },
-      include: { venue: true },
+    const bag = await prisma.$transaction(async (tx) => {
+      const created = await tx.bag.create({
+        data: {
+          venueId: venue.id,
+          title,
+          description,
+          price: priceNum,
+          originalPrice: originalNum,
+          quantityTotal: qty,
+          quantityLeft: qty,
+          pickupStart: start,
+          pickupEnd: end,
+        },
+        include: { venue: true },
+      });
+      const followers = await tx.favorite.findMany({ where: { venueId: venue.id, user: { notificationOffers: true } }, select: { userId: true } });
+      if (followers.length) {
+        await tx.notification.createMany({
+          data: followers.map(({ userId }) => ({
+            userId,
+            channel: "IN_APP",
+            recipient: userId,
+            type: "NEW_FAVORITE_VENUE_BAG",
+            status: "SENT",
+            sentAt: new Date(),
+            payloadJson: JSON.stringify({ bagId: created.id, venueId: venue.id, venueName: venue.name, title: created.title }),
+          })),
+        });
+      }
+      return created;
     });
-    const followers = await prisma.favorite.findMany({ where: { venueId: venue.id, user: { notificationOffers: true } }, select: { userId: true } });
-    if (followers.length) await prisma.notification.createMany({ data: followers.map(({ userId }) => ({ userId, channel: "IN_APP", recipient: userId, type: "NEW_FAVORITE_VENUE_BAG", status: "SENT", sentAt: new Date(), payloadJson: JSON.stringify({ bagId: bag.id, venueId: venue.id, venueName: venue.name, title: bag.title }) })) });
     return json({ bag }, { status: 201 });
   });
 }

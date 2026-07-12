@@ -61,7 +61,7 @@ export async function destroySession(): Promise<void> {
   store.delete(SESSION_COOKIE);
 }
 
-export async function getSessionUser(): Promise<SessionUser | null> {
+export async function getSessionUser(options: { includeBlocked?: boolean } = {}): Promise<SessionUser | null> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -70,6 +70,10 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     if (!payload.sub) return null;
     const user = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) return null;
+    // Pages use the safe default and cannot render private data for an account
+    // blocked after its session was issued. API guards include the record so
+    // they can return a specific ACCOUNT_BLOCKED response.
+    if (user.status === "BLOCKED" && !options.includeBlocked) return null;
     return {
       id: user.id,
       phone: user.phone,

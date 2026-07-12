@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { createHmac } from "crypto";
+import { mkdtemp, rm } from "fs/promises";
+import { tmpdir } from "os";
+import path from "path";
 import { haversineKm, formatDistance } from "@/lib/geo";
 import { generatePickupCode } from "@/lib/qr";
 import { isDevOtpEnabled, normalizePhone } from "@/lib/auth";
@@ -14,6 +17,7 @@ import { idempotentOrderRequest } from "@/modules/orders/idempotency";
 import { assertSameOrigin } from "@/shared/server/api";
 import { filterAndSortCatalog, parseCatalogQuery } from "@/modules/catalog/query";
 import { isInKazakhstan, kazakhstanCityById, nearestKazakhstanCity } from "@/lib/kazakhstan";
+import { readVenuePhoto, removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -81,6 +85,25 @@ describe("dev OTP", () => {
       expect(isDevOtpEnabled()).toBe(false);
     } finally {
       vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("venue photos", () => {
+  it("сохраняет проверенный файл и отклоняет неподдерживаемый формат", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "foodgood-venue-photo-"));
+    vi.stubEnv("VENUE_UPLOAD_DIR", directory);
+    try {
+      const png = new Uint8Array(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z1pAAAAAASUVORK5CYII=", "base64"));
+      const url = await saveVenuePhoto(new File([png], "venue.png", { type: "image/png" }));
+      const filename = url.split("/").at(-1)!;
+      await expect(readVenuePhoto(filename)).resolves.toMatchObject({ type: "image/png" });
+      await expect(saveVenuePhoto(new File(["not an image"], "venue.txt"))).rejects.toThrow("PHOTO_FORMAT");
+      await removeVenuePhoto(url);
+      await expect(readVenuePhoto(filename)).resolves.toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 });

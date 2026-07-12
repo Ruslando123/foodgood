@@ -17,6 +17,7 @@ import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { resetDb, createFixtures, inMinutes } from "./helpers";
 import { NextRequest } from "next/server";
 import { GET as getBags } from "@/app/api/bags/route";
+import { POST as verifyPhone } from "@/app/api/auth/verify/route";
 import { createPickupReminders } from "@/lib/notifications";
 
 beforeEach(resetDb);
@@ -313,6 +314,19 @@ describe("phone OTP", () => {
     const results = await Promise.allSettled([issueOtp(phone), issueOtp(phone)]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     await expect(prisma.otpChallenge.count({ where: { phone, activeKey: phone } })).resolves.toBe(1);
+  });
+
+  it("не создаёт сессию для заблокированного аккаунта", async () => {
+    const phone = "+77015550199";
+    await prisma.user.create({ data: { phone, status: "BLOCKED" } });
+    const issued = await issueOtp(phone);
+    const response = await verifyPhone(new NextRequest("http://localhost/api/auth/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ phone, code: issued.devCode }),
+    }));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "ACCOUNT_BLOCKED" } });
   });
 });
 

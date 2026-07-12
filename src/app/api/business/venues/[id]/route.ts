@@ -4,7 +4,7 @@ import { VENUE_CATEGORIES } from "@/lib/config";
 import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { requireMerchant } from "@/modules/auth/server";
-import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
+import { apiRoute, ApiError, assertSameOrigin, json, readJsonObject } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
 
 async function ownedVenue(ownerId: string, id: string) {
@@ -46,6 +46,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(async () => {
+    assertSameOrigin(req);
     const owner = await requireMerchant();
     const { id } = await params;
     const venue = await ownedVenue(owner.id, id);
