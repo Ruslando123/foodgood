@@ -214,7 +214,7 @@ function OrderCard({
           <Link href={`/bag/${order.bag.id}`} className="block rounded-xl bg-primary/10 px-3 py-2.5 text-center text-sm font-semibold text-primary">
             Заказать снова
           </Link>
-          {order.status === "COMPLETED" && <OrderReviewForm id={order.id} />}
+          {order.status === "COMPLETED" && (order.review ? <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-center text-sm font-semibold text-amber-700">Отзыв оставлен · {"★".repeat(order.review.rating)}</p> : <OrderReviewForm id={order.id} />)}
         </div>
       )}
       <OrderSupportButton id={order.id} />

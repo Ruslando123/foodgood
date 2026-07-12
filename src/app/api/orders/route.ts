@@ -12,7 +12,7 @@ export async function GET() {
     const user = await requireUser();
     const orders = await prisma.order.findMany({
       where: { userId: user.id },
-      include: { bag: { include: { venue: true } }, payment: true },
+      include: { bag: { include: { venue: true } }, payment: true, review: true },
       orderBy: { createdAt: "desc" },
     });
     return json({ orders });

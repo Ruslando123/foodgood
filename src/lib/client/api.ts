@@ -53,6 +53,7 @@ export type Order = {
   createdAt: string;
   bag: Bag;
   payment?: Payment | null;
+  review?: { id: string; rating: number; comment: string } | null;
 };
 
 export type SessionUser = {

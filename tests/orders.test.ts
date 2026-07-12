@@ -523,6 +523,7 @@ describe("расширенные продуктовые сценарии", () =>
     await redeemOrder(merchant.id, order.pickupCode);
     const review = await prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 5, comment: "Отлично" } });
     expect(review).toMatchObject({ rating: 5, moderationStatus: "PUBLISHED" });
+    await expect(prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 4 } })).rejects.toThrow();
   });
 });
 
