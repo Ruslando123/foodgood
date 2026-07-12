@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { ACTIVE_PICKUP_ORDER_STATUSES } from "@/modules/orders";
 
 const STATUS_LABELS: Record<string, string> = {
   PENDING_PAYMENT: "Ожидает оплаты",
   PAID: "Оплачен",
+  READY_FOR_PICKUP: "Готов к выдаче",
   CAPTURE_PENDING: "Списание",
   COMPLETED: "Выдан",
   REFUND_PENDING: "Возврат",
@@ -29,7 +31,7 @@ export default async function AdminOrdersPage({ searchParams }: { searchParams: 
   const selectedStatus = params.status ?? "ALL";
   const where: Prisma.OrderWhereInput = {
     ...(selectedStatus === "ACTIVE"
-      ? { status: { in: ["PENDING_PAYMENT", "PAID", "CAPTURE_PENDING", "REFUND_PENDING"] } }
+      ? { status: { in: ACTIVE_PICKUP_ORDER_STATUSES }, bag: { pickupEnd: { gt: new Date() } } }
       : STATUSES.includes(selectedStatus) ? { status: selectedStatus } : {}),
     ...(query ? { OR: [
       { id: { contains: query, mode: "insensitive" } },

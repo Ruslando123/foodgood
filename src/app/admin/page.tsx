@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { ACTIVE_PICKUP_ORDER_STATUSES } from "@/modules/orders";
 
 const ORDER_LABELS: Record<string, string> = {
   PENDING_PAYMENT: "Ожидает оплаты",
@@ -21,7 +22,7 @@ export default async function AdminOverviewPage() {
     prisma.user.count({ where: { role: "MERCHANT" } }),
     prisma.user.count({ where: { role: "CUSTOMER" } }),
     prisma.bag.count({ where: { status: "ACTIVE", pickupEnd: { gt: new Date() } } }),
-    prisma.order.count({ where: { status: { in: ["PENDING_PAYMENT", "PAID", "CAPTURE_PENDING", "REFUND_PENDING"] } } }),
+    prisma.order.count({ where: { status: { in: ACTIVE_PICKUP_ORDER_STATUSES }, bag: { pickupEnd: { gt: new Date() } } } }),
     prisma.order.aggregate({ where: { status: "COMPLETED" }, _sum: { totalPrice: true, platformFee: true } }),
     prisma.paymentOperation.count({ where: { status: { in: ["RETRY", "NEEDS_REVIEW"] } } }),
     prisma.order.findMany({
@@ -36,7 +37,7 @@ export default async function AdminOverviewPage() {
   const fees = revenue._sum.platformFee ?? 0;
   const stats = [
     { label: "Оборот", value: price(gross), hint: `Комиссия ${price(fees)}`, href: "/admin/orders?status=COMPLETED" },
-    { label: "Активные заказы", value: activeOrders, hint: "Включая оплату и возврат", href: "/admin/orders?status=ACTIVE" },
+    { label: "Активные заказы", value: activeOrders, hint: "В пределах окна выдачи", href: "/admin/orders?status=ACTIVE" },
     { label: "Заведения", value: venues, hint: `${activeBags} активных пакетов`, href: "/admin/venues" },
     { label: "Владельцы", value: owners, hint: `${customers} покупателей`, href: "/admin/owners" },
     { label: "Проблемные операции", value: problems, hint: problems ? "Требуют внимания" : "Всё спокойно", href: "/admin/operations" },

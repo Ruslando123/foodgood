@@ -6,6 +6,7 @@ import {
   cancelOrder as queueCancelOrder,
   redeemOrder as queueRedeemOrder,
   expireStale,
+  customerOrderScopeWhere,
   cancelBagWithRefunds as queueCancelBagWithRefunds,
   reconcilePendingPayments,
   OrderError,
@@ -496,6 +497,35 @@ describe("cancelBagWithRefunds (мерчант снимает пакет)", () =
 });
 
 describe("expireStale (ленивое истечение)", () => {
+  it("сразу убирает заказ с завершённым окном из активных и показывает в истории", async () => {
+    const { customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    await prisma.bag.update({
+      where: { id: bag.id },
+      data: { pickupStart: inMinutes(-120), pickupEnd: inMinutes(-1) },
+    });
+
+    const [active, history] = await Promise.all([
+      prisma.order.findMany({ where: customerOrderScopeWhere(customer.id, "active") }),
+      prisma.order.findMany({ where: customerOrderScopeWhere(customer.id, "history") }),
+    ]);
+
+    expect(active).toHaveLength(0);
+    expect(history.map((item) => item.id)).toContain(order.id);
+  });
+
+  it("не разрешает выдать заказ после окончания окна", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    await prisma.bag.update({
+      where: { id: bag.id },
+      data: { pickupStart: inMinutes(-120), pickupEnd: inMinutes(-1) },
+    });
+
+    await expect(queueRedeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("Окно выдачи закончилось");
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "REFUND_PENDING" });
+  });
+
   it("просроченный пакет → EXPIRED, невыданный заказ → refund", async () => {
     const { customer, bag } = await createFixtures();
     const order = await createOrder(customer.id, bag.id, 1);

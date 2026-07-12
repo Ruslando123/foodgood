@@ -1,13 +1,11 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/modules/auth/server";
-import { createOrder, reconcilePendingPayments, throwOrderApiError } from "@/modules/orders";
+import { createOrder, customerOrderScopeWhere, expireStale, reconcilePendingPayments, throwOrderApiError } from "@/modules/orders";
 import { idempotentOrderRequest } from "@/modules/orders/idempotency";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { integer, requiredString } from "@/shared/validation";
-
-const ACTIVE_STATUSES = ["PAID", "READY_FOR_PICKUP", "PENDING_PAYMENT", "CAPTURE_PENDING", "REFUND_PENDING"];
 
 export async function GET(request: NextRequest) {
   return apiRoute(async () => {
@@ -17,8 +15,10 @@ export async function GET(request: NextRequest) {
     const cursor = params.get("cursor") || undefined;
     const requestedLimit = Number(params.get("limit") ?? 20);
     const limit = Number.isInteger(requestedLimit) ? Math.min(50, Math.max(1, requestedLimit)) : 20;
+    // Обновляем просрочку при открытии списка, даже если очередной cron ещё не запускался.
+    await expireStale();
     const orders = await prisma.order.findMany({
-      where: { userId: user.id, status: scope === "active" ? { in: ACTIVE_STATUSES } : { notIn: ACTIVE_STATUSES } },
+      where: customerOrderScopeWhere(user.id, scope),
       include: { bag: { include: { venue: true } }, payment: true, review: true },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,

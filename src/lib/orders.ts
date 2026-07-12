@@ -12,6 +12,15 @@ class OperationLeaseLostError extends Error {}
 type FinalRefundStatus = "CANCELLED" | "EXPIRED";
 type OperationType = "HOLD" | "CAPTURE" | "REFUND";
 
+export const ACTIVE_PICKUP_ORDER_STATUSES = ["PENDING_PAYMENT", "PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING"];
+
+export function customerOrderScopeWhere(userId: string, scope: "active" | "history", now = new Date()): Prisma.OrderWhereInput {
+  const activeStatus = { in: ACTIVE_PICKUP_ORDER_STATUSES };
+  return scope === "active"
+    ? { userId, status: activeStatus, bag: { pickupEnd: { gt: now } } }
+    : { userId, OR: [{ status: { notIn: ACTIVE_PICKUP_ORDER_STATUSES } }, { bag: { pickupEnd: { lte: now } } }] };
+}
+
 const MAX_PAYMENT_ATTEMPTS = 5;
 const LEASE_MS = 60_000;
 // Must stay comfortably below LEASE_MS so a worker never holds a lease forever
@@ -116,6 +125,8 @@ export async function cancelOrder(userId: string, orderId: string) {
 
 /** HTTP atomically claims PAID -> CAPTURE_PENDING and queues CAPTURE. */
 export async function redeemOrder(merchantId: string, pickupCode: string) {
+  // Не полагаемся только на cron: код нельзя принять после окончания выдачи.
+  await expireStale();
   const code = pickupCode.trim().toUpperCase();
   const order = await prisma.order.findUnique({
     where: { pickupCode: code },
@@ -123,6 +134,7 @@ export async function redeemOrder(merchantId: string, pickupCode: string) {
   });
   if (!order) throw new OrderError("Код не найден");
   if (order.bag.venue.ownerId !== merchantId) throw new OrderError("Код от другого заведения");
+  if (order.bag.pickupEnd <= new Date()) throw new OrderError("Окно выдачи закончилось");
   if (order.status === "COMPLETED") throw new OrderError("Заказ уже выдан");
   if (order.status === "CAPTURE_PENDING") {
     throw new OrderError("Списание уже обрабатывается, проверьте статус позже");
