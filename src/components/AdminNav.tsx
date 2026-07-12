@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { IconBuildingStore, IconLayoutDashboard, IconLogout, IconUsers } from "@tabler/icons-react";
+import { IconActivity, IconBuildingStore, IconLayoutDashboard, IconLogout, IconUsers } from "@tabler/icons-react";
 import { api } from "@/lib/client/api";
 
 const links = [
   { href: "/admin", label: "Обзор", icon: IconLayoutDashboard },
   { href: "/admin/venues", label: "Заведения", icon: IconBuildingStore },
   { href: "/admin/owners", label: "Владельцы", icon: IconUsers },
+  { href: "/admin/operations", label: "Операции", icon: IconActivity },
 ];
 
 export default function AdminNav({ name }: { name: string | null }) {

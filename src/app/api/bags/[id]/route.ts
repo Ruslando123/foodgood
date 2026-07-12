@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { expireStale } from "@/modules/orders";
 import { apiRoute, ApiError, json } from "@/shared/server/api";
 
 export async function GET(
@@ -8,7 +7,6 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   return apiRoute(async () => {
-    await expireStale();
     const { id } = await params;
     const bag = await prisma.bag.findUnique({
       where: { id },

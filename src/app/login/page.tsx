@@ -26,6 +26,8 @@ function LoginContent() {
   const [step, setStep] = useState<"phone" | "code">("phone");
   const [phone, setPhone] = useState("+7");
   const [code, setCode] = useState("");
+  const [codeLength, setCodeLength] = useState(4);
+  const [devCode, setDevCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
@@ -67,8 +69,11 @@ function LoginContent() {
     setBusy(true);
     setError(null);
     try {
-      const result = await api<{ phone: string }>("/api/auth/phone", { method: "POST", body: JSON.stringify({ phone }) });
+      const result = await api<{ phone: string; codeLength: number; devCode?: string }>("/api/auth/phone", { method: "POST", body: JSON.stringify({ phone }) });
       setPhone(result.phone);
+      setCode("");
+      setCodeLength(result.codeLength);
+      setDevCode(result.devCode ?? null);
       setStep("code");
       setCooldown(60);
     } catch (e) {
@@ -179,9 +184,9 @@ function LoginContent() {
         </div>
       ) : (
         <div className="space-y-3">
-          <p className="text-center text-[13px] text-muted">Код отправлен на {phone}. <span className="font-semibold">Демо: 0000</span></p>
-          <input type="text" inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} placeholder="0000" maxLength={4} className="h-12 w-full rounded-[13px] border border-black/[0.1] bg-white px-4 text-center text-lg tracking-[0.5em] outline-none" />
-          <button onClick={verify} disabled={busy || code.length !== 4} className="w-full rounded-[13px] bg-primary py-3.5 font-semibold text-white disabled:opacity-60">Войти</button>
+          <p className="text-center text-[13px] text-muted">Код отправлен на {phone}.{devCode && <span className="font-semibold"> Демо: {devCode}</span>}</p>
+          <input type="text" inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} placeholder={"0".repeat(codeLength)} maxLength={codeLength} className="h-12 w-full rounded-[13px] border border-black/[0.1] bg-white px-4 text-center text-lg tracking-[0.5em] outline-none" />
+          <button onClick={verify} disabled={busy || code.length !== codeLength} className="w-full rounded-[13px] bg-primary py-3.5 font-semibold text-white disabled:opacity-60">Войти</button>
           <button onClick={requestCode} disabled={busy || cooldown > 0} className="w-full py-2 text-[13px] text-primary disabled:text-muted">{cooldown > 0 ? `Отправить снова через ${cooldown} сек` : "Отправить код снова"}</button>
           <button onClick={() => setStep("phone")} className="w-full py-2 text-[13px] text-muted">Изменить номер</button>
         </div>

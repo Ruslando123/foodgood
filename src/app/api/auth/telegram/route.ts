@@ -1,14 +1,17 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { createSession } from "@/lib/auth";
-import { verifyTelegramInitData } from "@/lib/telegram";
+import { telegramAuthEnabled, verifyTelegramInitData } from "@/lib/telegram";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit, requestIp } from "@/shared/server/rate-limit";
 
 /** Авторизация из Telegram WebApp по initData. */
 export async function POST(req: NextRequest) {
   return apiRoute(async () => {
-    consumeRateLimit(`telegram:auth:${requestIp(req)}`, { limit: 20, windowMs: 15 * 60 * 1000 });
+    if (!telegramAuthEnabled()) {
+      throw new ApiError(503, "TELEGRAM_AUTH_DISABLED", "Вход через Telegram временно отключён");
+    }
+    await consumeRateLimit(`telegram:auth:${requestIp(req)}`, { limit: 20, windowMs: 15 * 60 * 1000 });
     const { initData } = await readJsonObject(req);
     const tgUser = verifyTelegramInitData(String(initData ?? ""));
     if (!tgUser) {

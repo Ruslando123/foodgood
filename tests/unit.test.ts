@@ -5,6 +5,7 @@ import { generatePickupCode } from "@/lib/qr";
 import { isDevOtpEnabled, normalizePhone } from "@/lib/auth";
 import { verifyTelegramInitData } from "@/lib/telegram";
 import { PLATFORM_FEE_PCT } from "@/lib/config";
+import { assertPaymentProviderReady, PaymentConfigurationError } from "@/lib/payments";
 import { pluralRu } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
 import { integer, requiredString } from "@/shared/validation";
@@ -62,6 +63,18 @@ describe("dev OTP", () => {
     vi.stubEnv("NODE_ENV", "production");
     try {
       expect(isDevOtpEnabled()).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("production payment safety", () => {
+  it("не позволяет случайно использовать mock-платежи", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ALLOW_MOCK_PAYMENTS_IN_PRODUCTION", "false");
+    try {
+      expect(() => assertPaymentProviderReady()).toThrow(PaymentConfigurationError);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -178,9 +191,9 @@ describe("границы безопасности", () => {
   it("отклоняет повторное использование ключа с другим payload", async () => {
     const key = `test-user:${crypto.randomUUID()}`;
     await idempotentOrderRequest(key, "bag-1:1", async () => ({ id: "order-1" }));
-    expect(() =>
+    await expect(
       idempotentOrderRequest(key, "bag-2:1", async () => ({ id: "order-2" }))
-    ).toThrow("другими параметрами");
+    ).rejects.toThrow("другими параметрами");
   });
 });
 

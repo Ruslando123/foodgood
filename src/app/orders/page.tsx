@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -26,21 +26,30 @@ function OrdersContent() {
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [tab, setTab] = useState<"active" | "history">("active");
   const [now, setNow] = useState(Date.now());
+  const ordersRequest = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 });
   const newOrderId = useSearchParams().get("new");
 
   const load = useCallback(async (silent = false) => {
+    ordersRequest.current.controller?.abort();
+    const controller = new AbortController();
+    const sequence = ++ordersRequest.current.sequence;
+    ordersRequest.current.controller = controller;
     if (!silent) setError(null);
     try {
-      const data = await api<{ orders: Order[] }>("/api/orders");
+      const data = await api<{ orders: Order[] }>("/api/orders", { signal: controller.signal });
+      if (sequence !== ordersRequest.current.sequence) return;
       setOrders(data.orders);
       setNeedLogin(false);
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      if (sequence !== ordersRequest.current.sequence) return;
       if (e instanceof ApiError && e.status === 401) setNeedLogin(true);
       else if (!silent) setError(e instanceof Error ? e.message : "Не удалось загрузить заказы");
     }
   }, []);
 
   useEffect(() => {
+    const request = ordersRequest.current;
     load();
     const refreshTimer = window.setInterval(() => load(true), 30_000);
     const clockTimer = window.setInterval(() => setNow(Date.now()), 15_000);
@@ -51,6 +60,7 @@ function OrdersContent() {
     return () => {
       window.clearInterval(refreshTimer);
       window.clearInterval(clockTimer);
+      request.controller?.abort();
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [load]);

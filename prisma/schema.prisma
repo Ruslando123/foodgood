@@ -21,19 +21,43 @@ model User {
   notifications Notification[]
 }
 
+model OtpChallenge {
+  id          String    @id @default(cuid())
+  phone       String
+  activeKey   String?   @unique
+  codeHash    String
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+}
+
+model RateLimitBucket {
+  key       String   @id
+  count     Int
+  resetAt   DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([resetAt])
+}
+
 model Venue {
-  id          String   @id @default(cuid())
-  name        String
-  description String   @default("")
-  address     String
-  lat         Float
-  lng         Float
-  category    String   @default("CAFE") // CAFE | BAKERY | SUPERMARKET | RESTAURANT
-  photo       String   @default("🍽️") // emoji or image URL
-  status      String   @default("ACTIVE") // ACTIVE | SUSPENDED
+  id               String   @id @default(cuid())
+  name             String
+  description      String   @default("")
+  address          String
+  lat              Float
+  lng              Float
+  category         String   @default("CAFE") // CAFE | BAKERY | SUPERMARKET | RESTAURANT
+  photo            String   @default("🍽️") // emoji or image URL
+  status           String   @default("ACTIVE") // ACTIVE | SUSPENDED
   suspensionReason String?
-  ownerId     String
-  createdAt   DateTime @default(now())
+  ownerId          String
+  createdAt        DateTime @default(now())
 
   owner User  @relation(fields: [ownerId], references: [id])
   bags  Bag[]
@@ -72,10 +96,10 @@ model Order {
   createdAt          DateTime  @default(now())
   completedAt        DateTime?
 
-  bag           Bag            @relation(fields: [bagId], references: [id])
-  user          User           @relation(fields: [userId], references: [id])
-  payment       Payment?
-  paymentEvents PaymentEvent[]
+  bag            Bag             @relation(fields: [bagId], references: [id])
+  user           User            @relation(fields: [userId], references: [id])
+  payment        Payment?
+  paymentEvents  PaymentEvent[]
   outboxMessages OutboxMessage[]
 
   @@index([userId, status])
@@ -112,8 +136,8 @@ model PaymentOperation {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  payment Payment @relation(fields: [paymentId], references: [id])
-  events PaymentEvent[]
+  payment        Payment         @relation(fields: [paymentId], references: [id])
+  events         PaymentEvent[]
   outboxMessages OutboxMessage[]
 
   @@unique([paymentId, type])
@@ -140,7 +164,7 @@ model AuditLog {
 model PaymentEvent {
   id           String   @id @default(cuid())
   paymentId    String?
-  operationId  String? @unique
+  operationId  String?  @unique
   orderId      String?
   provider     String
   providerRef  String?
@@ -150,9 +174,9 @@ model PaymentEvent {
   metadataJson String   @default("{}")
   createdAt    DateTime @default(now())
 
-  payment Payment? @relation(fields: [paymentId], references: [id])
+  payment   Payment?          @relation(fields: [paymentId], references: [id])
   operation PaymentOperation? @relation(fields: [operationId], references: [id])
-  order   Order?   @relation(fields: [orderId], references: [id])
+  order     Order?            @relation(fields: [orderId], references: [id])
 
   @@index([paymentId, createdAt])
   @@index([orderId, createdAt])
@@ -161,25 +185,41 @@ model PaymentEvent {
 }
 
 model OutboxMessage {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   operationId    String
   orderId        String?
   type           String
   payloadJson    String
-  status         String   @default("PENDING")
-  attempts       Int      @default(0)
-  nextAttemptAt  DateTime @default(now())
+  status         String    @default("PENDING")
+  attempts       Int       @default(0)
+  nextAttemptAt  DateTime  @default(now())
   leaseOwner     String?
   leaseExpiresAt DateTime?
   sentAt         DateTime?
   lastError      String?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
   operation PaymentOperation @relation(fields: [operationId], references: [id])
-  order Order? @relation(fields: [orderId], references: [id])
+  order     Order?           @relation(fields: [orderId], references: [id])
 
   @@unique([operationId, type])
   @@index([status, nextAttemptAt])
+}
+
+/// Durable idempotency boundary for POST /api/orders.  `key` includes the user
+/// id, so a customer cannot observe another customer's previous response.
+model OrderIdempotencyKey {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  fingerprint String
+  status      String   @default("PROCESSING") // PROCESSING | SUCCEEDED | FAILED
+  resultJson  String?
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([expiresAt])
+  @@index([status, expiresAt])
 }
 
 model Notification {

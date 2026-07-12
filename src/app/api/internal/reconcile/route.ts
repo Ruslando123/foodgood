@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
-import { reconcilePendingPayments } from "@/modules/orders";
+import { expireStale, reconcilePendingPayments } from "@/modules/orders";
 import { dispatchOutbox } from "@/lib/outbox";
 import { ApiError, apiRoute, json } from "@/shared/server/api";
+import { pruneExpiredRateLimits } from "@/shared/server/rate-limit";
 
 /** Invoke from a platform cron every minute with CRON_SECRET bearer token. */
 export async function POST(request: NextRequest) {
@@ -10,8 +11,10 @@ export async function POST(request: NextRequest) {
     if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
       throw new ApiError(401, "CRON_AUTH_REQUIRED", "Недействительный cron token");
     }
+    await expireStale();
     const processed = await reconcilePendingPayments();
     const dispatched = await dispatchOutbox();
+    await pruneExpiredRateLimits();
     return json({ processed, dispatched });
   });
 }

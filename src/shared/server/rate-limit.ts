@@ -1,10 +1,5 @@
 import { ApiError } from "@/shared/server/api";
-
-type Bucket = { count: number; resetAt: number };
-
-const globalBuckets = globalThis as unknown as { foodgoodRateLimits?: Map<string, Bucket> };
-const buckets = globalBuckets.foodgoodRateLimits ?? new Map<string, Bucket>();
-if (process.env.NODE_ENV !== "production") globalBuckets.foodgoodRateLimits = buckets;
+import { prisma } from "@/lib/db";
 
 export function requestIp(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -12,21 +7,37 @@ export function requestIp(request: Request): string {
 }
 
 /** Локальный лимитер для MVP. В production его можно заменить Redis без изменения routes. */
-export function consumeRateLimit(
+export async function consumeRateLimit(
   key: string,
   options: { limit: number; windowMs: number }
-): void {
-  const now = Date.now();
-  const current = buckets.get(key);
-  if (!current || current.resetAt <= now) {
-    buckets.set(key, { count: 1, resetAt: now + options.windowMs });
-    return;
-  }
-  if (current.count >= options.limit) {
-    const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+): Promise<void> {
+  const now = new Date();
+  const nextReset = new Date(now.getTime() + options.windowMs);
+  const [bucket] = await prisma.$queryRaw<Array<{ count: number; resetAt: Date }>>`
+    INSERT INTO "RateLimitBucket" ("key", "count", "resetAt", "updatedAt")
+    VALUES (${key}, 1, ${nextReset}, ${now})
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE
+        WHEN "RateLimitBucket"."resetAt" <= ${now} THEN 1
+        ELSE "RateLimitBucket"."count" + 1
+      END,
+      "resetAt" = CASE
+        WHEN "RateLimitBucket"."resetAt" <= ${now} THEN ${nextReset}
+        ELSE "RateLimitBucket"."resetAt"
+      END,
+      "updatedAt" = ${now}
+    RETURNING "count", "resetAt"
+  `;
+  if (bucket.count > options.limit) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((bucket.resetAt.getTime() - now.getTime()) / 1000));
     throw new ApiError(429, "RATE_LIMITED", "Слишком много попыток. Попробуйте позже", {
       retryAfterSeconds,
     });
   }
-  current.count += 1;
+}
+
+export async function pruneExpiredRateLimits(): Promise<void> {
+  await prisma.rateLimitBucket.deleteMany({
+    where: { resetAt: { lt: new Date(Date.now() - 24 * 60 * 60_000) } },
+  });
 }

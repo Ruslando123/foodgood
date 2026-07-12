@@ -3,6 +3,14 @@ import { createHmac } from "crypto";
 // Читаем лениво: env может подгружаться после импорта модуля (тесты, next dev)
 const botToken = () => process.env.TELEGRAM_BOT_TOKEN;
 
+export function telegramAuthEnabled(): boolean {
+  return process.env.TELEGRAM_AUTH_ENABLED === "true" && Boolean(botToken());
+}
+
+export function telegramNotificationsEnabled(): boolean {
+  return process.env.TELEGRAM_NOTIFICATIONS_ENABLED === "true" && Boolean(botToken());
+}
+
 export type TelegramInitUser = {
   id: number;
   first_name?: string;
@@ -47,14 +55,20 @@ export function verifyTelegramInitData(initData: string): TelegramInitUser | nul
 /** Уведомление пользователю через бота; no-op, если токен не задан. */
 export async function sendTelegramMessage(telegramId: string, text: string): Promise<void> {
   const token = botToken();
-  if (!token) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: telegramId, text, parse_mode: "HTML" }),
-    });
-  } catch {
-    // уведомления не критичны для флоу заказа
+  if (!token) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("TELEGRAM_BOT_TOKEN is not configured");
+    }
+    return;
+  }
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: telegramId, text }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Telegram sendMessage failed (${response.status})${body ? `: ${body.slice(0, 300)}` : ""}`);
   }
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { prisma } from "./db";
-import { sendTelegramMessage } from "./telegram";
+import { sendTelegramMessage, telegramNotificationsEnabled } from "./telegram";
 
 const LEASE_MS = 60_000;
 const MAX_ATTEMPTS = 5;
@@ -9,18 +9,33 @@ export async function dispatchOutbox(limit = 50, workerId: string = randomUUID()
   const now = new Date();
   const messages = await prisma.outboxMessage.findMany({
     where: { status: { in: ["PENDING", "RETRY", "PROCESSING"] }, nextAttemptAt: { lte: now }, OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }] },
+    orderBy: { nextAttemptAt: "asc" },
     take: limit,
   });
   let sent = 0;
   for (const message of messages) {
     const claim = await prisma.outboxMessage.updateMany({
-      where: { id: message.id, status: { in: ["PENDING", "RETRY", "PROCESSING"] }, OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }] },
+      where: {
+        id: message.id,
+        status: { in: ["PENDING", "RETRY", "PROCESSING"] },
+        nextAttemptAt: { lte: now },
+        OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }],
+      },
       data: { status: "PROCESSING", leaseOwner: workerId, leaseExpiresAt: new Date(Date.now() + LEASE_MS), attempts: { increment: 1 } },
     });
     if (!claim.count) continue;
     try {
       const payload = JSON.parse(message.payloadJson) as { telegramId: string; text: string };
-      if (message.type !== "TELEGRAM") throw new Error("Unsupported outbox type");
+      if (!message.type.startsWith("TELEGRAM_")) throw new Error("Unsupported outbox type");
+      if (!telegramNotificationsEnabled()) {
+        await prisma.outboxMessage.update({
+          where: { id: message.id },
+          data: { status: "SKIPPED", leaseOwner: null, leaseExpiresAt: null, lastError: "Telegram notifications disabled" },
+        });
+        continue;
+      }
+      // Delivery is deliberately at-least-once: a crash after Telegram accepts
+      // this call but before the SENT update can cause one later repeat.
       await sendTelegramMessage(payload.telegramId, payload.text);
       await prisma.outboxMessage.update({ where: { id: message.id }, data: { status: "SENT", sentAt: new Date(), leaseOwner: null, leaseExpiresAt: null } });
       sent++;

@@ -9,7 +9,7 @@ import { requiredString } from "@/shared/validation";
 export async function POST(req: NextRequest) {
   return apiRoute(async () => {
     const user = await requireMerchant();
-    consumeRateLimit(`order:redeem:${user.id}`, { limit: 30, windowMs: 60 * 1000 });
+    await consumeRateLimit(`order:redeem:${user.id}`, { limit: 30, windowMs: 60 * 1000 });
     const body = await readJsonObject(req);
     const code = requiredString(body.code, "code", { min: 6, max: 6 }).toUpperCase();
     try {

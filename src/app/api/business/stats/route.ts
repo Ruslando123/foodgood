@@ -1,24 +1,24 @@
 import { prisma } from "@/lib/db";
 import { requireMerchant } from "@/modules/auth/server";
-import { expireStale } from "@/modules/orders";
 import { apiRoute, json } from "@/shared/server/api";
 
 /** Сводка мерчанта: выручка, комиссия платформы, спасённые пакеты. */
 export async function GET() {
   return apiRoute(async () => {
     const user = await requireMerchant();
-    await expireStale();
-    const completed = await prisma.order.findMany({
-      where: { bag: { venue: { ownerId: user.id } }, status: "COMPLETED" },
-      select: { totalPrice: true, platformFee: true, quantity: true },
-    });
-    const activePaid = await prisma.order.count({
-      where: { bag: { venue: { ownerId: user.id } }, status: "PAID" },
-    });
+    const [completed, activePaid] = await Promise.all([
+      prisma.order.aggregate({
+        where: { bag: { venue: { ownerId: user.id } }, status: "COMPLETED" },
+        _sum: { totalPrice: true, platformFee: true, quantity: true },
+      }),
+      prisma.order.count({
+        where: { bag: { venue: { ownerId: user.id } }, status: "PAID" },
+      }),
+    ]);
 
-    const gross = completed.reduce((s, o) => s + o.totalPrice, 0);
-    const fees = completed.reduce((s, o) => s + o.platformFee, 0);
-    const bagsSaved = completed.reduce((s, o) => s + o.quantity, 0);
+    const gross = completed._sum.totalPrice ?? 0;
+    const fees = completed._sum.platformFee ?? 0;
+    const bagsSaved = completed._sum.quantity ?? 0;
 
     return json({
       stats: {

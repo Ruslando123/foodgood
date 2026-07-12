@@ -1,14 +1,12 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireMerchant } from "@/modules/auth/server";
-import { expireStale } from "@/modules/orders";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 
 export async function GET() {
   return apiRoute(async () => {
     const user = await requireMerchant();
-    await expireStale();
     const bags = await prisma.bag.findMany({
       where: { venue: { ownerId: user.id } },
       include: {

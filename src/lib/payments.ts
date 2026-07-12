@@ -9,6 +9,8 @@ export class PaymentProviderError extends Error {
   }
 }
 
+export class PaymentConfigurationError extends Error {}
+
 /** Все мутации обязаны быть идемпотентны по ключу: worker безопасно повторяет их. */
 export interface PaymentProvider {
   name: string;
@@ -58,3 +60,13 @@ class MockPaymentProvider implements PaymentProvider {
 }
 
 export const paymentProvider: PaymentProvider = new MockPaymentProvider();
+
+export function assertPaymentProviderReady(): void {
+  if (
+    process.env.NODE_ENV === "production" &&
+    paymentProvider.name === "mock" &&
+    process.env.ALLOW_MOCK_PAYMENTS_IN_PRODUCTION !== "true"
+  ) {
+    throw new PaymentConfigurationError("A real payment provider must be configured in production");
+  }
+}

@@ -2,21 +2,58 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { paymentProvider } from "@/lib/payments";
 import {
-  createOrder,
-  cancelOrder,
-  redeemOrder,
+  createOrder as queueOrder,
+  cancelOrder as queueCancelOrder,
+  redeemOrder as queueRedeemOrder,
   expireStale,
-  cancelBagWithRefunds,
+  cancelBagWithRefunds as queueCancelBagWithRefunds,
   reconcilePendingPayments,
   OrderError,
 } from "@/modules/orders";
 import { PLATFORM_FEE_PCT } from "@/lib/config";
+import { dispatchOutbox } from "@/lib/outbox";
+import { consumeOtp, issueOtp } from "@/lib/otp";
+import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { resetDb, createFixtures, inMinutes } from "./helpers";
 
 beforeEach(resetDb);
 afterEach(() => vi.restoreAllMocks());
 
+// Most lifecycle assertions below concern the settled business result. The
+// public functions now intentionally return intermediate states, so settle
+// them through the same reconcile entrypoint a cron invocation uses.
+async function createOrder(userId: string, bagId: string, quantity: number) {
+  const order = await queueOrder(userId, bagId, quantity);
+  await reconcilePendingPayments();
+  return prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { payment: true } });
+}
+
+async function redeemOrder(merchantId: string, pickupCode: string) {
+  const order = await queueRedeemOrder(merchantId, pickupCode);
+  await reconcilePendingPayments();
+  return prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { payment: true } });
+}
+
+async function cancelOrder(userId: string, orderId: string) {
+  const order = await queueCancelOrder(userId, orderId);
+  await reconcilePendingPayments();
+  return prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { payment: true } });
+}
+
+async function cancelBagWithRefunds(merchantId: string, bagId: string) {
+  const bag = await queueCancelBagWithRefunds(merchantId, bagId);
+  await reconcilePendingPayments();
+  return bag;
+}
+
 describe("createOrder", () => {
+  it("возвращает PENDING_PAYMENT до запуска worker", async () => {
+    const { customer, bag } = await createFixtures();
+    const order = await queueOrder(customer.id, bag.id, 1);
+    expect(order.status).toBe("PENDING_PAYMENT");
+    await expect(prisma.paymentOperation.findFirstOrThrow({ where: { payment: { orderId: order.id } } }))
+      .resolves.toMatchObject({ type: "HOLD", status: "PENDING" });
+  });
   it("резервирует остаток, холдирует оплату и фиксирует комиссию", async () => {
     const { customer, bag } = await createFixtures({ price: 1500, quantity: 5 });
 
@@ -53,18 +90,17 @@ describe("createOrder", () => {
     expect(updatedBag.quantityLeft).toBe(3);
   });
 
-  it("серия покупок не уводит остаток в минус", async () => {
+  it("параллельные покупки не уводят остаток в минус", async () => {
     const { customer, bag } = await createFixtures({ quantity: 3 });
 
-    const results = [];
-    for (let i = 0; i < 5; i++) {
-      results.push(
-        await createOrder(customer.id, bag.id, 1).then(
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        queueOrder(customer.id, bag.id, 1).then(
           () => "ok",
           () => "rejected"
         )
-      );
-    }
+      )
+    );
 
     expect(results.filter((r) => r === "ok")).toHaveLength(3);
     const updatedBag = await prisma.bag.findUniqueOrThrow({ where: { id: bag.id } });
@@ -116,6 +152,39 @@ describe("redeemOrder (выдача по коду)", () => {
 
     await redeemOrder(merchant.id, order.pickupCode);
     await expect(redeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("уже выдан");
+  });
+
+  it("повторный worker не дублирует PaymentEvent и capture outbox", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    await prisma.user.update({ where: { id: customer.id }, data: { telegramId: "42" } });
+    const order = await createOrder(customer.id, bag.id, 1);
+    const previousToken = process.env.TELEGRAM_BOT_TOKEN;
+    const previousEnabled = process.env.TELEGRAM_NOTIFICATIONS_ENABLED;
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    process.env.TELEGRAM_NOTIFICATIONS_ENABLED = "true";
+    await queueRedeemOrder(merchant.id, order.pickupCode);
+
+    await reconcilePendingPayments();
+    await reconcilePendingPayments();
+
+    const capture = await prisma.paymentOperation.findUniqueOrThrow({
+      where: { paymentId_type: { paymentId: order.payment!.id, type: "CAPTURE" } },
+    });
+    await expect(prisma.paymentEvent.count({ where: { operationId: capture.id } })).resolves.toBe(1);
+    await expect(prisma.outboxMessage.count({ where: { operationId: capture.id, type: "TELEGRAM_CAPTURED" } })).resolves.toBe(1);
+
+    process.env.TELEGRAM_NOTIFICATIONS_ENABLED = "false";
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    try {
+      await expect(dispatchOutbox()).resolves.toBe(0);
+    } finally {
+      if (previousToken) process.env.TELEGRAM_BOT_TOKEN = previousToken;
+      else delete process.env.TELEGRAM_BOT_TOKEN;
+      if (previousEnabled) process.env.TELEGRAM_NOTIFICATIONS_ENABLED = previousEnabled;
+      else delete process.env.TELEGRAM_NOTIFICATIONS_ENABLED;
+    }
+    await expect(prisma.outboxMessage.findFirstOrThrow({ where: { operationId: capture.id } }))
+      .resolves.toMatchObject({ status: "SKIPPED" });
   });
 
   it("reconciliation восстанавливает capture после сбоя БД и два worker не дублируют claim", async () => {
@@ -178,6 +247,42 @@ describe("redeemOrder (выдача по коду)", () => {
   it("несуществующий код отклоняется", async () => {
     const { merchant } = await createFixtures();
     await expect(redeemOrder(merchant.id, "AAAAAA")).rejects.toThrow("не найден");
+  });
+});
+
+describe("phone OTP", () => {
+  it("выдаёт одноразовый dev-код и запрещает повторное использование", async () => {
+    const phone = "+77010001234";
+    const issued = await issueOtp(phone);
+    expect(issued).toMatchObject({ codeLength: 4, devCode: "0000" });
+    await expect(consumeOtp(phone, "0000")).resolves.toBeUndefined();
+    await expect(consumeOtp(phone, "0000")).rejects.toThrow("Неверный код");
+  });
+
+  it("считает неверные попытки", async () => {
+    const phone = "+77010005678";
+    await issueOtp(phone);
+    await expect(consumeOtp(phone, "1111")).rejects.toThrow("Неверный код");
+    await expect(prisma.otpChallenge.findFirstOrThrow({ where: { phone } }))
+      .resolves.toMatchObject({ attempts: 1, consumedAt: null });
+  });
+
+  it("сериализует параллельные запросы одного кода", async () => {
+    const phone = "+77010007890";
+    const results = await Promise.allSettled([issueOtp(phone), issueOtp(phone)]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    await expect(prisma.otpChallenge.count({ where: { phone, activeKey: phone } })).resolves.toBe(1);
+  });
+});
+
+describe("distributed rate limit", () => {
+  it("атомарно ограничивает параллельные запросы", async () => {
+    const key = `test:${crypto.randomUUID()}`;
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => consumeRateLimit(key, { limit: 3, windowMs: 60_000 }))
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(3);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(2);
   });
 });
 

@@ -28,25 +28,44 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const [paying, setPaying] = useState(false); // показ мок-экрана оплаты
   const [processing, setProcessing] = useState(false);
   const checkoutKey = useRef<string | null>(null);
+  const bagRequest = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 });
   const [similar, setSimilar] = useState<Bag[]>([]);
 
   useEffect(() => {
-    let active = true;
-    async function load() {
+    let mounted = true;
+    let timer: number | undefined;
+    const request = bagRequest.current;
+    const load = async () => {
+      request.controller?.abort();
+      const controller = new AbortController();
+      const sequence = ++request.sequence;
+      request.controller = controller;
       try {
-        const data = await api<{ bag: Bag }>(`/api/bags/${id}`);
-        if (!active) return;
+        const data = await api<{ bag: Bag }>(`/api/bags/${id}`, { signal: controller.signal });
+        if (!mounted || sequence !== request.sequence) return;
         setBag(data.bag);
         setQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1)));
       } catch (e) {
-        if (active) setError(e instanceof Error ? e.message : "Не удалось загрузить пакет");
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        if (mounted && sequence === request.sequence) {
+          setError(e instanceof Error ? e.message : "Не удалось загрузить пакет");
+        }
+      } finally {
+        if (mounted && sequence === request.sequence) {
+          timer = window.setTimeout(() => void load(), 20_000);
+        }
       }
-    }
-    load();
-    const timer = window.setInterval(load, 20_000);
+    };
+    void load();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      active = false;
-      window.clearInterval(timer);
+      mounted = false;
+      request.controller?.abort();
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [id]);
 

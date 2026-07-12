@@ -1,10 +1,14 @@
 import { prisma } from "@/lib/db";
 
 export async function resetDb() {
+  await prisma.otpChallenge.deleteMany();
+  await prisma.rateLimitBucket.deleteMany();
+  await prisma.outboxMessage.deleteMany();
   await prisma.paymentEvent.deleteMany();
   await prisma.paymentOperation.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.order.deleteMany();
+  await prisma.orderIdempotencyKey.deleteMany();
   await prisma.bag.deleteMany();
   await prisma.venue.deleteMany();
   await prisma.notification.deleteMany();
