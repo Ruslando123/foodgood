@@ -2,8 +2,8 @@
 
 ## Required infrastructure
 
-- Managed PostgreSQL with SSL and automated backups.
-- Application hosting with HTTPS and all secrets stored outside Git.
+- Render web service and managed PostgreSQL in the Frankfurt region (`render.yaml`).
+- Paid PostgreSQL with backups, SSL, and all secrets stored outside Git.
 - A cron invocation every minute:
 
   ```http
@@ -11,9 +11,9 @@
   Authorization: Bearer <CRON_SECRET>
   ```
 
-- An SMS adapter accepting `POST { "type": "OTP", "phone": "+7...", "code": "123456" }`
-  with `Authorization: Bearer <SMS_WEBHOOK_TOKEN>`.
-- A real payment provider implementing `PaymentProvider` in `src/lib/payments.ts`.
+- Mobizon Kazakhstan account, API key, and an approved sender name.
+- Freedom Pay Kazakhstan merchant account with test mode and manual clearing enabled.
+- A Freedom Pay implementation of `PaymentProvider`; production intentionally rejects the current mock.
 
 ## Required production environment
 
@@ -24,8 +24,10 @@ SESSION_SECRET=<at least 32 random bytes>
 OTP_SECRET=<different random secret>
 CRON_SECRET=<different random secret>
 ADMIN_PHONE=+7...
-SMS_WEBHOOK_URL=https://...
-SMS_WEBHOOK_TOKEN=...
+MOBIZON_API_KEY=...
+MOBIZON_SENDER=FoodGood
+FREEDOMPAY_MERCHANT_ID=...
+FREEDOMPAY_SECRET_KEY=...
 TELEGRAM_AUTH_ENABLED=false
 TELEGRAM_NOTIFICATIONS_ENABLED=false
 ALLOW_MOCK_PAYMENTS_IN_PRODUCTION=false
@@ -45,6 +47,13 @@ npx prisma migrate deploy
 ```
 
 Never run `npm run seed` against production.
+
+## Selected providers
+
+- Hosting and PostgreSQL: Render, Frankfurt. Apply the included `render.yaml` Blueprint.
+- SMS: Mobizon Kazakhstan (`https://mobizon.kz/help/api-docs/message`).
+- Payments: Freedom Pay Kazakhstan (`https://freedompay.kz/docs`). Ask the manager to enable
+  test mode and manual clearing (`pg_auto_clearing=0`) before integration testing.
 
 ## Staging smoke test
 

@@ -1,0 +1,68 @@
+services:
+  - type: web
+    name: foodgood-web
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: npm ci && npm run build
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: foodgood-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: OTP_SECRET
+        generateValue: true
+      - key: CRON_SECRET
+        generateValue: true
+      - key: ADMIN_PHONE
+        sync: false
+      - key: MOBIZON_API_KEY
+        sync: false
+      - key: MOBIZON_SENDER
+        sync: false
+      - key: TELEGRAM_AUTH_ENABLED
+        value: "false"
+      - key: TELEGRAM_NOTIFICATIONS_ENABLED
+        value: "false"
+      - key: ALLOW_MOCK_PAYMENTS_IN_PRODUCTION
+        value: "false"
+      - key: FREEDOMPAY_MERCHANT_ID
+        sync: false
+      - key: FREEDOMPAY_SECRET_KEY
+        sync: false
+
+  - type: cron
+    name: foodgood-reconcile
+    runtime: node
+    region: frankfurt
+    plan: starter
+    schedule: "* * * * *"
+    buildCommand: npm ci && npm run db:generate
+    startCommand: npm run cron:reconcile
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: foodgood-db
+          property: connectionString
+      - key: TELEGRAM_NOTIFICATIONS_ENABLED
+        value: "false"
+
+databases:
+  - name: foodgood-db
+    region: frankfurt
+    plan: basic-256mb
+    diskSizeGB: 15
+    postgresMajorVersion: "16"
+    databaseName: foodgood
+    user: foodgood
+    connectionPool: pgbouncer

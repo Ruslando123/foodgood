@@ -10,6 +10,7 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "seed": "tsx prisma/seed.ts",
+    "cron:reconcile": "tsx scripts/reconcile.ts",
     "test": "node scripts/test.mjs"
   },
   "dependencies": {

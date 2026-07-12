@@ -102,8 +102,8 @@ Next.js 15 (App Router, TypeScript) · Prisma + PostgreSQL · Tailwind CSS 4 · 
 
 ## Как подключить продакшен-интеграции
 
-- **Платёжный шлюз** (Kaspi Pay / CloudPayments / Freedom Pay): реализуйте `PaymentProvider` в `src/lib/payments.ts` (методы `hold`, `capture`, `refund`) — логика заказов не меняется.
-- **SMS-код**: замените заглушку `DEV_OTP_CODE` в `src/lib/auth.ts` на SMS-шлюз (Mobizon/SMSC) и хранение кодов.
+- **Платёжный шлюз**: для пилота выбран Freedom Pay с ручным клирингом; реализуйте `PaymentProvider` после получения test merchant credentials.
+- **SMS-код**: выбран Mobizon Kazakhstan; durable OTP уже хранится в PostgreSQL, для production нужны `MOBIZON_API_KEY` и зарегистрированное имя отправителя.
 - **Telegram WebApp**: создайте бота у @BotFather, пропишите `TELEGRAM_BOT_TOKEN` в `.env`, укажите URL приложения как WebApp — авторизация по `initData` и уведомления о выдаче заработают автоматически.
 - **Карта 2ГИС/Яндекс**: карта изолирована в `src/components/MapView.tsx` — замените Leaflet-слой на MapGL с API-ключом.
 - **PostgreSQL**: смените `provider` в `prisma/schema.prisma` на `postgresql` и `DATABASE_URL` — схема совместима.

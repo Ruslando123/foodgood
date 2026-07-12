@@ -6,6 +6,7 @@ import { isDevOtpEnabled, normalizePhone } from "@/lib/auth";
 import { verifyTelegramInitData } from "@/lib/telegram";
 import { PLATFORM_FEE_PCT } from "@/lib/config";
 import { assertPaymentProviderReady, PaymentConfigurationError } from "@/lib/payments";
+import { sendSmsCode } from "@/lib/sms";
 import { pluralRu } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
 import { integer, requiredString } from "@/shared/validation";
@@ -76,6 +77,29 @@ describe("production payment safety", () => {
     try {
       expect(() => assertPaymentProviderReady()).toThrow(PaymentConfigurationError);
     } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("Mobizon SMS adapter", () => {
+  it("отправляет OTP в формате Mobizon Kazakhstan", async () => {
+    vi.stubEnv("MOBIZON_API_KEY", "test-key");
+    vi.stubEnv("MOBIZON_SENDER", "FoodGood");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ code: 0, data: { messageId: 123 } }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await sendSmsCode("+7 701 000 00 01", "123456");
+      const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+      expect(url.hostname).toBe("api.mobizon.kz");
+      expect(url.searchParams.get("apiKey")).toBe("test-key");
+      expect(String(init.body)).toContain("recipient=77010000001");
+      expect(String(init.body)).toContain("from=FoodGood");
+    } finally {
+      vi.unstubAllGlobals();
       vi.unstubAllEnvs();
     }
   });
