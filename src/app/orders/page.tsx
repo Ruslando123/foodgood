@@ -7,11 +7,14 @@ import { useSearchParams } from "next/navigation";
 import { IconBell, IconCheck, IconClock, IconInfoCircle, IconMapPin, IconReceipt, IconRefresh } from "@tabler/icons-react";
 import BottomNav from "@/components/BottomNav";
 import QrCanvas from "@/components/QrCanvas";
+import OrderSupportButton from "@/components/OrderSupportButton";
+import OrderReviewForm from "@/components/OrderReviewForm";
 import { api, ApiError, Order, formatPrice, formatPickupWindow } from "@/lib/client/api";
 
 const STATUS_LABEL: Record<Order["status"], string> = {
   PENDING_PAYMENT: "Ожидает оплаты",
-  PAID: "Оплачен · ждёт выдачи",
+  PAID: "Оплачен · готовится",
+  READY_FOR_PICKUP: "Готов к выдаче",
   CAPTURE_PENDING: "Выдача подтверждается",
   COMPLETED: "Выдан",
   REFUND_PENDING: "Возврат обрабатывается",
@@ -82,14 +85,14 @@ function OrdersContent() {
   const active = useMemo(
     () =>
       (orders ?? []).filter((order) =>
-        ["PAID", "PENDING_PAYMENT", "CAPTURE_PENDING", "REFUND_PENDING"].includes(order.status)
+        ["PAID", "READY_FOR_PICKUP", "PENDING_PAYMENT", "CAPTURE_PENDING", "REFUND_PENDING"].includes(order.status)
       ),
     [orders]
   );
   const history = useMemo(
     () =>
       (orders ?? []).filter(
-        (order) => !["PAID", "PENDING_PAYMENT", "CAPTURE_PENDING", "REFUND_PENDING"].includes(order.status)
+        (order) => !["PAID", "READY_FOR_PICKUP", "PENDING_PAYMENT", "CAPTURE_PENDING", "REFUND_PENDING"].includes(order.status)
       ),
     [orders]
   );
@@ -161,7 +164,7 @@ function OrderCard({
   cancelling: boolean;
   onCancel: () => void;
 }) {
-  const isActive = order.status === "PAID";
+  const isActive = ["PAID", "READY_FOR_PICKUP"].includes(order.status);
   const start = new Date(order.bag.pickupStart).getTime();
   const end = new Date(order.bag.pickupEnd).getTime();
   const canCancel = isActive && now < start;
@@ -211,8 +214,10 @@ function OrderCard({
           <Link href={`/bag/${order.bag.id}`} className="block rounded-xl bg-primary/10 px-3 py-2.5 text-center text-sm font-semibold text-primary">
             Заказать снова
           </Link>
+          {order.status === "COMPLETED" && <OrderReviewForm id={order.id} />}
         </div>
       )}
+      <OrderSupportButton id={order.id} />
     </article>
   );
 }

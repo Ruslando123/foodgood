@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import {
   IconBell,
   IconCalendar,
@@ -36,6 +37,7 @@ export default function HomePage() {
   const [category, setCategory] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
   const [minDiscount, setMinDiscount] = useState("");
+  const [minRating, setMinRating] = useState("");
   const [maxDistance, setMaxDistance] = useState("");
   const [todayOnly, setTodayOnly] = useState(false);
   const [sort, setSort] = useState<Sort>("soon");
@@ -70,11 +72,12 @@ export default function HomePage() {
     if (category) query.set("category", category);
     if (maxPrice) query.set("maxPrice", maxPrice);
     if (minDiscount) query.set("minDiscount", minDiscount);
+    if (minRating) query.set("minRating", minRating);
     if (maxDistance && location) query.set("maxDistance", maxDistance);
     if (todayOnly) query.set("today", "1");
     query.set("sort", sort === "distance" && !location ? "soon" : sort);
     return query.toString();
-  }, [category, location, maxDistance, maxPrice, minDiscount, search, sort, todayOnly]);
+  }, [category, location, maxDistance, maxPrice, minDiscount, minRating, search, sort, todayOnly]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -100,12 +103,13 @@ export default function HomePage() {
     () => (bags ?? []).reduce((sum, bag) => sum + (bag.originalPrice - bag.price) * bag.quantityLeft, 0),
     [bags]
   );
-  const activeFilters = [category, maxPrice, minDiscount, maxDistance, todayOnly].filter(Boolean).length;
+  const activeFilters = [category, maxPrice, minDiscount, minRating, maxDistance, todayOnly].filter(Boolean).length;
 
   function resetFilters() {
     setCategory("");
     setMaxPrice("");
     setMinDiscount("");
+    setMinRating("");
     setMaxDistance("");
     setTodayOnly(false);
     setSort(location ? "distance" : "soon");
@@ -121,10 +125,10 @@ export default function HomePage() {
               Алматы <IconChevronDown size={14} stroke={1.8} />
             </button>
           </div>
-          <button className="relative flex h-10 w-10 items-center justify-center rounded-full" aria-label="Уведомления">
+          <Link href="/notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full" aria-label="Уведомления">
             <IconBell size={25} stroke={1.8} />
             <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-red-500" />
-          </button>
+          </Link>
         </div>
 
         <label className="relative block">
@@ -167,6 +171,9 @@ export default function HomePage() {
             </FilterSelect>
             <FilterSelect label="Радиус" value={maxDistance} onChange={setMaxDistance} disabled={!location}>
               <option value="">Любой</option><option value="1">до 1 км</option><option value="3">до 3 км</option><option value="5">до 5 км</option><option value="10">до 10 км</option>
+            </FilterSelect>
+            <FilterSelect label="Рейтинг" value={minRating} onChange={setMinRating}>
+              <option value="">Любой</option><option value="4">от 4★</option><option value="4.5">от 4.5★</option>
             </FilterSelect>
             <button onClick={resetFilters} className="col-span-2 py-1 font-semibold text-primary">Сбросить{activeFilters ? ` · ${activeFilters}` : ""}</button>
           </div>

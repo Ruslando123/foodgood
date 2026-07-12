@@ -501,3 +501,27 @@ describe("expireStale (ленивое истечение)", () => {
     expect(payments[0].status).toBe("REFUNDED");
   });
 });
+
+describe("расширенные продуктовые сценарии", () => {
+  it("выдаёт заказ после отметки READY_FOR_PICKUP", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    await prisma.order.update({ where: { id: order.id }, data: { status: "READY_FOR_PICKUP" } });
+    const completed = await redeemOrder(merchant.id, order.pickupCode);
+    expect(completed.status).toBe("COMPLETED");
+  });
+
+  it("не позволяет добавить одно заведение в избранное дважды", async () => {
+    const { customer, venue } = await createFixtures();
+    await prisma.favorite.create({ data: { userId: customer.id, venueId: venue.id } });
+    await expect(prisma.favorite.create({ data: { userId: customer.id, venueId: venue.id } })).rejects.toThrow();
+  });
+
+  it("связывает отзыв с выданным заказом и заведением", async () => {
+    const { merchant, customer, venue, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    await redeemOrder(merchant.id, order.pickupCode);
+    const review = await prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 5, comment: "Отлично" } });
+    expect(review).toMatchObject({ rating: 5, moderationStatus: "PUBLISHED" });
+  });
+});

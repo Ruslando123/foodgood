@@ -1,0 +1,5 @@
+"use client";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { api } from "@/lib/client/api";
+export default function AdminUserStatusButton({ id, status }: { id: string; status: string }) { const router = useRouter(); const [busy, setBusy] = useState(false); async function toggle() { setBusy(true); try { await api(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify({ status: status === "BLOCKED" ? "ACTIVE" : "BLOCKED" }) }); router.refresh(); } finally { setBusy(false); } } return <button disabled={busy} onClick={toggle} className={`rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 ${status === "BLOCKED" ? "bg-primary text-white" : "border border-red-200 text-red-600"}`}>{busy ? "Обновляем…" : status === "BLOCKED" ? "Разблокировать" : "Заблокировать"}</button>; }

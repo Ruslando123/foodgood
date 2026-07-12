@@ -15,6 +15,7 @@ export async function GET(
           where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() } },
           orderBy: { pickupEnd: "asc" },
         },
+        reviews: { where: { moderationStatus: "PUBLISHED" }, include: { user: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 20 },
       },
     });
     if (!venue) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");

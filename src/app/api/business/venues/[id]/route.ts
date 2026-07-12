@@ -1,15 +1,50 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
+import { VENUE_CATEGORIES } from "@/lib/config";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { requireMerchant } from "@/modules/auth/server";
-import { apiRoute, ApiError, json } from "@/shared/server/api";
+import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
+import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
+
+async function ownedVenue(ownerId: string, id: string) {
+  const venue = await prisma.venue.findUnique({ where: { id } });
+  if (!venue || venue.ownerId !== ownerId) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
+  return venue;
+}
+
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  return apiRoute(async () => {
+    const owner = await requireMerchant(); const { id } = await params;
+    return json({ venue: await ownedVenue(owner.id, id) });
+  });
+}
+
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  return apiRoute(async () => {
+    const owner = await requireMerchant(); const { id } = await params;
+    await ownedVenue(owner.id, id);
+    const body = await readJsonObject(req);
+    const category = requiredString(body.category, "category", { max: 40 });
+    if (!(category in VENUE_CATEGORIES)) throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
+    const venue = await prisma.venue.update({ where: { id }, data: {
+      name: requiredString(body.name, "name", { max: 120 }),
+      address: requiredString(body.address, "address", { max: 300 }),
+      description: optionalString(body.description, "description", 1000),
+      contactPhone: optionalString(body.contactPhone, "contactPhone", 40),
+      openingHours: optionalString(body.openingHours, "openingHours", 500),
+      category,
+      lat: finiteNumber(body.lat, "lat", { min: -90, max: 90 }),
+      lng: finiteNumber(body.lng, "lng", { min: -180, max: 180 }),
+    } });
+    return json({ venue });
+  });
+}
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(async () => {
     const owner = await requireMerchant();
     const { id } = await params;
-    const venue = await prisma.venue.findUnique({ where: { id } });
-    if (!venue || venue.ownerId !== owner.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
+    const venue = await ownedVenue(owner.id, id);
     const form = await req.formData();
     const file = form.get("photo");
     if (!(file instanceof File)) throw new ApiError(400, "PHOTO_REQUIRED", "Выберите фотографию");

@@ -12,7 +12,7 @@ export async function GET() {
         _sum: { totalPrice: true, platformFee: true, quantity: true },
       }),
       prisma.order.count({
-        where: { bag: { venue: { ownerId: user.id } }, status: "PAID" },
+        where: { bag: { venue: { ownerId: user.id } }, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
       }),
     ]);
 

@@ -1,0 +1,5 @@
+"use client";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { api } from "@/lib/client/api";
+export default function BusinessOrderActions({ id, status }: { id: string; status: string }) { const router = useRouter(); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null); async function ready() { setBusy(true); setError(null); try { await api(`/api/business/orders/${id}`, { method: "PATCH", body: JSON.stringify({ action: "ready" }) }); router.refresh(); } catch (e) { setError(e instanceof Error ? e.message : "Не удалось обновить заказ"); } finally { setBusy(false); } } return <div className="space-y-2">{status === "PAID" && <button onClick={ready} disabled={busy} className="w-full rounded-xl bg-primary p-3 font-semibold text-white disabled:opacity-50">{busy ? "Обновляем…" : "Заказ готов к выдаче"}</button>}{["PAID", "READY_FOR_PICKUP"].includes(status) && <a href="/business/redeem" className="block w-full rounded-xl border p-3 text-center font-semibold text-primary">Открыть выдачу по коду</a>}{error && <p role="alert" className="text-sm text-red-600">{error}</p>}</div>; }

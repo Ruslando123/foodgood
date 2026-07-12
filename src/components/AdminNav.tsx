@@ -2,16 +2,19 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { IconActivity, IconBuildingStore, IconClipboardList, IconHistory, IconLayoutDashboard, IconLogout, IconUsers } from "@tabler/icons-react";
+import { IconActivity, IconBuildingStore, IconClipboardList, IconHistory, IconLayoutDashboard, IconLogout, IconMessageReport, IconStar, IconUserSearch, IconUsers } from "@tabler/icons-react";
 import { api } from "@/lib/client/api";
 
 const links = [
   { href: "/admin", label: "Обзор", icon: IconLayoutDashboard },
   { href: "/admin/venues", label: "Заведения", icon: IconBuildingStore },
   { href: "/admin/owners", label: "Владельцы", icon: IconUsers },
+  { href: "/admin/customers", label: "Покупатели", icon: IconUserSearch },
   { href: "/admin/orders", label: "Заказы", icon: IconClipboardList },
   { href: "/admin/operations", label: "Операции", icon: IconActivity },
   { href: "/admin/audit", label: "Аудит", icon: IconHistory },
+  { href: "/admin/support", label: "Обращения", icon: IconMessageReport },
+  { href: "/admin/reviews", label: "Отзывы", icon: IconStar },
 ];
 
 export default function AdminNav({ name }: { name: string | null }) {

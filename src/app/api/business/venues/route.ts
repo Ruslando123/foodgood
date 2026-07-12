@@ -24,12 +24,14 @@ export async function POST(req: NextRequest) {
     const lng = finiteNumber(body.lng, "lng", { min: -180, max: 180 });
     const cat = requiredString(body.category ?? "CAFE", "category", { max: 40 });
     const description = optionalString(body.description, "description", 1000);
+    const contactPhone = optionalString(body.contactPhone, "contactPhone", 40);
+    const openingHours = optionalString(body.openingHours, "openingHours", 500);
     const photo = optionalString(body.photo, "photo", 200) || "🍽️";
     if (!(cat in VENUE_CATEGORIES)) {
       throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
     }
     const venue = await prisma.venue.create({
-      data: { name, address, lat, lng, category: cat, description, photo, ownerId: owner.id },
+      data: { name, address, lat, lng, category: cat, description, contactPhone, openingHours, photo, ownerId: owner.id },
     });
     return json({ venue }, { status: 201 });
   });

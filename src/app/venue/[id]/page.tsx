@@ -8,8 +8,9 @@ import BottomNav from "@/components/BottomNav";
 import { api, Bag, Venue, pluralRu } from "@/lib/client/api";
 import { VENUE_CATEGORIES } from "@/lib/config";
 import VenuePhoto from "@/components/VenuePhoto";
+import FavoriteButton from "@/components/FavoriteButton";
 
-type VenueDetails = Venue & { bags: Omit<Bag, "venue">[] };
+type VenueDetails = Venue & { bags: Omit<Bag, "venue">[]; reviews: { id: string; rating: number; comment: string; createdAt: string; user: { name: string | null } }[] };
 
 export default function VenuePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -43,6 +44,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
         <VenuePhoto category={venue.category} photo={venue.photo} alt={venue.name} />
         <div className="absolute inset-0 bg-black/35" />
         <Link href="/" className="absolute left-4 top-4 inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-foreground shadow"><IconArrowLeft size={22} /></Link>
+        <div className="absolute right-4 top-4"><FavoriteButton venueId={venue.id} /></div>
         <div className="absolute inset-x-4 bottom-5 text-white">
           <p className="text-[12px] text-white/80">{VENUE_CATEGORIES[venue.category] ?? "Заведение"}</p>
           <h1 className="mt-0.5 text-[24px] font-bold tracking-[-0.03em]">{venue.name}</h1>
@@ -76,6 +78,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
             </div>
           ) : bags.map((bag) => <BagCard key={bag.id} bag={bag} />)}
         </section>
+        <section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-[17px] font-bold">Отзывы</h2>{venue.reviews.length > 0 && <span className="text-sm font-semibold text-amber-500">★ {(venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1)}</span>}</div>{venue.reviews.length === 0 ? <p className="rounded-[17px] bg-[#f5f6f5] p-5 text-[13px] text-muted">Отзывов пока нет.</p> : venue.reviews.map((review) => <article key={review.id} className="rounded-[17px] border p-4"><div className="flex justify-between"><p className="text-sm font-semibold">{review.user.name ?? "Покупатель"}</p><p className="text-amber-500">{"★".repeat(review.rating)}</p></div>{review.comment && <p className="mt-2 text-sm">{review.comment}</p>}<p className="mt-2 text-xs text-muted">{new Date(review.createdAt).toLocaleDateString("ru-RU")}</p></article>)}</section>
       </main>
       <BottomNav />
     </div>

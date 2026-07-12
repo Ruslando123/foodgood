@@ -9,6 +9,7 @@ import {
   IconLogout,
   IconPackage,
   IconQrcode,
+  IconWallet,
 } from "@tabler/icons-react";
 import { api } from "@/lib/client/api";
 
@@ -16,6 +17,7 @@ const links = [
   { href: "/business", label: "Обзор", icon: IconLayoutDashboard },
   { href: "/business/orders", label: "Заказы", icon: IconClipboardList },
   { href: "/business/bags", label: "Пакеты", icon: IconPackage },
+  { href: "/business/finance", label: "Финансы", icon: IconWallet },
   { href: "/business/redeem", label: "Выдача", icon: IconQrcode },
   { href: "/business/venues", label: "Заведения", icon: IconBuildingStore },
 ];

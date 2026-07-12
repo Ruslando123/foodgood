@@ -36,6 +36,7 @@ export type SessionUser = {
   telegramId: string | null;
   name: string | null;
   role: string;
+  status: string;
 };
 
 export async function createSession(userId: string): Promise<void> {
@@ -75,6 +76,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
       telegramId: user.telegramId,
       name: user.name,
       role: user.role,
+      status: user.status,
     };
   } catch {
     return null;

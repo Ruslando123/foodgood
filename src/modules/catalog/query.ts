@@ -8,6 +8,7 @@ export type CatalogQuery = {
   category: string | null;
   maxPrice: number | null;
   minDiscount: number;
+  minRating: number;
   maxDistance: number | null;
   availableNow: boolean;
   todayOnly: boolean;
@@ -49,6 +50,7 @@ export function parseCatalogQuery(params: URLSearchParams): CatalogQuery {
     category,
     maxPrice: optionalNumber(params, "maxPrice", { min: 1, max: 10_000_000 }),
     minDiscount: optionalNumber(params, "minDiscount", { min: 0, max: 95 }) ?? 0,
+    minRating: optionalNumber(params, "minRating", { min: 1, max: 5 }) ?? 0,
     maxDistance: optionalNumber(params, "maxDistance", { min: 0.1, max: 100 }),
     availableNow: params.get("availableNow") === "1",
     todayOnly: params.get("today") === "1",
@@ -63,7 +65,7 @@ type CatalogBag = {
   pickupStart: Date;
   pickupEnd: Date;
   distanceKm: number | null;
-  venue: { name: string; address: string; category: string };
+  venue: { name: string; address: string; category: string; rating?: number | null };
 };
 
 export function filterAndSortCatalog<T extends CatalogBag>(
@@ -80,6 +82,7 @@ export function filterAndSortCatalog<T extends CatalogBag>(
       (!query.category || bag.venue.category === query.category) &&
       (query.maxPrice === null || bag.price <= query.maxPrice) &&
       discount >= query.minDiscount &&
+      (query.minRating === 0 || (bag.venue.rating ?? 0) >= query.minRating) &&
       (query.maxDistance === null ||
         (bag.distanceKm !== null && bag.distanceKm <= query.maxDistance)) &&
       (!query.todayOnly || bag.pickupStart.toDateString() === now.toDateString()) &&

@@ -34,7 +34,7 @@ export async function expireStale(): Promise<void> {
   });
 
   const staleOrders = await prisma.order.findMany({
-    where: { status: "PAID", bag: { pickupEnd: { lt: now } } },
+    where: { status: { in: ["PAID", "READY_FOR_PICKUP"] }, bag: { pickupEnd: { lt: now } } },
   });
   for (const order of staleOrders) {
     try {
@@ -104,7 +104,7 @@ export async function cancelOrder(userId: string, orderId: string) {
     include: { bag: true },
   });
   if (!order || order.userId !== userId) throw new OrderError("Заказ не найден");
-  if (order.status !== "PAID") throw new OrderError("Заказ нельзя отменить");
+  if (!["PAID", "READY_FOR_PICKUP"].includes(order.status)) throw new OrderError("Заказ нельзя отменить");
   if (order.bag.pickupStart <= new Date()) {
     throw new OrderError("Окно выдачи уже началось — отмена недоступна");
   }
@@ -127,14 +127,14 @@ export async function redeemOrder(merchantId: string, pickupCode: string) {
   if (order.status === "CAPTURE_PENDING") {
     throw new OrderError("Списание уже обрабатывается, проверьте статус позже");
   }
-  if (order.status !== "PAID") throw new OrderError("Заказ не оплачен или отменён");
+  if (!["PAID", "READY_FOR_PICKUP"].includes(order.status)) throw new OrderError("Заказ не оплачен или отменён");
   if (!order.payment?.providerRef) throw new OrderError("Для заказа не найден reference платежа");
 
   const claimed = await prisma.$transaction(async (tx) => {
     const payment = await tx.payment.findUnique({ where: { orderId: order.id } });
     if (!payment?.providerRef) throw new OrderError("Для заказа не найден reference платежа");
     const update = await tx.order.updateMany({
-      where: { id: order.id, status: "PAID" },
+      where: { id: order.id, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
       data: { status: "CAPTURE_PENDING" },
     });
     if (!update.count) return false;
@@ -157,12 +157,12 @@ export async function cancelBagWithRefunds(merchantId: string, bagId: string) {
     await tx.order.updateMany({ where: { bagId, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
 
     const paidOrders = await tx.order.findMany({
-      where: { bagId, status: "PAID" },
+      where: { bagId, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
       include: { payment: true, user: true },
     });
     for (const order of paidOrders) {
       const claimed = await tx.order.updateMany({
-        where: { id: order.id, status: "PAID" },
+        where: { id: order.id, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
         data: { status: "REFUND_PENDING", refundTargetStatus: "CANCELLED" },
       });
       if (!claimed.count || !order.payment) continue;
@@ -192,7 +192,7 @@ async function queueRefund(orderId: string, finalStatus: FinalRefundStatus): Pro
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { payment: true } });
     if (!order?.payment) return false;
     const claimed = await tx.order.updateMany({
-      where: { id: orderId, status: "PAID" },
+      where: { id: orderId, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
       data: { status: "REFUND_PENDING", refundTargetStatus: finalStatus },
     });
     if (!claimed.count) return false;

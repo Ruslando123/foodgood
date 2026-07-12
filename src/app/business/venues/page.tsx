@@ -28,6 +28,7 @@ export default async function BusinessVenuesPage() {
           <div className="flex justify-between gap-3"><div className="min-w-0"><p className="truncate text-lg font-semibold">{venue.name}</p><p className="mt-1 text-sm text-muted">{venue.address}</p></div><span className={`h-fit shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${venue.status === "ACTIVE" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800"}`}>{venue.status === "ACTIVE" ? "Активно" : "Приостановлено"}</span></div>
           {venue.status === "SUSPENDED" && venue.suspensionReason && <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-800">Причина: {venue.suspensionReason}</p>}
           <div className="mt-4 flex gap-5 text-sm"><div><p className="text-xs text-muted">Активных пакетов</p><p className="font-semibold">{venue.bags.length}</p></div><div><p className="text-xs text-muted">Всего публикаций</p><p className="font-semibold">{venue._count.bags}</p></div></div>
+          <div className="mt-4 flex items-center justify-between border-t pt-4"><Link href={`/business/venues/${venue.id}`} className="text-sm font-semibold text-primary">Редактировать данные →</Link></div>
           <BusinessVenuePhotoEditor id={venue.id} />
         </div>
       </article>)}</section>}

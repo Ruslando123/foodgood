@@ -11,7 +11,7 @@ export async function GET() {
       where: { venue: { ownerId: user.id } },
       include: {
         venue: true,
-        orders: { where: { status: { in: ["PAID", "CAPTURE_PENDING", "COMPLETED"] } } },
+        orders: { where: { status: { in: ["PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING", "COMPLETED"] } } },
       },
       orderBy: { createdAt: "desc" },
       take: 50,
@@ -60,6 +60,8 @@ export async function POST(req: NextRequest) {
       },
       include: { venue: true },
     });
+    const followers = await prisma.favorite.findMany({ where: { venueId: venue.id }, select: { userId: true } });
+    if (followers.length) await prisma.notification.createMany({ data: followers.map(({ userId }) => ({ userId, channel: "IN_APP", recipient: userId, type: "NEW_FAVORITE_VENUE_BAG", status: "SENT", sentAt: new Date(), payloadJson: JSON.stringify({ bagId: bag.id, venueId: venue.id, venueName: venue.name, title: bag.title }) })) });
     return json({ bag }, { status: 201 });
   });
 }

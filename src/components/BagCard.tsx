@@ -17,6 +17,7 @@ export default function BagCard({ bag }: { bag: Bag }) {
           <Link href={`/bag/${bag.id}`} className="min-w-0 flex-1">
             <h3 className="truncate text-[15px] font-bold leading-5 tracking-[-0.01em]">{bag.venue.name}</h3>
             <p className="truncate text-[12px] text-muted">{bag.title}</p>
+            {bag.venue.rating != null && <p className="text-[11px] font-semibold text-amber-500">★ {bag.venue.rating.toFixed(1)}</p>}
           </Link>
           <span className="shrink-0 rounded-full bg-primary px-2 py-1 text-[11px] font-bold leading-none text-white">
             −{discountPct(bag)}%

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { getSessionUser } from "@/lib/auth";
 
 const ORDER_LABELS: Record<string, string> = {
-  PENDING_PAYMENT: "Ожидает оплаты", PAID: "Ждёт выдачи", CAPTURE_PENDING: "Списание",
+  PENDING_PAYMENT: "Ожидает оплаты", PAID: "Принят", READY_FOR_PICKUP: "Готов к выдаче", CAPTURE_PENDING: "Списание",
   COMPLETED: "Выдан", REFUND_PENDING: "Возврат", CANCELLED: "Отменён", EXPIRED: "Истёк",
 };
 
@@ -16,7 +16,7 @@ export default async function BusinessDashboard() {
   const [venues, activeBags, awaitingPickup, completed, recentOrders, recentBags] = await Promise.all([
     prisma.venue.count({ where: { ownerId: user.id } }),
     prisma.bag.count({ where: { ...owner, status: "ACTIVE", pickupEnd: { gt: new Date() } } }),
-    prisma.order.count({ where: { bag: owner, status: "PAID" } }),
+    prisma.order.count({ where: { bag: owner, status: { in: ["PAID", "READY_FOR_PICKUP"] } } }),
     prisma.order.aggregate({ where: { bag: owner, status: "COMPLETED" }, _sum: { totalPrice: true, platformFee: true, quantity: true } }),
     prisma.order.findMany({ where: { bag: owner }, include: { user: true, bag: { include: { venue: true } } }, orderBy: { createdAt: "desc" }, take: 6 }),
     prisma.bag.findMany({ where: owner, include: { venue: true }, orderBy: { createdAt: "desc" }, take: 5 }),

@@ -1,0 +1,5 @@
+"use client";
+import { useEffect, useState } from "react";
+import { IconHeart, IconHeartFilled } from "@tabler/icons-react";
+import { api } from "@/lib/client/api";
+export default function FavoriteButton({ venueId }: { venueId: string }) { const [favorite, setFavorite] = useState(false); const [available, setAvailable] = useState(false); useEffect(() => { api<{ favorite: boolean }>(`/api/favorites/${venueId}`).then((value) => { setFavorite(value.favorite); setAvailable(true); }).catch(() => setAvailable(false)); }, [venueId]); async function toggle() { try { const value = await api<{ favorite: boolean }>(`/api/favorites/${venueId}`, { method: "POST" }); setFavorite(value.favorite); } catch { window.location.href = `/login?next=/venue/${venueId}`; } } return <button onClick={toggle} className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-red-500 shadow" aria-label={favorite ? "Убрать из избранного" : "Добавить в избранное"}>{available && favorite ? <IconHeartFilled size={22} /> : <IconHeart size={22} />}</button>; }

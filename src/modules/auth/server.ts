@@ -4,6 +4,7 @@ import { ApiError } from "@/shared/server/api";
 export async function requireUser(): Promise<SessionUser> {
   const user = await getSessionUser();
   if (!user) throw new ApiError(401, "AUTH_REQUIRED", "Требуется вход");
+  if (user.status === "BLOCKED") throw new ApiError(403, "ACCOUNT_BLOCKED", "Аккаунт заблокирован администратором");
   return user;
 }
 

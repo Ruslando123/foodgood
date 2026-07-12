@@ -9,6 +9,7 @@ export type Venue = {
   lng: number;
   category: string;
   photo: string;
+  rating?: number | null;
 };
 
 export type Bag = {
@@ -40,6 +41,7 @@ export type Order = {
   status:
     | "PENDING_PAYMENT"
     | "PAID"
+    | "READY_FOR_PICKUP"
     | "CAPTURE_PENDING"
     | "COMPLETED"
     | "REFUND_PENDING"
@@ -56,6 +58,7 @@ export type SessionUser = {
   phone: string | null;
   name: string | null;
   role: string;
+  status?: string;
 };
 
 export class ApiError extends Error {

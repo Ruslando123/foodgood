@@ -15,13 +15,14 @@ export async function GET(req: NextRequest) {
 
     const bags = await prisma.bag.findMany({
       where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() }, venue: { status: "ACTIVE" } },
-      include: { venue: true },
+      include: { venue: { include: { reviews: { where: { moderationStatus: "PUBLISHED" }, select: { rating: true } } } } },
       orderBy: { pickupEnd: "asc" },
       take: 100,
     });
 
     const items = bags.map((bag) => ({
       ...bag,
+      venue: { ...bag.venue, rating: bag.venue.reviews.length ? bag.venue.reviews.reduce((sum, review) => sum + review.rating, 0) / bag.venue.reviews.length : null, reviews: undefined },
       distanceKm: hasLocation
         ? haversineKm(lat, lng, bag.venue.lat, bag.venue.lng)
         : null,

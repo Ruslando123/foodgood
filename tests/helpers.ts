@@ -4,6 +4,8 @@ export async function resetDb() {
   await prisma.otpChallenge.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.outboxMessage.deleteMany();
+  await prisma.review.deleteMany();
+  await prisma.favorite.deleteMany();
   await prisma.paymentEvent.deleteMany();
   await prisma.paymentOperation.deleteMany();
   await prisma.payment.deleteMany();

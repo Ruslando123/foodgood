@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconReceipt, IconShoppingBag, IconUser } from "@tabler/icons-react";
+import { IconHeart, IconReceipt, IconShoppingBag, IconUser } from "@tabler/icons-react";
 
 const items = [
   { href: "/", label: "Пакеты", Icon: IconShoppingBag },
   { href: "/orders", label: "Мои заказы", Icon: IconReceipt },
+  { href: "/favorites", label: "Избранное", Icon: IconHeart },
   { href: "/login", label: "Профиль", Icon: IconUser },
 ];
 
