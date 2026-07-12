@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/modules/auth/server";
-import { createOrder, throwOrderApiError } from "@/modules/orders";
+import { createOrder, reconcilePendingPayments, throwOrderApiError } from "@/modules/orders";
 import { idempotentOrderRequest } from "@/modules/orders/idempotency";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit } from "@/shared/server/rate-limit";
@@ -33,13 +33,22 @@ export async function POST(req: NextRequest) {
     try {
       const create = (idempotencyRecordId?: string) =>
         createOrder(user.id, bagId, quantity, idempotencyRecordId);
-      const order = idempotencyKey
+      let order = idempotencyKey
         ? await idempotentOrderRequest(
             `${user.id}:${idempotencyKey}`,
             `${bagId}:${quantity}`,
             create
           )
         : await create();
+      // В development отдельный cron обычно не запущен. Обрабатываем mock HOLD
+      // сразу, чтобы локальный интерфейс не оставался в PENDING_PAYMENT.
+      if (process.env.NODE_ENV !== "production") {
+        await reconcilePendingPayments(10);
+        order = await prisma.order.findUniqueOrThrow({
+          where: { id: order.id },
+          include: { bag: { include: { venue: true } }, payment: true },
+        });
+      }
       return json({ order }, { status: 201 });
     } catch (error) {
       throwOrderApiError(error);
