@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/shared/server/api";
+import { redisReady } from "@/lib/redis";
 
 const TTL_MS = 10 * 60_000;
 const WAIT_MS = 5_000;
@@ -21,14 +22,18 @@ export async function idempotentOrderRequest<T>(
   fingerprint: string,
   work: (idempotencyRecordId: string) => Promise<T>
 ): Promise<T> {
+  const redis = await redisReady();
+  const cacheKey = `idempotency:order:${key}`;
+  if (redis) {
+    const cached = await redis.get(cacheKey).catch(() => null);
+    if (cached) {
+      const value = JSON.parse(cached) as { fingerprint: string; result: T };
+      if (value.fingerprint !== fingerprint) keyConflict();
+      return value.result;
+    }
+  }
   const now = new Date();
   const expiresAt = new Date(now.getTime() + TTL_MS);
-  // TTL is also cleanup. Never delete a PROCESSING row here: another instance
-  // must first atomically reclaim it below, otherwise an in-flight request
-  // could lose its uniqueness fence.
-  await prisma.orderIdempotencyKey.deleteMany({
-    where: { expiresAt: { lt: now }, status: { in: ["SUCCEEDED", "FAILED"] } },
-  });
 
   let owner = false;
   let ownerId: string | null = null;
@@ -52,7 +57,11 @@ export async function idempotentOrderRequest<T>(
       return idempotentOrderRequest(key, fingerprint, work);
     }
     if (entry.fingerprint !== fingerprint) keyConflict();
-    if (entry.status === "SUCCEEDED" && entry.resultJson) return JSON.parse(entry.resultJson) as T;
+    if (entry.status === "SUCCEEDED" && entry.resultJson) {
+      const result = JSON.parse(entry.resultJson) as T;
+      if (redis) await redis.set(cacheKey, JSON.stringify({ fingerprint, result }), "PX", TTL_MS).catch(() => undefined);
+      return result;
+    }
     if (entry.status === "FAILED" || entry.expiresAt <= new Date()) {
       const claimed = await prisma.orderIdempotencyKey.updateMany({
         where: {
@@ -76,7 +85,9 @@ export async function idempotentOrderRequest<T>(
       if (!completed) break;
       if (completed.fingerprint !== fingerprint) keyConflict();
       if (completed.status === "SUCCEEDED" && completed.resultJson) {
-        return JSON.parse(completed.resultJson) as T;
+        const result = JSON.parse(completed.resultJson) as T;
+        if (redis) await redis.set(cacheKey, JSON.stringify({ fingerprint, result }), "PX", TTL_MS).catch(() => undefined);
+        return result;
       }
       if (completed.status === "FAILED" || completed.expiresAt <= new Date()) break;
     }
@@ -95,6 +106,7 @@ export async function idempotentOrderRequest<T>(
       where: { key },
       data: { status: "SUCCEEDED", resultJson: JSON.stringify(result), expiresAt },
     });
+    if (redis) await redis.set(cacheKey, JSON.stringify({ fingerprint, result }), "PX", TTL_MS).catch(() => undefined);
     return result;
   } catch (error) {
     await prisma.orderIdempotencyKey.updateMany({
@@ -103,4 +115,18 @@ export async function idempotentOrderRequest<T>(
     });
     throw error;
   }
+}
+
+export async function pruneExpiredOrderIdempotencyKeys(limit = 500): Promise<number> {
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+    WITH candidates AS (
+      SELECT id FROM "OrderIdempotencyKey"
+      WHERE "expiresAt" < now() AND status IN ('SUCCEEDED', 'FAILED')
+      ORDER BY "expiresAt", id FOR UPDATE SKIP LOCKED LIMIT ${limit}
+    )
+    DELETE FROM "OrderIdempotencyKey" entry
+    USING candidates WHERE entry.id = candidates.id
+    RETURNING entry.id
+  `;
+  return rows.length;
 }

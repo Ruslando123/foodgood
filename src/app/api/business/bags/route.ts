@@ -61,20 +61,14 @@ export async function POST(req: NextRequest) {
         },
         include: { venue: true },
       });
-      const followers = await tx.favorite.findMany({ where: { venueId: venue.id, user: { notificationOffers: true } }, select: { userId: true } });
-      if (followers.length) {
-        await tx.notification.createMany({
-          data: followers.map(({ userId }) => ({
-            userId,
-            channel: "IN_APP",
-            recipient: userId,
-            type: "NEW_FAVORITE_VENUE_BAG",
-            status: "SENT",
-            sentAt: new Date(),
-            payloadJson: JSON.stringify({ bagId: created.id, venueId: venue.id, venueName: venue.name, title: created.title }),
-          })),
-        });
-      }
+      await tx.batchJob.create({
+        data: {
+          queue: "notifications",
+          type: "FANOUT_NEW_BAG",
+          dedupeKey: `fanout-new-bag:${created.id}`,
+          payloadJson: JSON.stringify({ bagId: created.id }),
+        },
+      });
       return created;
     });
     return json({ bag }, { status: 201 });

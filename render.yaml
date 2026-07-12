@@ -16,6 +16,12 @@ services:
         fromDatabase:
           name: foodgood-db
           property: connectionString
+      - key: DATABASE_CONNECTION_LIMIT
+        value: "5"
+      - key: DATABASE_PGBOUNCER
+        value: "true"
+      - key: REDIS_URL
+        sync: false
       - key: SESSION_SECRET
         generateValue: true
       - key: OTP_SECRET
@@ -32,27 +38,36 @@ services:
         value: "false"
       - key: TELEGRAM_NOTIFICATIONS_ENABLED
         value: "false"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
       - key: ALLOW_MOCK_PAYMENTS_IN_PRODUCTION
         value: "false"
       - key: FREEDOMPAY_MERCHANT_ID
         sync: false
       - key: FREEDOMPAY_SECRET_KEY
         sync: false
-      - key: VENUE_UPLOAD_DIR
-        value: /var/data/foodgood/venue-photos
-    disk:
-      name: foodgood-venue-photos
-      mountPath: /var/data/foodgood
-      sizeGB: 5
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_PUBLIC_BASE_URL
+        sync: false
+      - key: METRICS_SECRET
+        sync: false
 
-  - type: cron
-    name: foodgood-reconcile
+  - type: worker
+    name: foodgood-payments-worker
     runtime: node
     region: frankfurt
     plan: starter
-    schedule: "* * * * *"
     buildCommand: npm ci && npm run db:generate
-    startCommand: npm run cron:reconcile
+    startCommand: npm run worker:payments
     envVars:
       - key: NODE_VERSION
         value: "22"
@@ -60,8 +75,81 @@ services:
         fromDatabase:
           name: foodgood-db
           property: connectionString
+      - key: DATABASE_CONNECTION_LIMIT
+        value: "4"
+      - key: DATABASE_PGBOUNCER
+        value: "true"
+      - key: REDIS_URL
+        sync: false
+      - key: ALLOW_MOCK_PAYMENTS_IN_PRODUCTION
+        value: "false"
+      - key: FREEDOMPAY_MERCHANT_ID
+        sync: false
+      - key: FREEDOMPAY_SECRET_KEY
+        sync: false
+
+  - type: worker
+    name: foodgood-expiry-worker
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: npm ci && npm run db:generate
+    startCommand: npm run worker:expiry
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: foodgood-db
+          property: connectionString
+      - key: DATABASE_CONNECTION_LIMIT
+        value: "3"
+      - key: DATABASE_PGBOUNCER
+        value: "true"
+      - key: REDIS_URL
+        sync: false
+
+  - type: worker
+    name: foodgood-notifications-worker
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: npm ci && npm run db:generate
+    startCommand: npm run worker:notifications
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: foodgood-db
+          property: connectionString
+      - key: DATABASE_CONNECTION_LIMIT
+        value: "3"
+      - key: DATABASE_PGBOUNCER
+        value: "true"
+
+  - type: worker
+    name: foodgood-outbox-worker
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: npm ci && npm run db:generate
+    startCommand: npm run worker:outbox
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: foodgood-db
+          property: connectionString
+      - key: DATABASE_CONNECTION_LIMIT
+        value: "3"
+      - key: DATABASE_PGBOUNCER
+        value: "true"
       - key: TELEGRAM_NOTIFICATIONS_ENABLED
         value: "false"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
 
 databases:
   - name: foodgood-db

@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/modules/auth/server";
-import { createOrder, customerOrderScopeWhere, expireStale, reconcilePendingPayments, throwOrderApiError } from "@/modules/orders";
+import { createOrder, customerOrderScopeWhere, throwOrderApiError } from "@/modules/orders";
 import { idempotentOrderRequest } from "@/modules/orders/idempotency";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit } from "@/shared/server/rate-limit";
@@ -15,8 +15,6 @@ export async function GET(request: NextRequest) {
     const cursor = params.get("cursor") || undefined;
     const requestedLimit = Number(params.get("limit") ?? 20);
     const limit = Number.isInteger(requestedLimit) ? Math.min(50, Math.max(1, requestedLimit)) : 20;
-    // Обновляем просрочку при открытии списка, даже если очередной cron ещё не запускался.
-    await expireStale();
     const orders = await prisma.order.findMany({
       where: customerOrderScopeWhere(user.id, scope),
       include: { bag: { include: { venue: true } }, payment: true, review: true },
@@ -43,22 +41,13 @@ export async function POST(req: NextRequest) {
     try {
       const create = (idempotencyRecordId?: string) =>
         createOrder(user.id, bagId, quantity, idempotencyRecordId);
-      let order = idempotencyKey
+      const order = idempotencyKey
         ? await idempotentOrderRequest(
             `${user.id}:${idempotencyKey}`,
             `${bagId}:${quantity}`,
             create
           )
         : await create();
-      // В development отдельный cron обычно не запущен. Обрабатываем mock HOLD
-      // сразу, чтобы локальный интерфейс не оставался в PENDING_PAYMENT.
-      if (process.env.NODE_ENV !== "production") {
-        await reconcilePendingPayments(10);
-        order = await prisma.order.findUniqueOrThrow({
-          where: { id: order.id },
-          include: { bag: { include: { venue: true } }, payment: true },
-        });
-      }
       return json({ order }, { status: 201 });
     } catch (error) {
       throwOrderApiError(error);

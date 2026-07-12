@@ -8,16 +8,16 @@ datasource db {
 }
 
 model User {
-  id         String   @id @default(cuid())
-  phone      String?  @unique
-  telegramId String?  @unique
-  name       String?
-  role       String   @default("CUSTOMER") // CUSTOMER | MERCHANT
-  status     String   @default("ACTIVE") // ACTIVE | BLOCKED
-  notificationReminders Boolean @default(true)
-  notificationOffers    Boolean @default(true)
-  sessionVersion Int      @default(0)
-  createdAt  DateTime @default(now())
+  id                    String   @id @default(cuid())
+  phone                 String?  @unique
+  telegramId            String?  @unique
+  name                  String?
+  role                  String   @default("CUSTOMER") // CUSTOMER | MERCHANT
+  status                String   @default("ACTIVE") // ACTIVE | BLOCKED
+  notificationReminders Boolean  @default(true)
+  notificationOffers    Boolean  @default(true)
+  sessionVersion        Int      @default(0)
+  createdAt             DateTime @default(now())
 
   venues        Venue[]
   orders        Order[]
@@ -58,28 +58,33 @@ model RateLimitBucket {
 }
 
 model Venue {
-  id               String   @id @default(cuid())
+  id               String                                @id @default(cuid())
   name             String
-  description      String   @default("")
+  description      String                                @default("")
   address          String
   lat              Float
   lng              Float
-  cityId           String   @default("almaty")
-  category         String   @default("CAFE") // CAFE | BAKERY | SUPERMARKET | RESTAURANT
-  photo            String   @default("🍽️") // emoji or image URL
-  contactPhone     String   @default("")
-  openingHours     String   @default("")
-  status           String   @default("ACTIVE") // ACTIVE | SUSPENDED
+  location         Unsupported("geography(Point,4326)")?
+  cityId           String                                @default("almaty")
+  category         String                                @default("CAFE") // CAFE | BAKERY | SUPERMARKET | RESTAURANT
+  photo            String                                @default("🍽️") // emoji or image URL
+  contactPhone     String                                @default("")
+  openingHours     String                                @default("")
+  status           String                                @default("ACTIVE") // ACTIVE | SUSPENDED
   suspensionReason String?
   ownerId          String
-  createdAt        DateTime @default(now())
+  createdAt        DateTime                              @default(now())
+  ratingSum        Int                                   @default(0)
+  ratingCount      Int                                   @default(0)
+  ratingAverage    Float                                 @default(0)
 
-  owner User  @relation(fields: [ownerId], references: [id])
-  bags  Bag[]
+  owner     User       @relation(fields: [ownerId], references: [id])
+  bags      Bag[]
   favorites Favorite[]
   reviews   Review[]
 
   @@index([cityId, status])
+  @@index([ownerId])
 }
 
 model Bag {
@@ -100,6 +105,7 @@ model Bag {
   orders Order[]
 
   @@index([status, pickupEnd])
+  @@index([venueId, createdAt])
 }
 
 model Order {
@@ -125,6 +131,7 @@ model Order {
   review         Review?
 
   @@index([userId, status])
+  @@index([userId, status, createdAt, id])
   @@index([bagId, status])
   @@index([createdAt])
 }
@@ -276,6 +283,28 @@ model Favorite {
 
   @@unique([userId, venueId])
   @@index([userId, createdAt])
+  @@index([venueId, userId])
+}
+
+/// Durable batch work created by short HTTP transactions and consumed by
+/// independently scalable notification/refund workers.
+model BatchJob {
+  id             String    @id @default(cuid())
+  queue          String
+  type           String
+  payloadJson    String    @default("{}")
+  dedupeKey      String?   @unique
+  status         String    @default("PENDING") // PENDING | PROCESSING | RETRY | SUCCEEDED | FAILED
+  attempts       Int       @default(0)
+  nextAttemptAt  DateTime  @default(now())
+  leaseOwner     String?
+  leaseExpiresAt DateTime?
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([queue, status, nextAttemptAt])
+  @@index([leaseExpiresAt])
 }
 
 model Review {

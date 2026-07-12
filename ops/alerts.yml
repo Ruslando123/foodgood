@@ -1,0 +1,22 @@
+groups:
+  - name: foodgood
+    rules:
+      - alert: FoodGoodHighP99
+        expr: histogram_quantile(0.99, sum by (le) (rate(foodgood_http_request_duration_seconds_bucket[5m]))) > 1.2
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "FoodGood API p99 is above 1.2s" }
+      - alert: FoodGoodQueueLag
+        expr: foodgood_queue_lag_seconds > 120
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "FoodGood queue is more than two minutes behind" }
+      - alert: FoodGoodPoolSaturation
+        expr: foodgood_db_pool_connections / foodgood_db_max_connections > 0.8
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "PostgreSQL connection budget is above 80%" }
+      - alert: FoodGoodPaymentFailures
+        expr: foodgood_payment_failures_recent > 5
+        labels: { severity: critical }
+        annotations: { summary: "Payment operations are failing" }

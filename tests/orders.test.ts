@@ -20,6 +20,7 @@ import { NextRequest } from "next/server";
 import { GET as getBags } from "@/app/api/bags/route";
 import { POST as verifyPhone } from "@/app/api/auth/verify/route";
 import { createPickupReminders } from "@/lib/notifications";
+import { runBatchJobs } from "@/lib/jobs";
 
 beforeEach(resetDb);
 afterEach(() => vi.restoreAllMocks());
@@ -47,6 +48,7 @@ async function cancelOrder(userId: string, orderId: string) {
 
 async function cancelBagWithRefunds(merchantId: string, bagId: string) {
   const bag = await queueCancelBagWithRefunds(merchantId, bagId);
+  await runBatchJobs("refunds");
   await reconcilePendingPayments();
   return bag;
 }
@@ -69,9 +71,43 @@ describe("каталог по городу", () => {
     const astanaData = await astanaResponse.json();
     expect(astanaData.bags.map((bag: { id: string }) => bag.id)).toEqual([astanaBag.id]);
   });
+
+  it("листает каталог стабильным cursor без дублей", async () => {
+    const { venue, bag } = await createFixtures();
+    await prisma.bag.createMany({
+      data: Array.from({ length: 14 }, (_, index) => ({
+        venueId: venue.id,
+        title: `Cursor ${index}`,
+        price: 1000,
+        originalPrice: 3000,
+        quantityTotal: 1,
+        quantityLeft: 1,
+        pickupStart: inMinutes(30),
+        pickupEnd: inMinutes(120),
+      })),
+    });
+    const firstResponse = await getBags(new NextRequest("http://localhost/api/bags?city=almaty&sort=price&limit=10"));
+    const first = await firstResponse.json();
+    const secondResponse = await getBags(new NextRequest(`http://localhost/api/bags?city=almaty&sort=price&limit=10&cursor=${encodeURIComponent(first.nextCursor)}`));
+    const second = await secondResponse.json();
+    const ids = [...first.bags, ...second.bags].map((item: { id: string }) => item.id);
+    expect(first.bags).toHaveLength(10);
+    expect(new Set(ids).size).toBe(15);
+    expect(ids).toContain(bag.id);
+  });
 });
 
 describe("внутренние уведомления", () => {
+  it("делает fan-out подписчикам отдельной batch job", async () => {
+    const { customer, venue, bag } = await createFixtures();
+    await prisma.favorite.create({ data: { userId: customer.id, venueId: venue.id } });
+    await prisma.batchJob.create({
+      data: { queue: "notifications", type: "FANOUT_NEW_BAG", payloadJson: JSON.stringify({ bagId: bag.id }), dedupeKey: `test-fanout:${bag.id}` },
+    });
+    await expect(runBatchJobs("notifications")).resolves.toBe(1);
+    await expect(prisma.notification.findMany({ where: { userId: customer.id, type: "NEW_FAVORITE_VENUE_BAG" } })).resolves.toHaveLength(1);
+  });
+
   it("создаёт одно напоминание перед выдачей и не дублирует его", async () => {
     const { customer, bag } = await createFixtures({ pickupStart: inMinutes(30), pickupEnd: inMinutes(90) });
     const order = await createOrder(customer.id, bag.id, 1);
@@ -523,6 +559,7 @@ describe("expireStale (ленивое истечение)", () => {
     });
 
     await expect(queueRedeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("Окно выдачи закончилось");
+    await expireStale();
     await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "REFUND_PENDING" });
   });
 

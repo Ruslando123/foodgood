@@ -4,6 +4,7 @@ export async function resetDb() {
   await prisma.systemState.deleteMany();
   await prisma.otpChallenge.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
+  await prisma.batchJob.deleteMany();
   await prisma.outboxMessage.deleteMany();
   await prisma.review.deleteMany();
   await prisma.favorite.deleteMany();

@@ -5,6 +5,7 @@ import { assertPaymentProviderReady, paymentProvider, PaymentProviderError } fro
 import { generatePickupCode } from "./qr";
 import { PLATFORM_FEE_PCT } from "./config";
 import { telegramNotificationsEnabled } from "./telegram";
+import { paymentFailures } from "./metrics";
 
 export class OrderError extends Error {}
 class OperationLeaseLostError extends Error {}
@@ -30,28 +31,50 @@ const WORKER_CONCURRENCY = 5;
 
 const orderInclude = { bag: { include: { venue: true } }, payment: true } as const;
 
-/** Lazy expiry only queues local state transitions; provider calls stay in cron. */
-export async function expireStale(): Promise<void> {
-  const now = new Date();
-  await prisma.bag.updateMany({
-    where: { status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { lt: now } },
-    data: { status: "EXPIRED" },
-  });
-  await prisma.order.updateMany({
-    where: { status: "PENDING_PAYMENT", bag: { pickupEnd: { lt: now } } },
-    data: { status: "EXPIRED" },
-  });
-
-  const staleOrders = await prisma.order.findMany({
-    where: { status: { in: ["PAID", "READY_FOR_PICKUP"] }, bag: { pickupEnd: { lt: now } } },
-  });
-  for (const order of staleOrders) {
-    try {
-      await queueRefund(order.id, "EXPIRED");
-    } catch (error) {
-      console.error("Could not queue expired order refund", { orderId: order.id, error });
+/** Claims and expires at most `limit` rows of each kind; safe to run concurrently. */
+export async function expireStale(limit = 250): Promise<number> {
+  const expiredBags = await prisma.$executeRaw`
+    WITH candidates AS (
+      SELECT id FROM "Bag"
+      WHERE status IN ('ACTIVE', 'SOLD_OUT') AND "pickupEnd" < now()
+      ORDER BY "pickupEnd", id FOR UPDATE SKIP LOCKED LIMIT ${limit}
+    )
+    UPDATE "Bag" bag SET status = 'EXPIRED'
+    FROM candidates WHERE bag.id = candidates.id
+  `;
+  const expiredPending = await prisma.$executeRaw`
+    WITH candidates AS (
+      SELECT orders.id FROM "Order" orders
+      JOIN "Bag" bag ON bag.id = orders."bagId"
+      WHERE orders.status = 'PENDING_PAYMENT' AND bag."pickupEnd" < now()
+      ORDER BY bag."pickupEnd", orders.id FOR UPDATE OF orders SKIP LOCKED LIMIT ${limit}
+    )
+    UPDATE "Order" orders SET status = 'EXPIRED'
+    FROM candidates WHERE orders.id = candidates.id
+  `;
+  const refundRows = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.$queryRaw<Array<{ id: string; paymentId: string }>>`
+      WITH candidates AS (
+        SELECT orders.id FROM "Order" orders
+        JOIN "Bag" bag ON bag.id = orders."bagId"
+        WHERE orders.status IN ('PAID', 'READY_FOR_PICKUP') AND bag."pickupEnd" < now()
+        ORDER BY bag."pickupEnd", orders.id FOR UPDATE OF orders SKIP LOCKED LIMIT ${limit}
+      )
+      UPDATE "Order" orders
+      SET status = 'REFUND_PENDING', "refundTargetStatus" = 'EXPIRED'
+      FROM candidates, "Payment" payment
+      WHERE orders.id = candidates.id AND payment."orderId" = orders.id
+      RETURNING orders.id, payment.id AS "paymentId"
+    `;
+    if (claimed.length) {
+      await tx.paymentOperation.createMany({
+        data: claimed.map(({ paymentId }) => ({ paymentId, type: "REFUND", idempotencyKey: randomUUID(), nextAttemptAt: new Date(0) })),
+        skipDuplicates: true,
+      });
     }
-  }
+    return claimed.length;
+  });
+  return Number(expiredBags) + Number(expiredPending) + refundRows;
 }
 
 /** HTTP only reserves inventory and atomically queues HOLD. */
@@ -125,8 +148,6 @@ export async function cancelOrder(userId: string, orderId: string) {
 
 /** HTTP atomically claims PAID -> CAPTURE_PENDING and queues CAPTURE. */
 export async function redeemOrder(merchantId: string, pickupCode: string) {
-  // Не полагаемся только на cron: код нельзя принять после окончания выдачи.
-  await expireStale();
   const code = pickupCode.trim().toUpperCase();
   const order = await prisma.order.findUnique({
     where: { pickupCode: code },
@@ -168,38 +189,21 @@ export async function cancelBagWithRefunds(merchantId: string, bagId: string) {
     await tx.bag.update({ where: { id: bagId }, data: { status: "CANCELLED" } });
     await tx.order.updateMany({ where: { bagId, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
 
-    const paidOrders = await tx.order.findMany({
-      where: { bagId, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
-      include: { payment: true, user: true },
+    await tx.batchJob.upsert({
+      where: { dedupeKey: `refund-cancelled-bag:${bag.id}` },
+      update: {},
+      create: {
+        queue: "refunds",
+        type: "REFUND_CANCELLED_BAG",
+        dedupeKey: `refund-cancelled-bag:${bag.id}`,
+        payloadJson: JSON.stringify({ bagId: bag.id }),
+      },
     });
-    for (const order of paidOrders) {
-      const claimed = await tx.order.updateMany({
-        where: { id: order.id, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
-        data: { status: "REFUND_PENDING", refundTargetStatus: "CANCELLED" },
-      });
-      if (!claimed.count || !order.payment) continue;
-      const operation = await ensureOperation(tx, order.payment.id, "REFUND");
-      if (order.user.telegramId && telegramNotificationsEnabled()) {
-        await tx.outboxMessage.upsert({
-          where: { operationId_type: { operationId: operation.id, type: "TELEGRAM_BAG_CANCELLED" } },
-          update: {},
-          create: {
-            operationId: operation.id,
-            orderId: order.id,
-            type: "TELEGRAM_BAG_CANCELLED",
-            payloadJson: JSON.stringify({
-              telegramId: order.user.telegramId,
-              text: `😔 «${bag.venue.name}» отменил пакет «${bag.title}». Деньги вернутся на карту.`,
-            }),
-          },
-        });
-      }
-    }
   });
   return prisma.bag.findUniqueOrThrow({ where: { id: bagId }, include: { venue: true } });
 }
 
-async function queueRefund(orderId: string, finalStatus: FinalRefundStatus): Promise<boolean> {
+export async function queueRefund(orderId: string, finalStatus: FinalRefundStatus): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { payment: true } });
     if (!order?.payment) return false;
@@ -217,23 +221,28 @@ async function ensureOperation(tx: Prisma.TransactionClient, paymentId: string, 
   return tx.paymentOperation.upsert({
     where: { paymentId_type: { paymentId, type } },
     update: {},
-    create: { paymentId, type, idempotencyKey: randomUUID(), nextAttemptAt: new Date() },
+    create: { paymentId, type, idempotencyKey: randomUUID(), nextAttemptAt: new Date(0) },
   });
 }
 
 /** Claim is atomic, while network work happens after the transaction closes. */
 export async function reconcilePendingPayments(limit = 50, workerId: string = randomUUID()): Promise<number> {
-  const now = new Date();
-  const candidates = await prisma.paymentOperation.findMany({
-    where: {
-      status: { in: ["PENDING", "RETRY", "PROCESSING"] },
-      nextAttemptAt: { lte: now },
-      OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }],
-    },
-    orderBy: { nextAttemptAt: "asc" },
-    take: limit,
-    select: { id: true },
-  });
+  const candidates = await prisma.$queryRaw<Array<{ id: string }>>`
+    WITH candidates AS (
+      SELECT id FROM "PaymentOperation"
+      WHERE status IN ('PENDING', 'RETRY', 'PROCESSING')
+        AND "nextAttemptAt" <= now()
+        AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" < now())
+      ORDER BY "nextAttemptAt", id
+      FOR UPDATE SKIP LOCKED
+      LIMIT ${limit}
+    )
+    UPDATE "PaymentOperation" operation
+    SET status = 'PROCESSING', "leaseOwner" = ${workerId},
+        "leaseExpiresAt" = now() + interval '60 seconds'
+    FROM candidates WHERE operation.id = candidates.id
+    RETURNING operation.id
+  `;
   let next = 0;
   let processed = 0;
   const workers = Array.from({ length: Math.min(WORKER_CONCURRENCY, candidates.length) }, async () => {
@@ -247,18 +256,6 @@ export async function reconcilePendingPayments(limit = 50, workerId: string = ra
 }
 
 async function processPaymentOperation(operationId: string, workerId: string): Promise<boolean> {
-  const now = new Date();
-  const claimed = await prisma.paymentOperation.updateMany({
-    where: {
-      id: operationId,
-      status: { in: ["PENDING", "RETRY", "PROCESSING"] },
-      nextAttemptAt: { lte: now },
-      OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }],
-    },
-    data: { status: "PROCESSING", leaseOwner: workerId, leaseExpiresAt: new Date(Date.now() + LEASE_MS) },
-  });
-  if (!claimed.count) return false;
-
   const operation = await prisma.paymentOperation.findUniqueOrThrow({
     where: { id: operationId },
     include: { payment: { include: { order: { include: { bag: { include: { venue: true } }, user: true } } } } },
@@ -297,6 +294,7 @@ async function processPaymentOperation(operationId: string, workerId: string): P
     }
   } catch (error) {
     if (error instanceof OperationLeaseLostError) return true;
+    paymentFailures.inc({ operation: operation.type });
     if (operation.type === "HOLD" && error instanceof PaymentProviderError && error.code === "DECLINED") {
       await declineHold(operation.id, workerId, operation.payment.id, operation.payment.orderId, operation.payment.order.bagId, operation.payment.order.quantity);
     } else {

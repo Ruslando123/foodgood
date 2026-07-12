@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { logEvent } from "@/lib/monitoring";
+import { apiDuration } from "@/lib/metrics";
 
 export type ApiErrorBody = {
   error: {
@@ -28,10 +29,14 @@ export function json<T>(data: T, init?: ResponseInit) {
 export async function apiRoute(
   handler: () => Promise<NextResponse>
 ): Promise<NextResponse<ApiErrorBody | unknown>> {
+  const stop = apiDuration.startTimer();
   try {
-    return await handler();
+    const response = await handler();
+    stop({ status: String(response.status) });
+    return response;
   } catch (error) {
     if (error instanceof ApiError) {
+      stop({ status: String(error.status) });
       return NextResponse.json(
         {
           error: {
@@ -45,6 +50,7 @@ export async function apiRoute(
     }
 
     logEvent("error", "api.unhandled_error", {}, error);
+    stop({ status: "500" });
     return NextResponse.json(
       { error: { code: "INTERNAL_ERROR", message: "Внутренняя ошибка сервера" } },
       { status: 500 }

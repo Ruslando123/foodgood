@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireMerchant } from "@/modules/auth/server";
-import { cancelBagWithRefunds, reconcilePendingPayments, throwOrderApiError } from "@/modules/orders";
+import { cancelBagWithRefunds, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 
@@ -46,7 +46,6 @@ export async function PATCH(
     if (body.status === "CANCELLED") {
       try {
         const bag = await cancelBagWithRefunds(user.id, id);
-        if (process.env.NODE_ENV !== "production") await reconcilePendingPayments(50);
         return json({ bag });
       } catch (error) {
         throwOrderApiError(error);

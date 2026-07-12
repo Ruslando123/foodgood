@@ -20,6 +20,7 @@ async function main() {
   await prisma.otpChallenge.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.outboxMessage.deleteMany();
+  await prisma.batchJob.deleteMany();
   await prisma.review.deleteMany();
   await prisma.favorite.deleteMany();
   await prisma.notification.deleteMany();

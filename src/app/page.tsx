@@ -28,6 +28,8 @@ type Sort = "soon" | "distance" | "price" | "discount";
 
 export default function HomePage() {
   const [bags, setBags] = useState<Bag[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [view, setView] = useState<"list" | "map">("list");
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [city, setCity] = useState<KazakhstanCity | null>(null);
@@ -148,8 +150,9 @@ export default function HomePage() {
       setLoading(true);
       setError(null);
       try {
-        const data = await api<{ bags: Bag[] }>(`/api/bags?${queryString}`, { signal: controller.signal });
+        const data = await api<{ bags: Bag[]; nextCursor: string | null }>(`/api/bags?${queryString}`, { signal: controller.signal });
         setBags(data.bags);
+        setNextCursor(data.nextCursor);
       } catch (e) {
         if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Не удалось загрузить пакеты");
       } finally {
@@ -161,6 +164,22 @@ export default function HomePage() {
       controller.abort();
     };
   }, [queryString, reloadKey, search]);
+
+  async function loadMore() {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const query = new URLSearchParams(queryString);
+      query.set("cursor", nextCursor);
+      const data = await api<{ bags: Bag[]; nextCursor: string | null }>(`/api/bags?${query}`);
+      setBags((current) => [...(current ?? []), ...data.bags]);
+      setNextCursor(data.nextCursor);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось загрузить следующую страницу");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   const totalSaved = useMemo(
     () => (bags ?? []).reduce((sum, bag) => sum + (bag.originalPrice - bag.price) * bag.quantityLeft, 0),
@@ -297,6 +316,7 @@ export default function HomePage() {
             </div>
           )}
           {bags?.map((bag) => <BagCard key={bag.id} bag={bag} />)}
+          {nextCursor && !loading && <button onClick={loadMore} disabled={loadingMore} className="w-full rounded-xl border border-primary/20 py-3 text-sm font-semibold text-primary disabled:opacity-50">{loadingMore ? "Загружаем…" : "Показать ещё"}</button>}
           {loading && bags !== null && <p className="py-2 text-center text-[11px] text-muted">Обновляем результаты…</p>}
         </main>
       )}

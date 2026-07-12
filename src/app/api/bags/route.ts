@@ -1,8 +1,7 @@
 import { NextRequest } from "next/server";
-import { prisma } from "@/lib/db";
-import { haversineKm } from "@/lib/geo";
 import { kazakhstanCityById } from "@/lib/kazakhstan";
-import { filterAndSortCatalog, parseCatalogQuery } from "@/modules/catalog/query";
+import { parseCatalogQuery } from "@/modules/catalog/query";
+import { queryCatalog } from "@/modules/catalog/db";
 import { apiRoute, ApiError, json } from "@/shared/server/api";
 
 /** Активные пакеты; при переданных lat/lng — с расстоянием и сортировкой по близости. */
@@ -17,26 +16,15 @@ export async function GET(req: NextRequest) {
     if (cityParam && !selectedCity) throw new ApiError(400, "UNKNOWN_CITY", "Неизвестный город Казахстана");
     const query = parseCatalogQuery(req.nextUrl.searchParams);
 
-    const bags = await prisma.bag.findMany({
-      where: {
-        status: "ACTIVE",
-        quantityLeft: { gt: 0 },
-        pickupEnd: { gt: new Date() },
-        venue: { status: "ACTIVE", ...(selectedCity ? { cityId: selectedCity.id } : {}) },
-      },
-      include: { venue: { include: { reviews: { where: { moderationStatus: "PUBLISHED" }, select: { rating: true } } } } },
-      orderBy: { pickupEnd: "asc" },
-      take: 100,
+    const requestedLimit = Number(req.nextUrl.searchParams.get("limit") ?? 24);
+    const limit = Number.isInteger(requestedLimit) ? Math.min(100, Math.max(1, requestedLimit)) : 24;
+    const result = await queryCatalog({
+      query,
+      cityId: selectedCity?.id,
+      ...(hasLocation ? { lat, lng } : {}),
+      cursor: req.nextUrl.searchParams.get("cursor"),
+      limit,
     });
-
-    const items = bags.map((bag) => ({
-      ...bag,
-      venue: { ...bag.venue, rating: bag.venue.reviews.length ? bag.venue.reviews.reduce((sum, review) => sum + review.rating, 0) / bag.venue.reviews.length : null, reviews: undefined },
-      distanceKm: hasLocation
-        ? haversineKm(lat, lng, bag.venue.lat, bag.venue.lng)
-        : null,
-    }));
-    const filtered = filterAndSortCatalog(items, query);
-    return json({ bags: filtered, nextCursor: null });
+    return json(result);
   });
 }

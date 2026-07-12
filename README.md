@@ -12,6 +12,17 @@ npm run seed      # демо-данные: 6 заведений Алматы + �
 npm run dev       # http://localhost:3000
 ```
 
+Фоновые процессы запускаются независимо от web-приложения:
+
+```bash
+npm run worker:payments
+npm run worker:expiry
+npm run worker:notifications
+npm run worker:outbox
+```
+
+Workers постоянно забирают короткие пакеты задач через `FOR UPDATE SKIP LOCKED`; их можно масштабировать независимо количеством процессов. HTTP-запросы только изменяют локальное состояние и атомарно ставят durable job в PostgreSQL.
+
 `20260711134610_init` — полная baseline-миграция, включая `PaymentOperation`. Не отмечайте её
 как applied на существующей базе: Prisma пропустит создание новой таблицы. Для локальной базы
 разработчика безопаснее пересоздать схему:
@@ -45,13 +56,36 @@ npm test   # поднимает временный PostgreSQL через Docker 
 
 Для CI или уже запущенной БД достаточно передать `TEST_DATABASE_URL` — Docker тогда не используется.
 
-Тесты покрывают жизненный цикл заказа, отказ провайдера, recovery после сбоя БД и параллельные worker retry.
+Тесты покрывают жизненный цикл заказа, отказ провайдера, recovery после сбоя БД и параллельные worker retry. Тестовый контейнер использует PostgreSQL 16 + PostGIS.
+
+## Нагрузочный прогон
+
+[`load/k6.js`](load/k6.js) содержит отдельные сценарии каталога, гонки за последний пакет, выдачи, массового истечения и деградации платёжного провайдера. Перед запуском staging должен быть заполнен production-подобным объёмом данных, а провайдер — переведён в управляемый fault mode.
+
+```bash
+BASE_URL=https://staging.example \
+CUSTOMER_COOKIE='foodgood_session=...' \
+MERCHANT_COOKIE='foodgood_session=...' \
+LAST_BAG_ID='...' \
+PICKUP_CODES='ABC234,DEF567' \
+npm run load:k6
+```
+
+После гонки за последний пакет дополнительно проверяются DB-инварианты: отрицательных остатков нет, успешный hold один на проданную единицу, повторных capture/refund нет.
+
+## Production-инфраструктура
+
+- Redis (`REDIS_URL`) обслуживает rate limit и короткий кэш идемпотентных ответов. Durable результат заказа остаётся в PostgreSQL.
+- Фото сохраняются в S3-compatible storage; `S3_PUBLIC_BASE_URL` должен указывать на CDN. Локальная файловая система остаётся только fallback для разработки.
+- Каталог фильтруется и сортируется PostgreSQL, использует PostGIS/GiST для радиуса, trigram-индексы для поиска, агрегированный рейтинг и составной cursor.
+- `/api/metrics` отдаёт Prometheus-метрики HTTP/query latency, queue lag, соединений БД и payment failures. Правила алертов находятся в [`ops/alerts.yml`](ops/alerts.yml).
+- `DATABASE_CONNECTION_LIMIT` ограничивает Prisma pool каждого процесса. Конфигурация `render.yaml`: web 5 + workers 4/3/3/3 = 18 соединений; лимит PgBouncer/PostgreSQL должен оставлять минимум 20% резерва сверх этого и административных подключений.
 
 ## Текущее состояние
 
 - Есть рабочий покупательский сценарий: список и карта пакетов, геолокация, карточка пакета, демо-оплата, заказы, QR-код и отмена до начала окна выдачи.
 - Есть кабинет заведения: регистрация точки, публикация пакетов, статистика, список активных пакетов и выдача заказа по коду.
-- Есть серверная бизнес-логика: атомарный резерв остатков, статусы заказов, mock hold/capture/refund, ленивое истечение пакетов и возвраты.
+- Есть серверная бизнес-логика: атомарный резерв остатков, статусы заказов, mock hold/capture/refund и независимо масштабируемые workers.
 - Есть базовая авторизация: вход по телефону с dev-кодом `0000`, Telegram WebApp `initData`, httpOnly JWT-cookie.
 - Есть демо-данные для Алматы, Prisma-схема и тесты для ключевых доменных правил.
 
@@ -63,14 +97,11 @@ npm test   # поднимает временный PostgreSQL через Docker 
 
 - Подключить реальный SMS-шлюз вместо `DEV_OTP_CODE`, добавить TTL/лимиты попыток и защиту от перебора кода.
 - Подключить реальный платежный провайдер: hold/capture/refund, webhooks, идемпотентность, сверку зависших холдов и журнал платёжных событий.
-- Перейти с SQLite на PostgreSQL, добавить миграции Prisma, бэкапы и отдельные окружения для dev/staging/prod.
-- Добавить фоновые задачи вместо только ленивого истечения: авто-expire пакетов, refund просроченных заказов, уведомления перед окончанием окна выдачи.
+- Настроить проверяемые бэкапы PostgreSQL и отдельные окружения dev/staging/prod.
 - Усилить роли и доступы: явная проверка `MERCHANT`, приглашения сотрудников заведения, разделение владельца и кассира.
-- Добавить rate limiting для auth/order/redeem API и базовый audit log для оплат, отмен и выдач.
 
 ### Для продукта
 
-- Добавить фильтры и поиск по категориям, району, времени выдачи, цене, размеру скидки и расстоянию.
 - Добавить избранные заведения, повтор заказа, отзывы после выдачи и жалобы по качеству пакета.
 - Сделать полноценный профиль заведения: фото, график, условия выдачи, контакты, статус модерации.
 - Добавить push/Telegram/SMS-уведомления: заказ оплачен, скоро выдача, заказ выдан, отмена/возврат.
@@ -79,7 +110,7 @@ npm test   # поднимает временный PostgreSQL через Docker 
 
 ### Для эксплуатации
 
-- Настроить мониторинг ошибок и метрик: заказы, конверсия, отмены, refund rate, успешность выдачи, выручка по заведениям.
+- Подключить Prometheus endpoint и готовые alert rules к выбранному мониторингу.
 - Добавить e2e-тесты для главных сценариев: покупка, отмена, выдача, истечение, регистрация заведения.
 - Добавить CI с `lint`, `build`, `test`, проверкой миграций и seed-данных.
 - Подготовить production-деплой: переменные окружения, секреты, домен, HTTPS, CSP/security headers.
@@ -87,7 +118,7 @@ npm test   # поднимает временный PostgreSQL через Docker 
 
 ## Стек
 
-Next.js 15 (App Router, TypeScript) · Prisma + PostgreSQL · Tailwind CSS 4 · Leaflet + OpenStreetMap · JWT-сессии в httpOnly-cookie (`jose`).
+Next.js 15 (App Router, TypeScript) · Prisma + PostgreSQL/PostGIS · Redis · S3/CDN · Tailwind CSS 4 · Leaflet + OpenStreetMap · JWT-сессии в httpOnly-cookie (`jose`).
 
 ## Ключевые модули
 
@@ -98,7 +129,9 @@ Next.js 15 (App Router, TypeScript) · Prisma + PostgreSQL · Tailwind CSS 4 · 
 | `src/lib/auth.ts` | Сессии, вход по телефону (dev-код `0000`), нормализация номеров КЗ |
 | `src/lib/telegram.ts` | Верификация `initData` Telegram WebApp + уведомления через бота |
 | `src/lib/config.ts` | Комиссия платформы (22%), категории, центр карты |
-| `prisma/schema.prisma` | User / Venue / Bag / Order / Payment |
+| `src/lib/jobs.ts` | Durable batch jobs для массовых уведомлений и возвратов |
+| `src/modules/catalog/db.ts` | SQL-каталог, PostGIS и cursor pagination |
+| `prisma/schema.prisma` | User / Venue / Bag / Order / Payment / BatchJob |
 
 ## Как подключить продакшен-интеграции
 
@@ -106,7 +139,7 @@ Next.js 15 (App Router, TypeScript) · Prisma + PostgreSQL · Tailwind CSS 4 · 
 - **SMS-код**: выбран Mobizon Kazakhstan; durable OTP уже хранится в PostgreSQL, для production нужны `MOBIZON_API_KEY` и зарегистрированное имя отправителя.
 - **Telegram WebApp**: создайте бота у @BotFather, пропишите `TELEGRAM_BOT_TOKEN` в `.env`, укажите URL приложения как WebApp — авторизация по `initData` и уведомления о выдаче заработают автоматически.
 - **Карта 2ГИС/Яндекс**: карта изолирована в `src/components/MapView.tsx` — замените Leaflet-слой на MapGL с API-ключом.
-- **PostgreSQL**: смените `provider` в `prisma/schema.prisma` на `postgresql` и `DATABASE_URL` — схема совместима.
+- **PostgreSQL**: требуется PostgreSQL 16 с расширениями PostGIS и `pg_trgm`; применяйте миграции через `prisma migrate deploy`.
 
 ## Бизнес-модель
 

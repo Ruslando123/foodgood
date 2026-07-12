@@ -16,6 +16,7 @@ import {
   IconReceipt,
   IconSettings,
   IconLock,
+  IconPencil,
   IconPhone,
 } from "@tabler/icons-react";
 import BottomNav from "@/components/BottomNav";
@@ -53,6 +54,7 @@ function LoginContent() {
   const [stats, setStats] = useState({ bagsSaved: 0, moneySaved: 0 });
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
+  const [nameSaved, setNameSaved] = useState(false);
   const phoneValid = phone.replace(/\D/g, "").length === 11;
 
   useEffect(() => {
@@ -145,11 +147,25 @@ function LoginContent() {
       const result = await api<{ user: SessionUser }>("/api/auth/me", { method: "PATCH", body: JSON.stringify({ name }) });
       setUser(result.user);
       setEditingName(false);
+      setNameSaved(true);
+      window.setTimeout(() => setNameSaved(false), 2500);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось сохранить имя");
     } finally {
       setBusy(false);
     }
+  }
+
+  function startEditingName() {
+    setName(user?.name ?? "");
+    setNameSaved(false);
+    setError(null);
+    setEditingName(true);
+  }
+
+  function cancelEditingName() {
+    setName(user?.name ?? "");
+    setEditingName(false);
   }
 
   if (user === undefined) return <div className="space-y-3 px-4"><div className="h-32 animate-pulse rounded-[18px] bg-black/[0.05]" /><div className="h-24 animate-pulse rounded-[17px] bg-black/[0.05]" /></div>;
@@ -163,12 +179,22 @@ function LoginContent() {
             <div className="flex h-[60px] w-[60px] shrink-0 items-center justify-center rounded-full bg-white text-primary"><IconSeedlingFilled size={34} /></div>
             <div className="min-w-0 flex-1">
               {editingName ? (
-                <div className="space-y-2">
-                  <input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} placeholder="Ваше имя" className="w-full rounded-[10px] border border-white/30 bg-white/15 px-3 py-2 text-white outline-none placeholder:text-white/65" />
-                  <div className="flex gap-3 text-[12px] font-semibold"><button onClick={saveName} disabled={busy}>Сохранить</button><button onClick={() => setEditingName(false)} className="text-white/70">Отмена</button></div>
-                </div>
+                <form onSubmit={(event) => { event.preventDefault(); void saveName(); }} className="space-y-2">
+                  <label className="block text-[12px] font-semibold text-white/80" htmlFor="profile-name">Ваше имя</label>
+                  <input id="profile-name" autoFocus value={name} onChange={(event) => setName(event.target.value)} maxLength={80} placeholder="Например, Алия" className="w-full rounded-[10px] border border-white/30 bg-white/15 px-3 py-2 text-white outline-none placeholder:text-white/65 focus:border-white focus:ring-2 focus:ring-white/30" />
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button type="submit" disabled={busy || name.trim().length < 2} className="min-h-11 rounded-[10px] bg-white px-3 text-[14px] font-bold text-primary shadow-sm transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">{busy ? "Сохраняем…" : "Сохранить"}</button>
+                    <button type="button" onClick={cancelEditingName} disabled={busy} className="min-h-11 rounded-[10px] border border-white/50 px-3 text-[14px] font-semibold text-white transition hover:bg-white/10 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">Отмена</button>
+                  </div>
+                </form>
               ) : (
-                <button onClick={() => setEditingName(true)} className="truncate text-left text-[18px] font-bold" aria-label="Изменить имя">{user.name ?? "Пользователь FoodGood"}</button>
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-[18px] font-bold">{user.name ?? "Пользователь FoodGood"}</p>
+                    <button type="button" onClick={startEditingName} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-white/15 px-2 py-1 text-[12px] font-semibold transition hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-white/70" aria-label="Изменить имя"><IconPencil size={14} />Изменить</button>
+                  </div>
+                  {nameSaved && <p role="status" className="mt-1 text-[12px] font-medium text-white/90">Имя сохранено</p>}
+                </div>
               )}
               {user.phone && <p className="mt-0.5 text-[13px] text-white/90">{user.phone}</p>}
               <p className="mt-3 flex items-center gap-1.5 text-[12px] text-white/80"><IconSeedlingFilled size={16} />Вы уже спасли {bagsSaved} пакетов</p>
