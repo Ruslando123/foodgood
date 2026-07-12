@@ -47,7 +47,7 @@ export default function MapView({ bags, userLocation }: Props) {
         const markerContent = document.createElement("div");
         markerContent.style.cssText =
           "width:40px;height:40px;border-radius:50%;background:#fff;border:2px solid #1a7f4e;display:flex;align-items:center;justify-content:center;font-size:20px;box-shadow:0 2px 6px rgba(0,0,0,.25)";
-        markerContent.textContent = bag.venue.photo;
+        markerContent.textContent = /^https?:\/\//i.test(bag.venue.photo) ? "🍽️" : bag.venue.photo;
         const icon = L.divIcon({
           className: "",
           html: markerContent,

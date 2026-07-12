@@ -1,12 +1,12 @@
 "use client";
 
 import { use, useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { IconArrowLeft, IconClock, IconGift, IconMapPin, IconMinus, IconPackage, IconPlus, IconReceipt, IconShieldCheck } from "@tabler/icons-react";
 import BottomNav from "@/components/BottomNav";
 import BagCard from "@/components/BagCard";
+import VenuePhoto from "@/components/VenuePhoto";
 import {
   api,
   Bag,
@@ -15,7 +15,6 @@ import {
   formatPrice,
   formatPickupWindow,
   discountPct,
-  venueImage,
 } from "@/lib/client/api";
 
 export default function BagPage({ params }: { params: Promise<{ id: string }> }) {
@@ -147,7 +146,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   return (
     <div className="mx-auto min-h-dvh max-w-md bg-white pb-28">
       <div className="relative h-[250px] overflow-hidden bg-[#eef1ee]">
-        <Image src={venueImage(bag.venue.category)} alt="" fill priority sizes="(max-width: 448px) 100vw, 448px" className="object-cover" />
+        <VenuePhoto category={bag.venue.category} photo={bag.venue.photo} alt={bag.venue.name} />
         <div className="absolute inset-x-0 top-0 h-24 bg-black/20" />
         <Link
           href="/"

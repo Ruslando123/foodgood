@@ -1,13 +1,13 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { IconArrowLeft, IconMapPin } from "@tabler/icons-react";
 import BagCard from "@/components/BagCard";
 import BottomNav from "@/components/BottomNav";
-import { api, Bag, Venue, pluralRu, venueImage } from "@/lib/client/api";
+import { api, Bag, Venue, pluralRu } from "@/lib/client/api";
 import { VENUE_CATEGORIES } from "@/lib/config";
+import VenuePhoto from "@/components/VenuePhoto";
 
 type VenueDetails = Venue & { bags: Omit<Bag, "venue">[] };
 
@@ -40,7 +40,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
   return (
     <div className="mx-auto min-h-dvh max-w-md bg-white pb-20">
       <header className="relative h-[245px] overflow-hidden">
-        <Image src={venueImage(venue.category)} alt="" fill priority sizes="(max-width: 448px) 100vw, 448px" className="object-cover" />
+        <VenuePhoto category={venue.category} photo={venue.photo} alt={venue.name} />
         <div className="absolute inset-0 bg-black/35" />
         <Link href="/" className="absolute left-4 top-4 inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-foreground shadow"><IconArrowLeft size={22} /></Link>
         <div className="absolute inset-x-4 bottom-5 text-white">

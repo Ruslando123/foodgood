@@ -1,16 +1,16 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { IconClock, IconMapPin } from "@tabler/icons-react";
-import { Bag, discountPct, formatPickupWindow, formatPrice, venueImage } from "@/lib/client/api";
+import { Bag, discountPct, formatPickupWindow, formatPrice } from "@/lib/client/api";
 import { formatDistance } from "@/lib/geo";
+import VenuePhoto from "@/components/VenuePhoto";
 
 export default function BagCard({ bag }: { bag: Bag }) {
   return (
     <article className="grid min-h-[154px] grid-cols-[128px_minmax(0,1fr)] overflow-hidden rounded-[17px] border border-black/[0.07] bg-white shadow-[0_3px_14px_rgba(20,40,28,0.06)]">
       <Link href={`/bag/${bag.id}`} className="relative block min-h-[154px] overflow-hidden bg-[#eef1ee]">
-        <Image src={venueImage(bag.venue.category)} alt="" fill sizes="128px" className="object-cover" />
+        <VenuePhoto category={bag.venue.category} photo={bag.venue.photo} alt={bag.venue.name} />
       </Link>
       <div className="flex min-w-0 flex-col px-3 py-2.5">
         <div className="flex items-start gap-2">
