@@ -12,7 +12,7 @@ type Props = {
 
 export default function VenuePhoto({ category, photo, alt, className = "" }: Props) {
   const fallback = venueImage(category);
-  const candidate = photo && /^https?:\/\//i.test(photo.trim()) ? photo.trim() : fallback;
+  const candidate = photo && (/^https?:\/\//i.test(photo.trim()) || photo.startsWith("/api/media/venues/")) ? photo.trim() : fallback;
   const [src, setSrc] = useState(candidate);
 
   useEffect(() => setSrc(candidate), [candidate]);
