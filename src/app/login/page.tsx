@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   IconBell,
+  IconArrowLeft,
   IconBuildingStore,
   IconChevronRight,
   IconCreditCard,
@@ -14,10 +15,27 @@ import {
   IconLogout,
   IconReceipt,
   IconSettings,
+  IconLock,
+  IconPhone,
 } from "@tabler/icons-react";
 import BottomNav from "@/components/BottomNav";
 import { api, Order, SessionUser, formatPrice } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
+
+function formatKazakhstanPhone(value: string): string {
+  let digits = value.replace(/\D/g, "");
+  if (digits.startsWith("8")) digits = `7${digits.slice(1)}`;
+  if (digits.startsWith("7")) digits = digits.slice(1);
+  digits = digits.slice(0, 10);
+  const parts = [digits.slice(0, 3), digits.slice(3, 6), digits.slice(6, 8), digits.slice(8, 10)];
+  let result = "+7";
+  if (parts[0]) result += ` (${parts[0]}`;
+  if (parts[0].length === 3) result += ")";
+  if (parts[1]) result += ` ${parts[1]}`;
+  if (parts[2]) result += `-${parts[2]}`;
+  if (parts[3]) result += `-${parts[3]}`;
+  return result;
+}
 
 function LoginContent() {
   const router = useRouter();
@@ -35,6 +53,7 @@ function LoginContent() {
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
   const [notifications, setNotifications] = useState({ reminders: true, offers: true });
+  const phoneValid = phone.replace(/\D/g, "").length === 11;
 
   useEffect(() => {
     api<{ user: SessionUser | null }>("/api/auth/me")
@@ -66,11 +85,15 @@ function LoginContent() {
   }, [cooldown]);
 
   async function requestCode() {
+    if (!phoneValid) {
+      setError("Введите полный номер телефона");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const result = await api<{ phone: string; codeLength: number; devCode?: string }>("/api/auth/phone", { method: "POST", body: JSON.stringify({ phone }) });
-      setPhone(result.phone);
+      setPhone(formatKazakhstanPhone(result.phone));
       setCode("");
       setCodeLength(result.codeLength);
       setDevCode(result.devCode ?? null);
@@ -172,27 +195,30 @@ function LoginContent() {
   }
 
   return (
-    <main className="space-y-4 px-4">
-      <div className="pb-5 pt-10 text-center">
-        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[#edf7f1] text-primary"><IconSeedlingFilled size={44} /></div>
-        <h2 className="mt-5 text-[22px] font-bold tracking-[-0.03em]">Вход в FoodGood</h2>
-        <p className="mt-1 text-[13px] text-muted">По номеру телефона</p>
+    <main className="px-4 pb-8">
+      <div className="pb-6 pt-7 text-center">
+        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-[24px] bg-[#edf7f1] text-primary shadow-[0_8px_30px_rgba(26,127,78,0.12)]"><IconSeedlingFilled size={44} /></div>
+        <h2 className="mt-5 text-[24px] font-bold tracking-[-0.04em]">{step === "phone" ? "Вход в FoodGood" : "Введите код"}</h2>
+        <p className="mx-auto mt-2 max-w-[290px] text-[13px] leading-5 text-muted">{step === "phone" ? "Введите номер — отправим одноразовый код. Пароль не нужен." : <>Код отправлен на <span className="font-semibold text-foreground">{phone}</span></>}</p>
       </div>
       {step === "phone" ? (
-        <div className="space-y-3">
-          <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7 777 123 45 67" className="h-12 w-full rounded-[13px] border border-black/[0.1] bg-white px-4 text-[17px] outline-none" />
-          <button onClick={requestCode} disabled={busy} className="w-full rounded-[13px] bg-primary py-3.5 font-semibold text-white disabled:opacity-60">Получить код</button>
-        </div>
+        <form onSubmit={(event) => { event.preventDefault(); void requestCode(); }} className="space-y-4 rounded-[20px] border border-black/[0.08] bg-white p-4 shadow-[0_8px_30px_rgba(20,40,28,0.06)]">
+          <label className="block"><span className="mb-1.5 block text-[12px] font-semibold text-[#4f5d55]">Номер телефона</span><span className="relative block"><IconPhone size={20} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-primary" /><input aria-label="Номер телефона" autoFocus autoComplete="tel" inputMode="tel" type="tel" value={phone} onChange={(event) => { setPhone(formatKazakhstanPhone(event.target.value)); setError(null); }} placeholder="+7 (777) 123-45-67" className="h-14 w-full rounded-[14px] border border-black/[0.12] bg-[#fafbfa] pl-11 pr-4 text-[17px] font-medium outline-none transition focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" /></span></label>
+          {error && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-[12px] text-red-700">{error}</p>}
+          <button type="submit" disabled={busy || !phoneValid} className="w-full rounded-[14px] bg-primary py-3.5 text-[15px] font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Отправляем код…" : "Продолжить"}</button>
+          <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted"><IconLock size={14} />Номер используется только для входа и заказов</p>
+        </form>
       ) : (
-        <div className="space-y-3">
-          <p className="text-center text-[13px] text-muted">Код отправлен на {phone}.{devCode && <span className="font-semibold"> Демо: {devCode}</span>}</p>
-          <input type="text" inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} placeholder={"0".repeat(codeLength)} maxLength={codeLength} className="h-12 w-full rounded-[13px] border border-black/[0.1] bg-white px-4 text-center text-lg tracking-[0.5em] outline-none" />
-          <button onClick={verify} disabled={busy || code.length !== codeLength} className="w-full rounded-[13px] bg-primary py-3.5 font-semibold text-white disabled:opacity-60">Войти</button>
-          <button onClick={requestCode} disabled={busy || cooldown > 0} className="w-full py-2 text-[13px] text-primary disabled:text-muted">{cooldown > 0 ? `Отправить снова через ${cooldown} сек` : "Отправить код снова"}</button>
-          <button onClick={() => setStep("phone")} className="w-full py-2 text-[13px] text-muted">Изменить номер</button>
-        </div>
+        <form onSubmit={(event) => { event.preventDefault(); void verify(); }} className="space-y-4 rounded-[20px] border border-black/[0.08] bg-white p-4 shadow-[0_8px_30px_rgba(20,40,28,0.06)]">
+          <label className="block"><span className="mb-1.5 block text-center text-[12px] font-semibold text-[#4f5d55]">Код подтверждения</span><input aria-label="Код подтверждения" autoFocus autoComplete="one-time-code" type="text" inputMode="numeric" value={code} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "").slice(0, codeLength)); setError(null); }} placeholder={"•".repeat(codeLength)} maxLength={codeLength} className="h-16 w-full rounded-[14px] border border-black/[0.12] bg-[#fafbfa] px-4 text-center text-[26px] font-bold tracking-[0.55em] outline-none transition placeholder:tracking-[0.45em] focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" /></label>
+          {devCode && <button type="button" onClick={() => setCode(devCode)} className="w-full rounded-xl bg-amber-50 px-3 py-2.5 text-[12px] font-semibold text-amber-800">Использовать демо-код {devCode}</button>}
+          {error && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-[12px] text-red-700">{error}</p>}
+          <button type="submit" disabled={busy || code.length !== codeLength} className="w-full rounded-[14px] bg-primary py-3.5 text-[15px] font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Проверяем…" : "Войти"}</button>
+          <div className="flex items-center justify-between gap-3"><button type="button" onClick={() => { setStep("phone"); setCode(""); setError(null); }} className="inline-flex items-center gap-1 text-[12px] font-semibold text-muted"><IconArrowLeft size={15} />Изменить номер</button><button type="button" onClick={requestCode} disabled={busy || cooldown > 0} className="text-right text-[12px] font-semibold text-primary disabled:text-muted">{cooldown > 0 ? `Повторить через ${cooldown} сек` : "Отправить ещё раз"}</button></div>
+        </form>
       )}
-      {error && <p className="text-center text-[12px] text-red-600">{error}</p>}
+      {next !== "/" && <p className="mt-4 text-center text-[12px] text-muted">После входа вернём вас на нужную страницу.</p>}
+      <p className="mt-3 text-center text-[10px] leading-4 text-muted">Продолжая, вы принимаете условия использования и политику конфиденциальности.</p>
     </main>
   );
 }
