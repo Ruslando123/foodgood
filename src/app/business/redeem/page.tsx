@@ -30,10 +30,10 @@ export default function RedeemPage() {
   }
 
   return (
-    <div className="max-w-md mx-auto min-h-dvh pb-8">
-      <header className="sticky top-0 z-10 bg-background/90 backdrop-blur px-4 pt-4 pb-3 flex items-center gap-3">
-        <Link href="/business" className="text-primary">←</Link>
-        <h1 className="text-xl font-bold">Выдача заказа</h1>
+    <div className="mx-auto min-h-dvh max-w-xl pb-8">
+      <header className="px-4 pb-3 pt-6">
+        <Link href="/business/orders?status=PAID" className="text-sm font-semibold text-primary">← К заказам</Link>
+        <h1 className="mt-3 text-2xl font-bold">Выдача заказа</h1>
       </header>
 
       <main className="px-4 space-y-4 pt-4">

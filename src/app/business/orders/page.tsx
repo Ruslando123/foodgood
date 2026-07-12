@@ -1,0 +1,22 @@
+import { Prisma } from "@prisma/client";
+import Link from "next/link";
+import { prisma } from "@/lib/db";
+import { getSessionUser } from "@/lib/auth";
+
+const LABELS: Record<string, string> = { PENDING_PAYMENT: "Ожидает оплаты", PAID: "Ждёт выдачи", CAPTURE_PENDING: "Списание", COMPLETED: "Выдан", REFUND_PENDING: "Возврат", CANCELLED: "Отменён", EXPIRED: "Истёк" };
+const STATUSES = Object.keys(LABELS);
+function price(value: number) { return `${value.toLocaleString("ru-RU")} ₸`; }
+function statusClass(status: string) { if (status === "COMPLETED" || status === "PAID") return "bg-green-50 text-green-700"; if (status.includes("PENDING")) return "bg-amber-50 text-amber-800"; return "bg-black/[0.05] text-muted"; }
+
+export default async function BusinessOrdersPage({ searchParams }: { searchParams: Promise<{ q?: string; status?: string }> }) {
+  const user = await getSessionUser(); if (!user) return null;
+  const params = await searchParams; const query = (params.q ?? "").trim(); const status = params.status ?? "ALL";
+  const where: Prisma.OrderWhereInput = { bag: { venue: { ownerId: user.id } }, ...(STATUSES.includes(status) ? { status } : {}), ...(query ? { OR: [{ pickupCode: { contains: query, mode: "insensitive" } }, { id: { contains: query, mode: "insensitive" } }, { user: { phone: { contains: query } } }, { bag: { title: { contains: query, mode: "insensitive" } } }] } : {}) };
+  const [orders, grouped] = await Promise.all([prisma.order.findMany({ where, include: { user: true, payment: true, bag: { include: { venue: true } } }, orderBy: { createdAt: "desc" }, take: 100 }), prisma.order.groupBy({ by: ["status"], where: { bag: { venue: { ownerId: user.id } } }, _count: { _all: true } })]);
+  const counts = Object.fromEntries(grouped.map((item) => [item.status, item._count._all])); const total = grouped.reduce((sum, item) => sum + item._count._all, 0);
+  return <main className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6"><header><h1 className="text-2xl font-bold">Заказы</h1><p className="mt-1 text-sm text-muted">Отслеживайте оплату и готовьте заказы к выдаче.</p></header>
+    <section className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Link href="/business/orders" className="rounded-xl border bg-white p-3"><p className="text-xs text-muted">Все</p><p className="text-xl font-bold">{total}</p></Link>{["PAID", "COMPLETED", "CANCELLED"].map((item) => <Link key={item} href={`/business/orders?status=${item}`} className="rounded-xl border bg-white p-3"><p className="text-xs text-muted">{LABELS[item]}</p><p className="text-xl font-bold">{counts[item] ?? 0}</p></Link>)}</section>
+    <form className="flex flex-col gap-2 rounded-2xl border bg-white p-4 sm:flex-row"><input name="q" defaultValue={query} aria-label="Поиск заказов" placeholder="Код, телефон, ID или пакет" className="min-w-0 flex-1 rounded-xl border px-3 py-2.5" /><select name="status" defaultValue={status} aria-label="Статус заказа" className="rounded-xl border px-3 py-2.5"><option value="ALL">Все статусы</option>{STATUSES.map((item) => <option key={item} value={item}>{LABELS[item]}</option>)}</select><button className="rounded-xl bg-primary px-5 py-2.5 font-semibold text-white">Найти</button></form>
+    <section className="overflow-hidden rounded-2xl border bg-white">{orders.length === 0 ? <p className="p-8 text-center text-sm text-muted">Заказы не найдены.</p> : <div className="divide-y">{orders.map((order) => <article key={order.id} className="grid gap-4 p-4 md:grid-cols-[1.3fr_1fr_auto]"><div><p className="font-semibold">{order.bag.title} · {order.quantity} шт.</p><p className="text-xs text-muted">{order.bag.venue.name} · {new Date(order.createdAt).toLocaleString("ru-RU")}</p><p className="mt-1 text-xs text-muted">Покупатель: {order.user.phone ?? order.user.name ?? "не указан"}</p></div><div><p className="font-mono text-lg font-bold tracking-widest">{order.pickupCode}</p><p className="text-sm font-semibold">{price(order.totalPrice)}</p><p className="text-xs text-muted">Платёж: {order.payment?.status ?? "не создан"}</p></div><div className="md:text-right"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass(order.status)}`}>{LABELS[order.status] ?? order.status}</span>{order.status === "PAID" && <div><Link href="/business/redeem" className="mt-2 inline-block text-xs font-semibold text-primary">Перейти к выдаче</Link></div>}</div></article>)}</div>}</section>
+  </main>;
+}

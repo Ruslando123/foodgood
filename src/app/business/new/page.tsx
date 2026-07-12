@@ -71,10 +71,11 @@ export default function NewBagPage() {
   }
 
   return (
-    <div className="max-w-md mx-auto min-h-dvh pb-8">
-      <header className="sticky top-0 z-10 bg-background/90 backdrop-blur px-4 pt-4 pb-3 flex items-center gap-3">
-        <Link href="/business" className="text-primary">←</Link>
-        <h1 className="text-xl font-bold">Новый пакет-сюрприз</h1>
+    <div className="mx-auto min-h-dvh max-w-2xl pb-8">
+      <header className="px-4 pb-3 pt-6">
+        <Link href="/business/bags" className="text-sm font-semibold text-primary">← К пакетам</Link>
+        <h1 className="mt-3 text-2xl font-bold">Новый пакет-сюрприз</h1>
+        <p className="mt-1 text-sm text-muted">Укажите состав, цену и удобное окно выдачи.</p>
       </header>
 
       <main className="px-4 space-y-3">
