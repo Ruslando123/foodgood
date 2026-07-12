@@ -4,8 +4,9 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { IconBell, IconCheck, IconClock, IconInfoCircle, IconMapPin, IconReceipt, IconRefresh } from "@tabler/icons-react";
+import { IconCheck, IconClock, IconInfoCircle, IconMapPin, IconReceipt, IconRefresh } from "@tabler/icons-react";
 import BottomNav from "@/components/BottomNav";
+import NotificationBell from "@/components/NotificationBell";
 import QrCanvas from "@/components/QrCanvas";
 import OrderSupportButton from "@/components/OrderSupportButton";
 import OrderReviewForm from "@/components/OrderReviewForm";
@@ -261,7 +262,7 @@ export default function OrdersPage() {
           <h1 className="text-[22px] font-bold tracking-[-0.03em]">Мои заказы</h1>
           <p className="mt-0.5 text-[12px] text-muted">Статусы обновляются автоматически</p>
         </div>
-        <button className="flex h-10 w-10 items-center justify-center rounded-full" aria-label="Уведомления"><IconBell size={25} stroke={1.8} /></button>
+        <NotificationBell />
       </header>
       <Suspense>
         <OrdersContent />
