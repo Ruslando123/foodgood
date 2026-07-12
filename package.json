@@ -11,7 +11,8 @@
     "db:push": "prisma db push",
     "seed": "tsx prisma/seed.ts",
     "cron:reconcile": "tsx scripts/reconcile.ts",
-    "test": "node scripts/test.mjs"
+    "test": "node scripts/test.mjs",
+    "test:e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -22,10 +23,12 @@
     "prisma": "^6.19.3",
     "qrcode": "^1.5.4",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
     "@types/leaflet": "^1.9.21",
     "@types/node": "^20",
@@ -38,5 +41,6 @@
     "tsx": "^4.23.0",
     "typescript": "^5",
     "vitest": "^4.1.10"
-  }
+  },
+  "overrides": { "postcss": "8.5.16" }
 }

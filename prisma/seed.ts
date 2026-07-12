@@ -17,14 +17,21 @@ function pickupWindow(startH: number, startM: number, endH: number, endM: number
 }
 
 async function main() {
+  await prisma.otpChallenge.deleteMany();
+  await prisma.rateLimitBucket.deleteMany();
   await prisma.outboxMessage.deleteMany();
+  await prisma.review.deleteMany();
+  await prisma.favorite.deleteMany();
+  await prisma.notification.deleteMany();
   await prisma.paymentEvent.deleteMany();
   await prisma.paymentOperation.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.order.deleteMany();
   await prisma.bag.deleteMany();
   await prisma.venue.deleteMany();
+  await prisma.auditLog.deleteMany();
   await prisma.user.deleteMany();
+  await prisma.systemState.deleteMany();
 
   const merchant = await prisma.user.create({
     data: { phone: "+77010000001", name: "Демо-мерчант", role: "MERCHANT" },

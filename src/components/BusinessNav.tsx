@@ -31,8 +31,8 @@ export default function BusinessNav({ name }: { name: string | null }) {
     router.replace("/login");
   }
 
-  return <header className="sticky top-0 z-20 border-b border-black/[0.08] bg-white/95 backdrop-blur">
-    <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3">
+  return <header className="sticky top-0 z-20 w-screen max-w-[100vw] overflow-hidden border-b border-black/[0.08] bg-white/95 backdrop-blur">
+    <div className="mx-auto flex w-screen max-w-[min(100vw,72rem)] items-center gap-2 px-4 py-3 sm:gap-4">
       <Link href="/business" className="shrink-0 font-bold tracking-tight"><span className="text-primary">Food</span>Good <span className="text-muted">Бизнес</span></Link>
       <nav aria-label="Навигация кабинета владельца" className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
         <div className="flex gap-1">{links.map(({ href, label, icon: Icon }) => {

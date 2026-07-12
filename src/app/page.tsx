@@ -179,8 +179,8 @@ export default function HomePage() {
   }
 
   return (
-    <div className="mx-auto min-h-dvh max-w-md bg-white pb-20">
-      <header className="sticky top-0 z-10 space-y-3 bg-white/95 px-4 pb-3 pt-4 backdrop-blur-xl">
+    <div className="mx-auto min-h-dvh w-screen max-w-md overflow-x-hidden bg-white pb-20">
+      <header className="sticky top-0 z-10 min-w-0 space-y-3 bg-white/95 px-4 pb-3 pt-4 backdrop-blur-xl">
         <div className="flex items-start justify-between">
           <div>
             <BrandMark />
@@ -272,7 +272,7 @@ export default function HomePage() {
           {loading && <div className="absolute inset-x-3 top-3 rounded-xl bg-white/90 p-2 text-center text-[11px] shadow">Обновляем карту…</div>}
         </div>
       ) : (
-        <main className="space-y-2.5 px-4">
+        <main className="min-w-0 space-y-2.5 px-4">
           {bags && bags.length > 0 && (
             <div className="rounded-[10px] bg-[#edf7f1] px-3 py-2 text-[11px] font-medium text-[#226442]">
               Найдено {bags.length} {pluralRu(bags.length, "пакет", "пакета", "пакетов")} {location ? "с учётом местоположения" : "по Казахстану"} · можно сэкономить до {totalSaved.toLocaleString("ru-RU")} ₸
@@ -285,9 +285,9 @@ export default function HomePage() {
           )}
           {bags === null && loading && <CatalogSkeleton />}
           {bags?.length === 0 && !loading && !error && (
-            <div className="rounded-[18px] border border-black/[0.07] bg-[#fafbfa] px-6 py-14 text-center">
+            <div className="w-[calc(100vw-2rem)] max-w-full overflow-hidden rounded-[18px] border border-black/[0.07] bg-[#fafbfa] px-4 py-12 text-center sm:px-6 sm:py-14">
               <IconSearch size={38} stroke={1.4} className="mx-auto text-muted" />
-              <h2 className="mt-3 font-bold">{city && !activeFilters && !search ? `В городе ${city.name} пока нет пакетов` : "Ничего не найдено"}</h2>
+              <h2 className="mt-3 break-words font-bold leading-6">{city && !activeFilters && !search ? `В городе ${city.name} пока нет пакетов` : "Ничего не найдено"}</h2>
               <p className="mx-auto mt-1 max-w-xs text-[13px] leading-5 text-muted">{city && !activeFilters && !search ? "Мы покажем новые предложения сразу после публикации заведениями. Можно проверить другой город." : "Измените поиск или сбросьте фильтры."}</p>
               <div className="mt-4 flex flex-col items-center justify-center gap-2 sm:flex-row">
                 {(activeFilters > 0 || search) && <button onClick={() => { setSearch(""); resetFilters(); }} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white">Сбросить фильтры</button>}

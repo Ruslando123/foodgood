@@ -16,6 +16,7 @@ model User {
   status     String   @default("ACTIVE") // ACTIVE | BLOCKED
   notificationReminders Boolean @default(true)
   notificationOffers    Boolean @default(true)
+  sessionVersion Int      @default(0)
   createdAt  DateTime @default(now())
 
   venues        Venue[]
@@ -24,6 +25,12 @@ model User {
   notifications Notification[]
   favorites     Favorite[]
   reviews       Review[]
+}
+
+model SystemState {
+  key       String   @id
+  valueJson String   @default("{}")
+  updatedAt DateTime @updatedAt
 }
 
 model OtpChallenge {

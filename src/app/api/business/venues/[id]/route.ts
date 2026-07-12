@@ -57,6 +57,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     try { photo = await saveVenuePhoto(file); }
     catch (error) {
       if (error instanceof Error && error.message === "PHOTO_SIZE") throw new ApiError(400, "PHOTO_TOO_LARGE", "Фото должно быть не больше 5 МБ");
+      if (error instanceof Error && error.message === "PHOTO_DIMENSIONS") throw new ApiError(400, "PHOTO_DIMENSIONS", "Фото должно быть от 240×160 пикселей и не больше 36 мегапикселей");
       throw new ApiError(400, "PHOTO_FORMAT", "Поддерживаются только JPG, PNG и WebP");
     }
     try {

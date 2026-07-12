@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logEvent } from "@/lib/monitoring";
 
 export type ApiErrorBody = {
   error: {
@@ -43,7 +44,7 @@ export async function apiRoute(
       );
     }
 
-    console.error("Unhandled API error", error);
+    logEvent("error", "api.unhandled_error", {}, error);
     return NextResponse.json(
       { error: { code: "INTERNAL_ERROR", message: "Внутренняя ошибка сервера" } },
       { status: 500 }

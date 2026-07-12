@@ -122,6 +122,22 @@ function LoginContent() {
     setStats({ bagsSaved: 0, moneySaved: 0 });
   }
 
+  async function logoutAll() {
+    if (!window.confirm("Выйти из FoodGood на всех устройствах?")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/api/auth/logout-all", { method: "POST" });
+      setUser(null);
+      setStep("phone");
+      setStats({ bagsSaved: 0, moneySaved: 0 });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Не удалось завершить сессии");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveName() {
     setBusy(true);
     setError(null);
@@ -174,6 +190,7 @@ function LoginContent() {
         </section>
         {error && <p className="text-center text-[12px] text-red-600">{error}</p>}
         <button onClick={logout} className="flex w-full items-center justify-center gap-2 rounded-[14px] border border-black/[0.08] bg-white py-3.5 text-[14px] font-semibold text-red-500"><IconLogout size={20} />Выйти</button>
+        <button onClick={logoutAll} disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-[14px] border border-black/[0.08] bg-white py-3 text-[13px] font-semibold text-muted disabled:opacity-50"><IconLock size={18} />Выйти на всех устройствах</button>
       </main>
     );
   }
@@ -202,7 +219,7 @@ function LoginContent() {
         </form>
       )}
       {next !== "/" && <p className="mt-4 text-center text-[12px] text-muted">После входа вернём вас на нужную страницу.</p>}
-      <p className="mt-3 text-center text-[10px] leading-4 text-muted">Продолжая, вы принимаете условия использования и политику конфиденциальности.</p>
+      <p className="mt-3 text-center text-[10px] leading-4 text-muted">Продолжая, вы принимаете <Link href="/legal/terms" className="underline">условия использования</Link> и <Link href="/legal/privacy" className="underline">политику конфиденциальности</Link>.</p>
     </main>
   );
 }

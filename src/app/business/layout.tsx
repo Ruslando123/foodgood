@@ -6,5 +6,5 @@ export default async function BusinessLayout({ children }: { children: React.Rea
   const user = await getSessionUser();
   if (!user) redirect("/login?next=/business");
   if (user.role !== "MERCHANT") redirect("/");
-  return <><BusinessNav name={user.name} />{children}</>;
+  return <div className="overflow-x-hidden" style={{ width: "100vw", maxWidth: "100vw" }}><BusinessNav name={user.name} />{children}</div>;
 }

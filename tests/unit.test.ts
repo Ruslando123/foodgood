@@ -3,6 +3,7 @@ import { createHmac } from "crypto";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
+import sharp from "sharp";
 import { haversineKm, formatDistance } from "@/lib/geo";
 import { generatePickupCode } from "@/lib/qr";
 import { isDevOtpEnabled, normalizePhone } from "@/lib/auth";
@@ -95,11 +96,13 @@ describe("venue photos", () => {
     const directory = await mkdtemp(path.join(tmpdir(), "foodgood-venue-photo-"));
     vi.stubEnv("VENUE_UPLOAD_DIR", directory);
     try {
-      const png = new Uint8Array(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z1pAAAAAASUVORK5CYII=", "base64"));
+      const png = new Uint8Array(await sharp({ create: { width: 320, height: 180, channels: 3, background: "#2f855a" } }).png().toBuffer());
       const url = await saveVenuePhoto(new File([png], "venue.png", { type: "image/png" }));
       const filename = url.split("/").at(-1)!;
       await expect(readVenuePhoto(filename)).resolves.toMatchObject({ type: "image/png" });
       await expect(saveVenuePhoto(new File(["not an image"], "venue.txt"))).rejects.toThrow("PHOTO_FORMAT");
+      const tiny = new Uint8Array(await sharp({ create: { width: 20, height: 20, channels: 3, background: "#fff" } }).png().toBuffer());
+      await expect(saveVenuePhoto(new File([tiny], "tiny.png"))).rejects.toThrow("PHOTO_DIMENSIONS");
       await removeVenuePhoto(url);
       await expect(readVenuePhoto(filename)).resolves.toBeNull();
     } finally {

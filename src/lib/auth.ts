@@ -40,7 +40,8 @@ export type SessionUser = {
 };
 
 export async function createSession(userId: string): Promise<void> {
-  const token = await new SignJWT({ sub: userId })
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { sessionVersion: true } });
+  const token = await new SignJWT({ sub: userId, ver: user.sessionVersion })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_TTL_DAYS}d`)
@@ -70,6 +71,7 @@ export async function getSessionUser(options: { includeBlocked?: boolean } = {})
     if (!payload.sub) return null;
     const user = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) return null;
+    if (typeof payload.ver !== "number" || payload.ver !== user.sessionVersion) return null;
     // Pages use the safe default and cannot render private data for an account
     // blocked after its session was issued. API guards include the record so
     // they can return a specific ACCOUNT_BLOCKED response.

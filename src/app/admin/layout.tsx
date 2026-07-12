@@ -8,5 +8,5 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // нет прав администратора: направляем пользователя в подходящий сценарий.
   if (!user) redirect("/login?next=/admin/venues");
   if (user.role !== "ADMIN") redirect("/");
-  return <><AdminNav name={user.name} />{children}</>;
+  return <div className="overflow-x-hidden" style={{ width: "100vw", maxWidth: "100vw" }}><AdminNav name={user.name} />{children}</div>;
 }

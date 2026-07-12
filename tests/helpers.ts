@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 
 export async function resetDb() {
+  await prisma.systemState.deleteMany();
   await prisma.otpChallenge.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.outboxMessage.deleteMany();
