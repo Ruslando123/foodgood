@@ -21,6 +21,7 @@ import {
 import BottomNav from "@/components/BottomNav";
 import { api, Order, SessionUser, formatPrice } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
+import SettingsPreferences from "@/components/SettingsPreferences";
 
 function formatKazakhstanPhone(value: string): string {
   let digits = value.replace(/\D/g, "");
@@ -52,7 +53,6 @@ function LoginContent() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
-  const [notifications, setNotifications] = useState({ reminders: true, offers: true });
   const phoneValid = phone.replace(/\D/g, "").length === 11;
 
   useEffect(() => {
@@ -72,10 +72,6 @@ function LoginContent() {
         }
       })
       .catch(() => setUser(null));
-    const saved = window.localStorage.getItem("foodgood-notifications");
-    if (saved) {
-      try { setNotifications(JSON.parse(saved)); } catch {}
-    }
   }, [router]);
 
   useEffect(() => {
@@ -143,12 +139,6 @@ function LoginContent() {
     }
   }
 
-  function updateNotifications(key: "reminders" | "offers", value: boolean) {
-    const updated = { ...notifications, [key]: value };
-    setNotifications(updated);
-    window.localStorage.setItem("foodgood-notifications", JSON.stringify(updated));
-  }
-
   if (user === undefined) return <div className="space-y-3 px-4"><div className="h-32 animate-pulse rounded-[18px] bg-black/[0.05]" /><div className="h-24 animate-pulse rounded-[17px] bg-black/[0.05]" /></div>;
 
   if (user) {
@@ -180,8 +170,7 @@ function LoginContent() {
         <section className="overflow-hidden rounded-[17px] border border-black/[0.08] bg-white">
           <MenuLink href="/orders" icon={<IconReceipt />} label="Мои заказы" />
           <MenuLink href="/notifications" icon={<IconBell />} label="Уведомления" />
-          <Preference label="Напоминать о выдаче" description="Чтобы успеть забрать пакет" checked={notifications.reminders} onChange={(value) => updateNotifications("reminders", value)} />
-          <Preference label="Новые пакеты и скидки" description="Подборки выгодных предложений" checked={notifications.offers} onChange={(value) => updateNotifications("offers", value)} />
+          <SettingsPreferences embedded />
           <MenuLink href="/payment-methods" icon={<IconCreditCard />} label="Способы оплаты" />
           {user.role === "ADMIN" && <MenuLink href="/admin/venues" icon={<IconBuildingStore />} label="Панель администратора" />}
           {user.role === "MERCHANT" && <MenuLink href="/business" icon={<IconBuildingStore />} label="Кабинет заведения" />}
@@ -229,15 +218,6 @@ function ProfileStat({ label, value, suffix }: { label: string; value: string; s
 
 function MenuLink({ href, icon, label }: { href: string; icon: React.ReactNode; label: string }) {
   return <Link href={href} className="flex h-[46px] items-center gap-3 border-b border-black/[0.07] px-4 text-[13px] [&_svg]:h-5 [&_svg]:w-5 [&_svg]:stroke-[1.8]"><span>{icon}</span><span className="flex-1">{label}</span><IconChevronRight size={17} className="text-muted" /></Link>;
-}
-
-function Preference({ label, description, checked, onChange }: { label: string; description: string; checked: boolean; onChange: (value: boolean) => void }) {
-  return (
-    <label className="flex min-h-[52px] items-center justify-between gap-3 border-b border-black/[0.07] px-4 py-2">
-      <span><span className="block text-[12px]">{label}</span><span className="block text-[10px] text-muted">{description}</span></span>
-      <span className={`relative h-7 w-12 shrink-0 rounded-full p-0.5 transition-colors ${checked ? "bg-primary" : "bg-[#d7dcda]"}`}><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="sr-only" /><span className={`block h-6 w-6 rounded-full bg-white shadow-sm transition-transform ${checked ? "translate-x-5" : "translate-x-0"}`} /></span>
-    </label>
-  );
 }
 
 export default function LoginPage() {

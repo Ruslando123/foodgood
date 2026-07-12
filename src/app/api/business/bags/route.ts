@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
       },
       include: { venue: true },
     });
-    const followers = await prisma.favorite.findMany({ where: { venueId: venue.id }, select: { userId: true } });
+    const followers = await prisma.favorite.findMany({ where: { venueId: venue.id, user: { notificationOffers: true } }, select: { userId: true } });
     if (followers.length) await prisma.notification.createMany({ data: followers.map(({ userId }) => ({ userId, channel: "IN_APP", recipient: userId, type: "NEW_FAVORITE_VENUE_BAG", status: "SENT", sentAt: new Date(), payloadJson: JSON.stringify({ bagId: bag.id, venueId: venue.id, venueName: venue.name, title: bag.title }) })) });
     return json({ bag }, { status: 201 });
   });

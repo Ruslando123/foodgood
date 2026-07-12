@@ -14,6 +14,8 @@ model User {
   name       String?
   role       String   @default("CUSTOMER") // CUSTOMER | MERCHANT
   status     String   @default("ACTIVE") // ACTIVE | BLOCKED
+  notificationReminders Boolean @default(true)
+  notificationOffers    Boolean @default(true)
   createdAt  DateTime @default(now())
 
   venues        Venue[]
@@ -246,6 +248,8 @@ model Notification {
   error       String?
   createdAt   DateTime  @default(now())
   sentAt      DateTime?
+  readAt      DateTime?
+  dedupeKey   String?   @unique
 
   user User? @relation(fields: [userId], references: [id])
 

@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import {
-  IconBell,
   IconCalendar,
   IconChevronDown,
   IconList,
@@ -18,6 +16,7 @@ import {
 import BagCard from "@/components/BagCard";
 import BottomNav from "@/components/BottomNav";
 import BrandMark from "@/components/BrandMark";
+import NotificationBell from "@/components/NotificationBell";
 import { api, Bag, pluralRu } from "@/lib/client/api";
 import { VENUE_CATEGORIES } from "@/lib/config";
 import { isInKazakhstan, KAZAKHSTAN_CITIES, KazakhstanCity, nearestKazakhstanCity } from "@/lib/kazakhstan";
@@ -189,10 +188,7 @@ export default function HomePage() {
               {locationLabel} <IconChevronDown size={14} stroke={1.8} />
             </button>
           </div>
-          <Link href="/notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full" aria-label="Уведомления">
-            <IconBell size={25} stroke={1.8} />
-            <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-red-500" />
-          </Link>
+          <NotificationBell />
         </div>
 
         {locationOpen && (
@@ -289,11 +285,15 @@ export default function HomePage() {
           )}
           {bags === null && loading && <CatalogSkeleton />}
           {bags?.length === 0 && !loading && !error && (
-            <div className="py-16 text-center">
+            <div className="rounded-[18px] border border-black/[0.07] bg-[#fafbfa] px-6 py-14 text-center">
               <IconSearch size={38} stroke={1.4} className="mx-auto text-muted" />
-              <h2 className="mt-3 font-bold">Ничего не найдено</h2>
-              <p className="mt-1 text-[13px] text-muted">Измените поиск или сбросьте фильтры.</p>
-              <button onClick={resetFilters} className="mt-3 font-semibold text-primary">Сбросить фильтры</button>
+              <h2 className="mt-3 font-bold">{city && !activeFilters && !search ? `В городе ${city.name} пока нет пакетов` : "Ничего не найдено"}</h2>
+              <p className="mx-auto mt-1 max-w-xs text-[13px] leading-5 text-muted">{city && !activeFilters && !search ? "Мы покажем новые предложения сразу после публикации заведениями. Можно проверить другой город." : "Измените поиск или сбросьте фильтры."}</p>
+              <div className="mt-4 flex flex-col items-center justify-center gap-2 sm:flex-row">
+                {(activeFilters > 0 || search) && <button onClick={() => { setSearch(""); resetFilters(); }} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white">Сбросить фильтры</button>}
+                {city && <button onClick={() => setLocationOpen(true)} className="rounded-xl border px-4 py-2.5 text-sm font-semibold text-primary">Выбрать другой город</button>}
+                <button onClick={() => setReloadKey((value) => value + 1)} className="px-3 py-2 text-sm font-semibold text-muted">Обновить</button>
+              </div>
             </div>
           )}
           {bags?.map((bag) => <BagCard key={bag.id} bag={bag} />)}

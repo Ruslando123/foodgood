@@ -17,6 +17,7 @@ import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { resetDb, createFixtures, inMinutes } from "./helpers";
 import { NextRequest } from "next/server";
 import { GET as getBags } from "@/app/api/bags/route";
+import { createPickupReminders } from "@/lib/notifications";
 
 beforeEach(resetDb);
 afterEach(() => vi.restoreAllMocks());
@@ -65,6 +66,24 @@ describe("каталог по городу", () => {
     const astanaResponse = await getBags(new NextRequest("http://localhost/api/bags?city=astana"));
     const astanaData = await astanaResponse.json();
     expect(astanaData.bags.map((bag: { id: string }) => bag.id)).toEqual([astanaBag.id]);
+  });
+});
+
+describe("внутренние уведомления", () => {
+  it("создаёт одно напоминание перед выдачей и не дублирует его", async () => {
+    const { customer, bag } = await createFixtures({ pickupStart: inMinutes(30), pickupEnd: inMinutes(90) });
+    const order = await createOrder(customer.id, bag.id, 1);
+    expect(order.status).toBe("PAID");
+    await expect(createPickupReminders()).resolves.toBe(1);
+    await expect(createPickupReminders()).resolves.toBe(0);
+    await expect(prisma.notification.findMany({ where: { userId: customer.id, type: "PICKUP_REMINDER" } })).resolves.toHaveLength(1);
+  });
+
+  it("учитывает отключённые напоминания", async () => {
+    const { customer, bag } = await createFixtures({ pickupStart: inMinutes(30), pickupEnd: inMinutes(90) });
+    await prisma.user.update({ where: { id: customer.id }, data: { notificationReminders: false } });
+    await createOrder(customer.id, bag.id, 1);
+    await expect(createPickupReminders()).resolves.toBe(0);
   });
 });
 
