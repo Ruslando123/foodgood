@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { VENUE_CATEGORIES } from "@/lib/config";
+import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { requireMerchant, requireUser } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
       throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
     }
     const venue = await prisma.venue.create({
-      data: { name, address, lat, lng, category: cat, description, contactPhone, openingHours, photo, ownerId: owner.id },
+      data: { name, address, lat, lng, cityId: nearestKazakhstanCity(lat, lng).id, category: cat, description, contactPhone, openingHours, photo, ownerId: owner.id },
     });
     return json({ venue }, { status: 201 });
   });

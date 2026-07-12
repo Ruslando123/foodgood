@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { normalizePhone } from "@/lib/auth";
 import { VENUE_CATEGORIES } from "@/lib/config";
+import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { requireAdmin } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
@@ -53,6 +54,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const owner = await prisma.user.findUnique({ where: { phone } });
     if (!owner) throw new ApiError(404, "OWNER_NOT_FOUND", "Пользователь не найден. Попросите владельца сначала войти в приложение.");
     if (owner.role === "ADMIN") throw new ApiError(409, "ADMIN_CANNOT_BE_OWNER", "Администратора нельзя назначить владельцем");
+    const lat = finiteNumber(body.lat, "lat", { min: -90, max: 90 });
+    const lng = finiteNumber(body.lng, "lng", { min: -180, max: 180 });
 
     const [venue] = await prisma.$transaction([
       prisma.venue.update({
@@ -62,8 +65,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           address,
           category,
           ownerId: owner.id,
-          lat: finiteNumber(body.lat, "lat", { min: -90, max: 90 }),
-          lng: finiteNumber(body.lng, "lng", { min: -180, max: 180 }),
+          lat,
+          lng,
+          cityId: nearestKazakhstanCity(lat, lng).id,
           description: optionalString(body.description, "description", 1000),
           photo: optionalString(body.photo, "photo", 200) || "🍽️",
         },

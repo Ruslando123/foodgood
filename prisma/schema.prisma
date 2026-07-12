@@ -55,6 +55,7 @@ model Venue {
   address          String
   lat              Float
   lng              Float
+  cityId           String   @default("almaty")
   category         String   @default("CAFE") // CAFE | BAKERY | SUPERMARKET | RESTAURANT
   photo            String   @default("🍽️") // emoji or image URL
   contactPhone     String   @default("")
@@ -68,6 +69,8 @@ model Venue {
   bags  Bag[]
   favorites Favorite[]
   reviews   Review[]
+
+  @@index([cityId, status])
 }
 
 model Bag {

@@ -15,6 +15,8 @@ import { dispatchOutbox } from "@/lib/outbox";
 import { consumeOtp, issueOtp } from "@/lib/otp";
 import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { resetDb, createFixtures, inMinutes } from "./helpers";
+import { NextRequest } from "next/server";
+import { GET as getBags } from "@/app/api/bags/route";
 
 beforeEach(resetDb);
 afterEach(() => vi.restoreAllMocks());
@@ -45,6 +47,26 @@ async function cancelBagWithRefunds(merchantId: string, bagId: string) {
   await reconcilePendingPayments();
   return bag;
 }
+
+describe("каталог по городу", () => {
+  it("не показывает пакет Астаны в каталоге Алматы", async () => {
+    const { merchant, bag: almatyBag } = await createFixtures();
+    const astanaVenue = await prisma.venue.create({
+      data: { name: "Пекарня Астаны", address: "Астана", lat: 51.1694, lng: 71.4491, cityId: "astana", ownerId: merchant.id },
+    });
+    const astanaBag = await prisma.bag.create({
+      data: { venueId: astanaVenue.id, title: "Пакет Астаны", price: 1000, originalPrice: 3000, quantityTotal: 2, quantityLeft: 2, pickupStart: inMinutes(30), pickupEnd: inMinutes(120) },
+    });
+
+    const almatyResponse = await getBags(new NextRequest("http://localhost/api/bags?city=almaty"));
+    const almatyData = await almatyResponse.json();
+    expect(almatyData.bags.map((bag: { id: string }) => bag.id)).toEqual([almatyBag.id]);
+
+    const astanaResponse = await getBags(new NextRequest("http://localhost/api/bags?city=astana"));
+    const astanaData = await astanaResponse.json();
+    expect(astanaData.bags.map((bag: { id: string }) => bag.id)).toEqual([astanaBag.id]);
+  });
+});
 
 describe("createOrder", () => {
   it("возвращает PENDING_PAYMENT до запуска worker", async () => {

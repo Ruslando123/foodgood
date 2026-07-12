@@ -57,3 +57,7 @@ export function nearestKazakhstanCity(lat: number, lng: number): KazakhstanCity 
     haversineKm(lat, lng, city.lat, city.lng) < haversineKm(lat, lng, nearest.lat, nearest.lng) ? city : nearest
   );
 }
+
+export function kazakhstanCityById(id: string | null | undefined): KazakhstanCity | null {
+  return KAZAKHSTAN_CITIES.find((city) => city.id === id) ?? null;
+}

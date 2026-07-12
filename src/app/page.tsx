@@ -131,6 +131,7 @@ export default function HomePage() {
       query.set("lat", String(location.lat));
       query.set("lng", String(location.lng));
     }
+    if (city) query.set("city", city.id);
     if (search.trim()) query.set("q", search.trim());
     if (category) query.set("category", category);
     if (maxPrice) query.set("maxPrice", maxPrice);
@@ -140,7 +141,7 @@ export default function HomePage() {
     if (todayOnly) query.set("today", "1");
     query.set("sort", sort === "distance" && !location ? "soon" : sort);
     return query.toString();
-  }, [category, location, maxDistance, maxPrice, minDiscount, minRating, search, sort, todayOnly]);
+  }, [category, city, location, maxDistance, maxPrice, minDiscount, minRating, search, sort, todayOnly]);
 
   useEffect(() => {
     const controller = new AbortController();

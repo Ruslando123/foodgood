@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { VENUE_CATEGORIES } from "@/lib/config";
+import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { requireMerchant } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
@@ -26,6 +27,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const body = await readJsonObject(req);
     const category = requiredString(body.category, "category", { max: 40 });
     if (!(category in VENUE_CATEGORIES)) throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
+    const lat = finiteNumber(body.lat, "lat", { min: -90, max: 90 });
+    const lng = finiteNumber(body.lng, "lng", { min: -180, max: 180 });
     const venue = await prisma.venue.update({ where: { id }, data: {
       name: requiredString(body.name, "name", { max: 120 }),
       address: requiredString(body.address, "address", { max: 300 }),
@@ -33,8 +36,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       contactPhone: optionalString(body.contactPhone, "contactPhone", 40),
       openingHours: optionalString(body.openingHours, "openingHours", 500),
       category,
-      lat: finiteNumber(body.lat, "lat", { min: -90, max: 90 }),
-      lng: finiteNumber(body.lng, "lng", { min: -180, max: 180 }),
+      lat,
+      lng,
+      cityId: nearestKazakhstanCity(lat, lng).id,
     } });
     return json({ venue });
   });
