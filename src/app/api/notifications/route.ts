@@ -28,6 +28,16 @@ export async function PATCH(request: NextRequest) {
       });
       return json({ ok: true, unreadCount: 0 });
     }
+    if (body.action === "markRead") {
+      if (typeof body.notificationId !== "string" || !body.notificationId) {
+        throw new ApiError(400, "NOTIFICATION_ID_REQUIRED", "Не указано уведомление");
+      }
+      const updated = await prisma.notification.updateMany({
+        where: { id: body.notificationId, userId: user.id, channel: "IN_APP", readAt: null },
+        data: { readAt: new Date() },
+      });
+      return json({ ok: true, updated: updated.count });
+    }
     if (typeof body.reminders !== "boolean" || typeof body.offers !== "boolean") {
       throw new ApiError(400, "INVALID_PREFERENCES", "Некорректные настройки уведомлений");
     }
