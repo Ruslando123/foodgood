@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/shared/server/api";
 import { redisReady } from "@/lib/redis";
+import { randomUUID } from "crypto";
 
 const PROCESSING_TTL_MS = 60_000;
 const RESULT_TTL_MS = 24 * 60 * 60_000;
@@ -31,7 +32,7 @@ export function normalizeIdempotencyKey(raw: string | null): string {
 export async function idempotentOrderRequest<T>(
   key: string,
   fingerprint: string,
-  work: (idempotencyRecordId: string) => Promise<T>
+  work: (idempotencyRecordId: string, ownerToken: string) => Promise<T>
 ): Promise<T> {
   const redis = await redisReady();
   const cacheKey = `idempotency:order:${key}`;
@@ -48,9 +49,10 @@ export async function idempotentOrderRequest<T>(
 
   let owner = false;
   let ownerId: string | null = null;
+  let ownerToken = randomUUID();
   try {
     const created = await prisma.orderIdempotencyKey.create({
-      data: { key, fingerprint, status: "PROCESSING", expiresAt: processingExpiresAt },
+      data: { key, fingerprint, ownerToken, status: "PROCESSING", expiresAt: processingExpiresAt },
     });
     owner = true;
     ownerId = created.id;
@@ -74,17 +76,19 @@ export async function idempotentOrderRequest<T>(
       return result;
     }
     if (entry.status === "FAILED" || entry.expiresAt <= new Date()) {
+      const nextOwnerToken = randomUUID();
       const claimed = await prisma.orderIdempotencyKey.updateMany({
         where: {
           id: entry.id,
           fingerprint,
           OR: [{ status: "FAILED" }, { expiresAt: { lte: new Date() } }],
         },
-        data: { status: "PROCESSING", resultJson: null, expiresAt: new Date(Date.now() + PROCESSING_TTL_MS) },
+        data: { ownerToken: nextOwnerToken, status: "PROCESSING", resultJson: null, expiresAt: new Date(Date.now() + PROCESSING_TTL_MS) },
       });
       if (claimed.count) {
         owner = true;
         ownerId = entry.id;
+        ownerToken = nextOwnerToken;
       }
       continue;
     }
@@ -112,17 +116,20 @@ export async function idempotentOrderRequest<T>(
 
   if (!ownerId) throw new Error("Idempotency ownership was not acquired");
   try {
-    const result = await work(ownerId);
+    const result = await work(ownerId, ownerToken);
     const resultExpiresAt = new Date(Date.now() + RESULT_TTL_MS);
-    await prisma.orderIdempotencyKey.update({
-      where: { key },
+    const completed = await prisma.orderIdempotencyKey.updateMany({
+      where: { id: ownerId, ownerToken, status: "PROCESSING" },
       data: { status: "SUCCEEDED", resultJson: JSON.stringify(result), expiresAt: resultExpiresAt },
     });
+    if (completed.count !== 1) {
+      throw new ApiError(409, "IDEMPOTENCY_OWNERSHIP_LOST", "Запрос был безопасно перехвачен повторной попыткой");
+    }
     if (redis) await redis.set(cacheKey, JSON.stringify({ fingerprint, result }), "PX", REDIS_CACHE_TTL_MS).catch(() => undefined);
     return result;
   } catch (error) {
     await prisma.orderIdempotencyKey.updateMany({
-      where: { key, status: "PROCESSING" },
+      where: { id: ownerId, ownerToken, status: "PROCESSING" },
       data: { status: "FAILED" },
     });
     throw error;

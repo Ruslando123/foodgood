@@ -52,23 +52,42 @@ export async function PATCH(
       }
     }
 
-    const bag = await prisma.bag.findUnique({ where: { id }, include: { venue: true } });
-    if (!bag || bag.venue.ownerId !== user.id) {
-      throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
-    }
     if (body.quantityLeft === undefined) {
       if (body.action !== "details") throw new ApiError(400, "NO_CHANGES", "Нечего изменять");
-      if (bag.status !== "ACTIVE" && bag.status !== "SOLD_OUT") throw new ApiError(409, "BAG_NOT_EDITABLE", "Закрытый пакет нельзя редактировать");
       const title = requiredString(body.title, "title", { max: 120 });
       const description = optionalString(body.description, "description", 1000);
       const price = integer(body.price, "price", { min: 1, max: 10_000_000 });
       const originalPrice = integer(body.originalPrice, "originalPrice", { min: price, max: 10_000_000 });
       const pickupStart = dateValue(body.pickupStart, "pickupStart"); const pickupEnd = dateValue(body.pickupEnd, "pickupEnd");
       if (pickupEnd <= pickupStart || pickupEnd <= new Date()) throw new ApiError(400, "INVALID_PICKUP_WINDOW", "Некорректное окно выдачи");
-      const reserved = await prisma.order.count({ where: { bagId: id, status: { in: ["PENDING_PAYMENT", "PAID", "CAPTURE_PENDING", "COMPLETED"] } } });
-      if (reserved && (price !== bag.price || pickupStart.getTime() !== bag.pickupStart.getTime() || pickupEnd.getTime() !== bag.pickupEnd.getTime())) throw new ApiError(409, "BAG_HAS_ORDERS", "После первого заказа цену и время выдачи менять нельзя");
-      const current = await prisma.bag.update({ where: { id }, data: { title, description, price, originalPrice, pickupStart, pickupEnd }, include: { venue: true } });
+      const current = await prisma.$transaction(async (tx) => {
+        // createOrder acquires the same lock before reading price/window and
+        // reserving inventory, so an edit and a purchase cannot interleave.
+        await tx.$queryRaw`SELECT id FROM "Bag" WHERE id = ${id} FOR UPDATE`;
+        const bag = await tx.bag.findUnique({ where: { id }, include: { venue: true } });
+        if (!bag || bag.venue.ownerId !== user.id) {
+          throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
+        }
+        if (bag.status !== "ACTIVE" && bag.status !== "SOLD_OUT") {
+          throw new ApiError(409, "BAG_NOT_EDITABLE", "Закрытый пакет нельзя редактировать");
+        }
+        const reserved = await tx.order.count({
+          where: { bagId: id, status: { in: ["PENDING_PAYMENT", "PAID", "CAPTURE_PENDING", "COMPLETED"] } },
+        });
+        if (reserved && (price !== bag.price || pickupStart.getTime() !== bag.pickupStart.getTime() || pickupEnd.getTime() !== bag.pickupEnd.getTime())) {
+          throw new ApiError(409, "BAG_HAS_ORDERS", "После первого заказа цену и время выдачи менять нельзя");
+        }
+        return tx.bag.update({
+          where: { id },
+          data: { title, description, price, originalPrice, pickupStart, pickupEnd },
+          include: { venue: true },
+        });
+      });
       return json({ bag: current });
+    }
+    const bag = await prisma.bag.findUnique({ where: { id }, include: { venue: true } });
+    if (!bag || bag.venue.ownerId !== user.id) {
+      throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
     }
     if (bag.status !== "ACTIVE" && bag.status !== "SOLD_OUT") {
       throw new ApiError(409, "BAG_NOT_EDITABLE", "Отменённый или просроченный пакет нельзя вернуть в продажу");

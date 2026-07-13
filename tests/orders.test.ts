@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
-import { MockPaymentProvider, paymentProvider } from "@/lib/payments";
+import { MockPaymentProvider, PaymentProviderError, paymentProvider } from "@/lib/payments";
 import {
   createOrder as queueOrder,
   cancelOrder as queueCancelOrder,
@@ -9,8 +9,10 @@ import {
   customerOrderScopeWhere,
   cancelBagWithRefunds as queueCancelBagWithRefunds,
   reconcilePendingPayments,
+  markOrderReady,
   OrderError,
 } from "@/modules/orders";
+import { providerCall } from "@/lib/orders";
 import { PLATFORM_FEE_PCT } from "@/lib/config";
 import { dispatchOutbox } from "@/lib/outbox";
 import { consumeOtp, issueOtp } from "@/lib/otp";
@@ -22,9 +24,25 @@ import { POST as verifyPhone } from "@/app/api/auth/verify/route";
 import { scheduleMissingPickupReminders } from "@/lib/notifications";
 import { runBatchJobs } from "@/lib/jobs";
 import { moderateReview, reconcileVenueRatings } from "@/lib/reviews";
+import { idempotentOrderRequest } from "@/modules/orders/idempotency";
+import { POST as configureMockFault, GET as getMockFault } from "@/app/api/internal/mock-payment-fault/route";
+import {
+  applyMockPaymentFault,
+  flushMockPaymentFaultStats,
+  getMockPaymentFaultStats,
+  incrementMockPaymentFaultStats,
+  mockPaymentFaultStatsAreValid,
+  setMockPaymentFault,
+} from "@/lib/mock-payment-fault";
+import { PAYMENT_PROVIDER_TIMEOUT_MS } from "@/lib/payment-config";
+import { toCustomerOrderDto, toMerchantOrderDto, toPublicVenueDto } from "@/modules/api/dto";
 
 beforeEach(resetDb);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
 
 // Most lifecycle assertions below concern the settled business result. The
 // public functions now intentionally return intermediate states, so settle
@@ -412,6 +430,38 @@ describe("phone OTP", () => {
       .resolves.toMatchObject({ attempts: 1, consumedAt: null });
   });
 
+  it("учитывает максимум пять из десяти параллельных неверных попыток", async () => {
+    const phone = "+77010005679";
+    await issueOtp(phone);
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 10 }, () => consumeOtp(phone, "1111"))
+    );
+
+    expect(results.every((result) => result.status === "rejected")).toBe(true);
+    await expect(prisma.otpChallenge.findFirstOrThrow({ where: { phone } })).resolves.toMatchObject({
+      attempts: 5,
+      activeKey: null,
+      consumedAt: expect.any(Date),
+    });
+  });
+
+  it("сериализует параллельные правильный и неправильный коды", async () => {
+    const phone = "+77010005680";
+    const issued = await issueOtp(phone);
+
+    const [correct, wrong] = await Promise.allSettled([
+      consumeOtp(phone, issued.devCode ?? "0000"),
+      consumeOtp(phone, "1111"),
+    ]);
+
+    expect(correct.status).toBe("fulfilled");
+    expect(wrong.status).toBe("rejected");
+    const challenge = await prisma.otpChallenge.findFirstOrThrow({ where: { phone } });
+    expect(challenge).toMatchObject({ activeKey: null, consumedAt: expect.any(Date) });
+    expect(challenge.attempts).toBeLessThanOrEqual(1);
+  });
+
   it("сериализует параллельные запросы одного кода", async () => {
     const phone = "+77010007890";
     const results = await Promise.allSettled([issueOtp(phone), issueOtp(phone)]);
@@ -441,6 +491,288 @@ describe("distributed rate limit", () => {
     );
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(3);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(2);
+  });
+});
+
+describe("idempotency fencing заказа", () => {
+  it("повтор после потери успешного ответа возвращает тот же единственный заказ", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 2 });
+    const key = `${customer.id}:lost-response-${crypto.randomUUID()}`;
+    const fingerprint = `${bag.id}:1`;
+
+    const created = await idempotentOrderRequest(key, fingerprint, (recordId, ownerToken) =>
+      queueOrder(customer.id, bag.id, 1, recordId, ownerToken)
+    );
+    // Клиент не получил created и повторяет тот же запрос с тем же ключом.
+    const retried = await idempotentOrderRequest(key, fingerprint, (recordId, ownerToken) =>
+      queueOrder(customer.id, bag.id, 1, recordId, ownerToken)
+    );
+
+    expect(retried.id).toBe(created.id);
+    expect(toCustomerOrderDto(retried)).toMatchObject({
+      id: created.id,
+      createdAt: expect.any(String),
+      bag: { pickupStart: expect.any(String), pickupEnd: expect.any(String) },
+    });
+    await expect(prisma.order.count({ where: { bagId: bag.id, userId: customer.id } })).resolves.toBe(1);
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 1 });
+  });
+
+  it("старый владелец после reclaim не создаёт второй заказ", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 2 });
+    const key = `${customer.id}:stale-owner-${crypto.randomUUID()}`;
+    let signalStarted!: () => void;
+    let releaseOld!: () => void;
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+
+    const oldRequest = idempotentOrderRequest(key, `${bag.id}:1`, async (recordId, ownerToken) => {
+      signalStarted();
+      await oldGate;
+      return queueOrder(customer.id, bag.id, 1, recordId, ownerToken);
+    });
+    await started;
+    await prisma.orderIdempotencyKey.update({ where: { key }, data: { expiresAt: new Date(0) } });
+
+    const winner = await idempotentOrderRequest(key, `${bag.id}:1`, (recordId, ownerToken) =>
+      queueOrder(customer.id, bag.id, 1, recordId, ownerToken)
+    );
+    releaseOld();
+
+    await expect(oldRequest).rejects.toThrow("потеряно");
+    await expect(prisma.order.count({ where: { idempotencyRecordId: { not: null } } })).resolves.toBe(1);
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 1 });
+    await expect(prisma.orderIdempotencyKey.findUniqueOrThrow({ where: { key } })).resolves.toMatchObject({ status: "SUCCEEDED", resultJson: expect.stringContaining(winner.id) });
+  });
+});
+
+describe("безопасные API DTO", () => {
+  it("не сериализует внутренние поля заказа, платежа, пользователя и заведения", async () => {
+    const { customer, bag } = await createFixtures();
+    await prisma.user.update({
+      where: { id: customer.id },
+      data: { telegramId: "dto-secret-telegram", sessionVersion: 7 },
+    });
+    const order = await createOrder(customer.id, bag.id, 1);
+    const raw = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+      include: { user: true, payment: true, review: true, bag: { include: { venue: true } } },
+    });
+
+    const json = JSON.stringify({
+      customer: toCustomerOrderDto(raw),
+      merchant: toMerchantOrderDto(raw),
+      venue: toPublicVenueDto(raw.bag.venue),
+    });
+
+    for (const field of [
+      "providerRef", "sessionVersion", "telegramId", "ownerId",
+      "idempotencyRecordId", "leaseOwner", "leaseExpiresAt", "supportNote",
+    ]) {
+      expect(json).not.toContain(`\"${field}\"`);
+    }
+    expect(JSON.parse(json)).toMatchObject({
+      customer: { payment: { status: "HELD" } },
+      merchant: { user: { phone: customer.phone } },
+    });
+  });
+});
+
+describe("staging mock payment fault control", () => {
+  const secret = "load-control-secret";
+  const validBody = {
+    runId: "run-test-1234",
+    delayMs: 0,
+    errorRate: 0,
+    timeoutRate: 0,
+    timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
+    enabledSeconds: 60,
+  };
+
+  function request(body: Record<string, unknown>, token = secret) {
+    return new NextRequest("http://localhost/api/internal/mock-payment-fault", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("без LOAD_TEST_MODE скрывает endpoint через 404", async () => {
+    vi.stubEnv("LOAD_TEST_MODE", "false");
+    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
+    const response = await configureMockFault(request(validBody));
+    expect(response.status).toBe(404);
+  });
+
+  it("с неправильным secret возвращает 404", async () => {
+    vi.stubEnv("LOAD_TEST_MODE", "true");
+    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
+    const response = await configureMockFault(request(validBody, "wrong-secret"));
+    expect(response.status).toBe(404);
+  });
+
+  it("отклоняет некорректный runId", async () => {
+    vi.stubEnv("LOAD_TEST_MODE", "true");
+    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
+    const response = await configureMockFault(request({ ...validBody, runId: "!" }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "INVALID_RUN_ID" } });
+  });
+
+  it("требует timeoutDelayMs больше внутреннего provider timeout", async () => {
+    vi.stubEnv("LOAD_TEST_MODE", "true");
+    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
+    const response = await configureMockFault(request({ ...validBody, timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "INVALID_TIMEOUT_DELAY" } });
+  });
+
+  it("публикует acknowledgement только после фактического mock provider вызова", async () => {
+    vi.stubEnv("LOAD_TEST_MODE", "true");
+    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
+    const configured = await configureMockFault(request(validBody));
+    expect(configured.status).toBe(200);
+    await expect(configured.json()).resolves.toMatchObject({ enabled: true, runId: validBody.runId });
+
+    await applyMockPaymentFault();
+    await flushMockPaymentFaultStats(true);
+    const response = await getMockFault(new NextRequest(
+      `http://localhost/api/internal/mock-payment-fault?runId=${validBody.runId}`,
+      { headers: { authorization: `Bearer ${secret}` } }
+    ));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      configured: true,
+      applied: true,
+      statistics: { appliedCount: 1, delayedCount: 1 },
+    });
+    await setMockPaymentFault(null);
+  });
+
+  it("атомарно суммирует snapshots нескольких payment workers", async () => {
+    const now = new Date().toISOString();
+    const configuration = {
+      runId: "run-atomic-workers",
+      delayMs: 250,
+      errorRate: 0.1,
+      timeoutRate: 0.05,
+      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
+      enabledUntil: new Date(Date.now() + 60_000).toISOString(),
+    };
+    await setMockPaymentFault(configuration);
+    const snapshot = {
+      ...configuration,
+      appliedCount: 1,
+      delayedCount: 1,
+      errorCount: 1,
+      timeoutCount: 1,
+      firstAppliedAt: now,
+      lastAppliedAt: now,
+    };
+
+    await Promise.all([
+      incrementMockPaymentFaultStats(snapshot),
+      incrementMockPaymentFaultStats(snapshot),
+    ]);
+
+    await expect(getMockPaymentFaultStats(configuration.runId)).resolves.toMatchObject({
+      appliedCount: 2,
+      delayedCount: 2,
+      errorCount: 2,
+      timeoutCount: 2,
+    });
+    await setMockPaymentFault(null);
+  });
+
+  it("errorRate=1 переводит HOLD operation в RETRY", async () => {
+    vi.stubEnv("LOAD_TEST_MODE", "true");
+    const { customer, bag } = await createFixtures();
+    const runId = "run-error-retry";
+    await setMockPaymentFault({
+      runId,
+      delayMs: 0,
+      errorRate: 1,
+      timeoutRate: 0,
+      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
+      enabledUntil: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const order = await queueOrder(customer.id, bag.id, 1);
+
+    await reconcilePendingPayments();
+
+    await expect(prisma.paymentOperation.findFirstOrThrow({ where: { payment: { orderId: order.id } } }))
+      .resolves.toMatchObject({ status: "RETRY", attempts: 1, lastError: "Controlled mock provider error" });
+    await flushMockPaymentFaultStats(true);
+    await setMockPaymentFault(null);
+  });
+
+  it("timeout завершается на 10 секундах, а поздний HOLD восстанавливается по idempotency key", async () => {
+    vi.stubEnv("LOAD_TEST_MODE", "true");
+    const runId = "run-real-timeout";
+    await setMockPaymentFault({
+      runId,
+      delayMs: 0,
+      errorRate: 0,
+      timeoutRate: 1,
+      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
+      enabledUntil: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const provider = new MockPaymentProvider();
+    vi.useFakeTimers();
+    const underlying = provider.hold(1_000, "timeout-order", "timeout-key");
+    const guarded = providerCall("hold", underlying).catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(PAYMENT_PROVIDER_TIMEOUT_MS - 1);
+    let settled = false;
+    void guarded.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const timeout = await guarded;
+    expect(timeout).toBeInstanceOf(PaymentProviderError);
+    expect((timeout as PaymentProviderError).code).toBe("TIMEOUT");
+
+    await vi.advanceTimersByTimeAsync(1);
+    const lateHold = await underlying;
+    vi.useRealTimers();
+    await flushMockPaymentFaultStats(true);
+    await setMockPaymentFault(null);
+    const repeated = await provider.hold(1_000, "timeout-order", "timeout-key");
+    expect(repeated.providerRef).toBe(lateHold.providerRef);
+  });
+
+  it("load:check отклоняет отсутствие acknowledgement", () => {
+    expect(mockPaymentFaultStatsAreValid(null)).toBe(false);
+    expect(mockPaymentFaultStatsAreValid({
+      runId: "run-no-ack",
+      delayMs: 0,
+      errorRate: 0,
+      timeoutRate: 0,
+      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
+      appliedCount: 0,
+      delayedCount: 0,
+      errorCount: 0,
+      timeoutCount: 0,
+      firstAppliedAt: null,
+      lastAppliedAt: null,
+    })).toBe(false);
+  });
+
+  it("load:check отклоняет настроенный, но не зафиксированный timeout", () => {
+    expect(mockPaymentFaultStatsAreValid({
+      runId: "run-no-timeout",
+      delayMs: 0,
+      errorRate: 0,
+      timeoutRate: 1,
+      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
+      appliedCount: 1,
+      delayedCount: 0,
+      errorCount: 0,
+      timeoutCount: 0,
+      firstAppliedAt: new Date().toISOString(),
+      lastAppliedAt: new Date().toISOString(),
+    })).toBe(false);
   });
 });
 
@@ -691,10 +1023,30 @@ describe("expireStale (ленивое истечение)", () => {
 });
 
 describe("расширенные продуктовые сценарии", () => {
+  it("атомарно разрешает ready одновременно с redeem", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    const [ready, redeem] = await Promise.allSettled([
+      markOrderReady(merchant.id, order.id),
+      queueRedeemOrder(merchant.id, order.pickupCode),
+    ]);
+
+    expect(redeem.status).toBe("fulfilled");
+    if (ready.status === "rejected") expect(ready.reason).toBeInstanceOf(OrderError);
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "CAPTURE_PENDING" });
+    await expect(prisma.paymentOperation.count({
+      where: { payment: { orderId: order.id }, type: "CAPTURE" },
+    })).resolves.toBe(1);
+
+    await reconcilePendingPayments();
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "COMPLETED" });
+  });
+
   it("выдаёт заказ после отметки READY_FOR_PICKUP", async () => {
     const { merchant, customer, bag } = await createFixtures();
     const order = await createOrder(customer.id, bag.id, 1);
-    await prisma.order.update({ where: { id: order.id }, data: { status: "READY_FOR_PICKUP" } });
+    await markOrderReady(merchant.id, order.id);
     const completed = await redeemOrder(merchant.id, order.pickupCode);
     expect(completed.status).toBe("COMPLETED");
   });

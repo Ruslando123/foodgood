@@ -69,16 +69,15 @@ LOAD_VENUES=100 LOAD_BAGS_PER_VENUE=50 LOAD_EXPIRY_ORDERS=10000 \
 npm run load:seed
 
 BASE_URL=https://staging.example \
-CUSTOMER_COOKIE='foodgood_session=...' \
-MERCHANT_COOKIE='foodgood_session=...' \
-LAST_BAG_ID='...' \
-PICKUP_CODES='ABC234,DEF567' \
+LOAD_FIXTURE_FILE=load/fixtures.local.json \
+LOAD_TEST_CONTROL_SECRET='staging-only-secret' \
 npm run load:k6
 
+LOAD_FIXTURE_FILE=load/fixtures.local.json \
 LOAD_DRAIN_TIMEOUT_MS=300000 npm run load:check
 ```
 
-Seed создаёт production-подобный каталог и отдельный пакет с 10 000 заказов, истекающий во время теста. Финальная проверка автоматически контролирует отсутствие отрицательных остатков, уникальность HOLD/CAPTURE/REFUND, queue drain time и просроченные lease. Используйте seed только на одноразовой staging-базе. Пока production provider не подключён, payment-сценарии запускаются только на изолированном staging с явно разрешённым mock.
+Seed создаёт production-подобный каталог, пул изолированных customer/merchant-сессий, отдельный пакет с остатком `1`, большой degradation-пакет, оплаченные заказы для выдачи и 10 000 истекающих заказов. Сессионные cookies пишутся с правами `0600` в игнорируемый `load/fixtures.local.json` и не выводятся в лог. Web и payments worker изолированного staging должны получить `LOAD_TEST_MODE=true` и одинаковый `LOAD_TEST_CONTROL_SECRET`; production blueprint оставляет mode выключенным и вообще не содержит control secret. k6 аварийно останавливается, если fault не сохранился или payment worker не подтвердил его применение. Финальная проверка контролирует fault statistics, терминальные ошибки, согласованность Order/Payment/Operation, успешные HOLD/CAPTURE, точного победителя last-bag, queue drain и lease.
 
 ## Production-инфраструктура
 
@@ -90,6 +89,7 @@ Seed создаёт production-подобный каталог и отдельн
 - Миграции используют отдельный `DIRECT_URL`; PgBouncer URL применяется только работающими web/worker процессами.
 - Health разделён на дешёвые `/api/health/live` и `/api/health/ready`, а также кэшируемый на 20 секунд `/api/health/deep` для очередей, workers и S3.
 - Pickup reminder создаётся как scheduled durable job при успешном HOLD; старые заказы один раз догоняются командой `npm run jobs:backfill-reminders` после миграций, без постоянного сканирования обычным worker.
+- Worker `/metrics` запускается только при явно заданном `WORKER_METRICS_PORT`; поэтому локальные workers не конфликтуют за порт, а изолированные deployment-процессы могут использовать собственные значения.
 
 ## Текущее состояние
 
@@ -105,24 +105,21 @@ Seed создаёт production-подобный каталог и отдельн
 
 ### Перед пилотом
 
-- Подключить реальный SMS-шлюз вместо `DEV_OTP_CODE`, добавить TTL/лимиты попыток и защиту от перебора кода.
-- Подключить реальный платежный провайдер: hold/capture/refund, webhooks, идемпотентность, сверку зависших холдов и журнал платёжных событий.
-- Настроить проверяемые бэкапы PostgreSQL и отдельные окружения dev/staging/prod.
+- Выдать production credentials Mobizon и проверить approved sender, delivery receipts и баланс; OTP уже имеет TTL, rate limit, атомарный лимит попыток и production SMS adapter.
+- Добавить Freedom Pay adapter и подписанные webhooks поверх уже реализованных hold/capture/refund, идемпотентности, retries и журнала платёжных событий.
+- Провести и задокументировать восстановление PostgreSQL/S3 из backup в изолированное окружение.
 - Усилить роли и доступы: явная проверка `MERCHANT`, приглашения сотрудников заведения, разделение владельца и кассира.
 
 ### Для продукта
 
-- Добавить избранные заведения, повтор заказа, отзывы после выдачи и жалобы по качеству пакета.
-- Сделать полноценный профиль заведения: фото, график, условия выдачи, контакты, статус модерации.
-- Добавить push/Telegram/SMS-уведомления: заказ оплачен, скоро выдача, заказ выдан, отмена/возврат.
-- Добавить админку для модерации заведений, пакетов, возвратов, жалоб и ручной поддержки пользователей.
-- Подготовить юридические тексты: оферта, политика возвратов, персональные данные, правила качества и ответственности заведений.
+- Добавить повтор заказа с проверкой актуальной цены и доступности пакета.
+- Добавить push-канал и production-шаблоны SMS/Telegram для уже существующей durable notification очереди.
+- Развить жалобы по качеству в отдельный SLA-процесс с вложениями и историей решений.
 
 ### Для эксплуатации
 
-- Подключить Prometheus endpoint и готовые alert rules к выбранному мониторингу.
-- Добавить e2e-тесты для главных сценариев: покупка, отмена, выдача, истечение, регистрация заведения.
-- Добавить CI с `lint`, `build`, `test`, проверкой миграций и seed-данных.
+- Подключить существующие Prometheus endpoints и `ops/alerts.yml` к выбранному production-мониторингу.
+- Расширить production-build e2e сценариями отмены и истечения заказа.
 - Подготовить production-деплой: переменные окружения, секреты, домен, HTTPS, CSP/security headers.
 - Проверить UX на мобильных устройствах и Telegram WebView, включая плохую сеть, отказ геолокации и пустые состояния.
 

@@ -14,6 +14,7 @@ try {
   if (ownDatabase) run("docker", [...compose, "up", "-d", "--wait"]);
   run("npx", ["prisma", "migrate", "deploy"]);
   run("npx", ["tsx", "prisma/seed.ts"]);
+  if (process.env.E2E_SKIP_BUILD !== "true") run("npm", ["run", "build"]);
   run("npx", ["playwright", "test"]);
 } catch (error) {
   failed = true;

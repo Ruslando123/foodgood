@@ -7,6 +7,8 @@ import { PLATFORM_FEE_PCT } from "./config";
 import { telegramNotificationsEnabled } from "./telegram";
 import { paymentFailures, workerClaims, workerFailures, workerJobDuration, workerLeaseLost, workerSuccesses } from "./metrics";
 import { startLeaseHeartbeat } from "./lease-heartbeat";
+import { PAYMENT_PROVIDER_TIMEOUT_MS } from "./payment-config";
+import { transitionBagOrders, transitionOrder } from "@/modules/orders/state-machine";
 
 export class OrderError extends Error {}
 class OperationLeaseLostError extends Error {}
@@ -27,7 +29,6 @@ const MAX_PAYMENT_ATTEMPTS = 5;
 const LEASE_MS = 60_000;
 // Must stay comfortably below LEASE_MS so a worker never holds a lease forever
 // while a provider connection is stalled.
-const PROVIDER_TIMEOUT_MS = 10_000;
 const WORKER_CONCURRENCY = 5;
 
 const orderInclude = { bag: { include: { venue: true } }, payment: true } as const;
@@ -83,7 +84,8 @@ export async function createOrder(
   userId: string,
   bagId: string,
   quantity: number,
-  idempotencyRecordId?: string
+  idempotencyRecordId?: string,
+  idempotencyOwnerToken?: string
 ) {
   assertPaymentProviderReady();
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
@@ -91,6 +93,26 @@ export async function createOrder(
   }
 
   const order = await prisma.$transaction(async (tx) => {
+    if (idempotencyRecordId) {
+      if (!idempotencyOwnerToken) throw new OrderError("Отсутствует owner token идемпотентного запроса");
+      const ownership = await tx.$queryRaw<Array<{ id: string }>>`
+        UPDATE "OrderIdempotencyKey"
+        SET "expiresAt" = now() + interval '60 seconds'
+        WHERE id = ${idempotencyRecordId}
+          AND "ownerToken" = ${idempotencyOwnerToken}
+          AND status = 'PROCESSING'
+        RETURNING id
+      `;
+      if (!ownership.length) throw new OrderError("Владение идемпотентным запросом потеряно");
+      const existing = await tx.order.findUnique({
+        where: { idempotencyRecordId },
+        include: orderInclude,
+      });
+      if (existing) return existing;
+    }
+    // Package edits take the same row lock. This makes the price/window read
+    // and the inventory reservation one serializable domain operation.
+    await tx.$queryRaw`SELECT id FROM "Bag" WHERE id = ${bagId} FOR UPDATE`;
     const bag = await tx.bag.findUnique({ where: { id: bagId } });
     if (!bag || bag.status !== "ACTIVE") throw new OrderError("Пакет недоступен");
     if (bag.pickupEnd <= new Date()) throw new OrderError("Окно выдачи уже закончилось");
@@ -112,18 +134,13 @@ export async function createOrder(
       quantity,
       totalPrice,
       platformFee: Math.round(totalPrice * PLATFORM_FEE_PCT),
+      idempotencyRecordId,
     });
     const payment = await tx.payment.create({
       data: { orderId: created.id, provider: paymentProvider.name, amount: totalPrice },
     });
     await ensureOperation(tx, payment.id, "HOLD");
     const result = await tx.order.findUniqueOrThrow({ where: { id: created.id }, include: orderInclude });
-    if (idempotencyRecordId) {
-      await tx.orderIdempotencyKey.update({
-        where: { id: idempotencyRecordId },
-        data: { status: "SUCCEEDED", resultJson: JSON.stringify(result) },
-      });
-    }
     return result;
   });
 
@@ -167,11 +184,12 @@ export async function redeemOrder(merchantId: string, pickupCode: string) {
   const claimed = await prisma.$transaction(async (tx) => {
     const payment = await tx.payment.findUnique({ where: { orderId: order.id } });
     if (!payment?.providerRef) throw new OrderError("Для заказа не найден reference платежа");
-    const update = await tx.order.updateMany({
-      where: { id: order.id, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
-      data: { status: "CAPTURE_PENDING" },
+    const transitioned = await transitionOrder(tx, {
+      id: order.id,
+      from: ["PAID", "READY_FOR_PICKUP"],
+      to: "CAPTURE_PENDING",
     });
-    if (!update.count) return false;
+    if (!transitioned) return false;
     await ensureOperation(tx, payment.id, "CAPTURE");
     return true;
   });
@@ -182,13 +200,54 @@ export async function redeemOrder(merchantId: string, pickupCode: string) {
   });
 }
 
+export async function markOrderReady(merchantId: string, orderId: string) {
+  return prisma.$transaction(async (tx) => {
+    const order = await tx.order.findFirst({
+      where: { id: orderId, bag: { venue: { ownerId: merchantId } } },
+      include: { user: true, payment: true, bag: { include: { venue: true } } },
+    });
+    if (!order) throw new OrderError("Заказ не найден");
+
+    const transitioned = await transitionOrder(tx, {
+      id: orderId,
+      from: "PAID",
+      to: "READY_FOR_PICKUP",
+    });
+    if (!transitioned) throw new OrderError("Заказ нельзя отметить готовым");
+
+    await tx.notification.upsert({
+      where: { dedupeKey: `order-ready:${orderId}` },
+      update: {},
+      create: {
+        userId: order.userId,
+        channel: "IN_APP",
+        recipient: order.userId,
+        type: "ORDER_READY",
+        status: "SENT",
+        sentAt: new Date(),
+        dedupeKey: `order-ready:${orderId}`,
+        payloadJson: JSON.stringify({
+          orderId,
+          venueName: order.bag.venue.name,
+          title: order.bag.title,
+        }),
+      },
+    });
+
+    return tx.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: { user: true, payment: true, bag: { include: { venue: true } } },
+    });
+  });
+}
+
 /** Cancelling a bag is local/transactional; each paid order gets a refund job. */
 export async function cancelBagWithRefunds(merchantId: string, bagId: string) {
   await prisma.$transaction(async (tx) => {
     const bag = await tx.bag.findUnique({ where: { id: bagId }, include: { venue: true } });
     if (!bag || bag.venue.ownerId !== merchantId) throw new OrderError("Пакет не найден");
     await tx.bag.update({ where: { id: bagId }, data: { status: "CANCELLED" } });
-    await tx.order.updateMany({ where: { bagId, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
+    await transitionBagOrders(tx, bagId, "PENDING_PAYMENT", "CANCELLED");
 
     await tx.batchJob.upsert({
       where: { dedupeKey: `refund-cancelled-bag:${bag.id}` },
@@ -209,11 +268,13 @@ export async function queueRefund(orderId: string, finalStatus: FinalRefundStatu
   return prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { payment: true } });
     if (!order?.payment) return false;
-    const claimed = await tx.order.updateMany({
-      where: { id: orderId, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
-      data: { status: "REFUND_PENDING", refundTargetStatus: finalStatus },
+    const claimed = await transitionOrder(tx, {
+      id: orderId,
+      from: ["PAID", "READY_FOR_PICKUP"],
+      to: "REFUND_PENDING",
+      data: { refundTargetStatus: finalStatus },
     });
-    if (!claimed.count) return false;
+    if (!claimed) return false;
     await ensureOperation(tx, order.payment.id, "REFUND");
     return true;
   });
@@ -347,7 +408,8 @@ async function finalizeHold(operationId: string, leaseToken: string, paymentId: 
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { bag: true } });
     if (!order) throw new OrderError("Заказ не найден");
     if (order.status === "PENDING_PAYMENT" && ["ACTIVE", "SOLD_OUT"].includes(order.bag.status) && order.bag.pickupEnd > new Date()) {
-      await tx.order.update({ where: { id: orderId }, data: { status: "PAID" } });
+      const paid = await transitionOrder(tx, { id: orderId, from: "PENDING_PAYMENT", to: "PAID" });
+      if (!paid) throw new OrderError("Статус заказа уже изменился");
       await tx.batchJob.upsert({
         where: { dedupeKey: `pickup-reminder:${orderId}` },
         update: {},
@@ -361,11 +423,13 @@ async function finalizeHold(operationId: string, leaseToken: string, paymentId: 
       });
     } else if (order.status !== "REFUND_PENDING") {
       const finalStatus: FinalRefundStatus = order.bag.pickupEnd <= new Date() ? "EXPIRED" : "CANCELLED";
-      const queued = await tx.order.updateMany({
-        where: { id: orderId, status: { in: ["PENDING_PAYMENT", "CANCELLED", "EXPIRED"] } },
-        data: { status: "REFUND_PENDING", refundTargetStatus: finalStatus },
+      const queued = await transitionOrder(tx, {
+        id: orderId,
+        from: ["PENDING_PAYMENT", "CANCELLED", "EXPIRED"],
+        to: "REFUND_PENDING",
+        data: { refundTargetStatus: finalStatus },
       });
-      if (queued.count) await ensureOperation(tx, paymentId, "REFUND");
+      if (queued) await ensureOperation(tx, paymentId, "REFUND");
     }
     await recordPaymentEvent(tx, { operationId, paymentId, orderId, provider: paymentProvider.name, providerRef, type: "HOLD", status: "SUCCEEDED" });
     await succeedOperation(tx, operationId, leaseToken);
@@ -376,7 +440,12 @@ async function finalizeCapture(operationId: string, leaseToken: string, paymentI
   await prisma.$transaction(async (tx) => {
     await renewOperationLease(tx, operationId, leaseToken);
     await tx.payment.update({ where: { id: paymentId }, data: { status: "CAPTURED" } });
-    await tx.order.updateMany({ where: { id: orderId, status: "CAPTURE_PENDING" }, data: { status: "COMPLETED", completedAt: new Date() } });
+    await transitionOrder(tx, {
+      id: orderId,
+      from: "CAPTURE_PENDING",
+      to: "COMPLETED",
+      data: { completedAt: new Date() },
+    });
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { user: true, bag: { include: { venue: true } } } });
     if (order?.status === "COMPLETED" && order.user.telegramId && telegramNotificationsEnabled()) {
       await tx.outboxMessage.upsert({
@@ -403,12 +472,13 @@ async function finalizeRefund(operationId: string, leaseToken: string, paymentId
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { bag: true } });
     if (!order) throw new OrderError("Заказ не найден");
     const finalStatus = (order.refundTargetStatus ?? "CANCELLED") as FinalRefundStatus;
-    const transitioned = await tx.order.updateMany({
-      where: { id: orderId, status: "REFUND_PENDING" },
-      data: { status: finalStatus },
+    const transitioned = await transitionOrder(tx, {
+      id: orderId,
+      from: "REFUND_PENDING",
+      to: finalStatus,
     });
     await tx.payment.update({ where: { id: paymentId }, data: { status: "REFUNDED" } });
-    if (transitioned.count && finalStatus === "CANCELLED" && order.bag.pickupStart > new Date()) {
+    if (transitioned && finalStatus === "CANCELLED" && order.bag.pickupStart > new Date()) {
       // updateMany re-checks the row after it takes PostgreSQL's row lock. If
       // cancelBag won first, no quantity is restored and it stays CANCELLED.
       const restored = await tx.bag.updateMany({
@@ -433,8 +503,8 @@ async function declineHold(operationId: string, leaseToken: string, paymentId: s
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { bag: true } });
     if (order) {
       const finalStatus: FinalRefundStatus = order.bag.pickupEnd <= new Date() ? "EXPIRED" : "CANCELLED";
-      const cancelled = await tx.order.updateMany({ where: { id: orderId, status: "PENDING_PAYMENT" }, data: { status: finalStatus } });
-      if (cancelled.count) {
+      const cancelled = await transitionOrder(tx, { id: orderId, from: "PENDING_PAYMENT", to: finalStatus });
+      if (cancelled) {
         const restored = await tx.bag.updateMany({
           where: { id: bagId, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } },
           data: { quantityLeft: { increment: quantity } },
@@ -506,13 +576,13 @@ async function recordPaymentEvent(tx: Prisma.TransactionClient, input: {
   });
 }
 
-async function providerCall<T>(label: string, promise: Promise<T>): Promise<T> {
+export async function providerCall<T>(label: string, promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new PaymentProviderError("TIMEOUT", `Provider ${label} timed out`)), PROVIDER_TIMEOUT_MS);
+        timer = setTimeout(() => reject(new PaymentProviderError("TIMEOUT", `Provider ${label} timed out`)), PAYMENT_PROVIDER_TIMEOUT_MS);
       }),
     ]);
   } finally {
@@ -525,7 +595,7 @@ function errorMessage(error: unknown): string {
 }
 
 async function createOrderRowWithUniqueCode(tx: Prisma.TransactionClient, data: {
-  bagId: string; userId: string; quantity: number; totalPrice: number; platformFee: number;
+  bagId: string; userId: string; quantity: number; totalPrice: number; platformFee: number; idempotencyRecordId?: string;
 }) {
   for (let attempt = 0; ; attempt++) {
     try {

@@ -8,6 +8,7 @@ import { logEvent } from "../src/lib/monitoring";
 import { workerRuns } from "../src/lib/metrics";
 import { metricsRegistry, workerBatchSize, workerDuration } from "../src/lib/metrics";
 import { createServer } from "node:http";
+import { flushMockPaymentFaultStats } from "../src/lib/mock-payment-fault";
 
 type WorkerName = "payments" | "expiry" | "notifications" | "outbox";
 const name = process.argv[2] as WorkerName;
@@ -19,15 +20,18 @@ let stopping = false;
 process.on("SIGTERM", () => { stopping = true; });
 process.on("SIGINT", () => { stopping = true; });
 
-const metricsPort = Number(process.env.WORKER_METRICS_PORT || 9100);
-const metricsServer = createServer(async (request, response) => {
+const metricsPort = process.env.WORKER_METRICS_PORT ? Number(process.env.WORKER_METRICS_PORT) : null;
+if (metricsPort !== null && (!Number.isInteger(metricsPort) || metricsPort < 1 || metricsPort > 65_535)) {
+  throw new Error("WORKER_METRICS_PORT must be a valid TCP port");
+}
+const metricsServer = metricsPort === null ? null : createServer(async (request, response) => {
   if (request.url !== "/metrics") { response.writeHead(404).end(); return; }
   const secret = process.env.METRICS_SECRET;
   if (secret && request.headers.authorization !== `Bearer ${secret}`) { response.writeHead(401).end(); return; }
   response.writeHead(200, { "Content-Type": metricsRegistry.contentType, "Cache-Control": "no-store" });
   response.end(await metricsRegistry.metrics());
 });
-metricsServer.listen(metricsPort);
+metricsServer?.listen(metricsPort!);
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -71,11 +75,22 @@ async function main() {
       logEvent("error", "worker.failed", { worker: name }, error);
       await delay(5_000);
     }
+    if (name === "payments") {
+      try {
+        await flushMockPaymentFaultStats();
+      } catch (error) {
+        logEvent("error", "worker.fault_stats_flush_failed", { worker: name }, error);
+      }
+    }
     if (!process.env.WORKER_ONCE && !stopping) await delay(1_000);
   } while (!process.env.WORKER_ONCE && !stopping);
 }
 
 main().finally(async () => {
-  metricsServer.close();
-  await prisma.$disconnect();
+  metricsServer?.close();
+  try {
+    if (name === "payments") await flushMockPaymentFaultStats(true);
+  } finally {
+    await prisma.$disconnect();
+  }
 });

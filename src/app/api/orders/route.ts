@@ -6,6 +6,7 @@ import { idempotentOrderRequest, normalizeIdempotencyKey } from "@/modules/order
 import { apiRoute, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { integer, requiredString } from "@/shared/validation";
+import { customerOrderSelect, toCustomerOrderDto } from "@/modules/api/dto";
 
 export async function GET(request: NextRequest) {
   return apiRoute(request, async () => {
@@ -17,13 +18,13 @@ export async function GET(request: NextRequest) {
     const limit = Number.isInteger(requestedLimit) ? Math.min(50, Math.max(1, requestedLimit)) : 20;
     const orders = await prisma.order.findMany({
       where: customerOrderScopeWhere(user.id, scope),
-      include: { bag: { include: { venue: true } }, payment: true, review: true },
+      select: customerOrderSelect,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
     const nextCursor = orders.length > limit ? orders.pop()!.id : null;
-    return json({ orders, nextCursor });
+    return json({ orders: orders.map(toCustomerOrderDto), nextCursor });
   });
 }
 
@@ -36,14 +37,14 @@ export async function POST(req: NextRequest) {
     const quantity = integer(body.quantity ?? 1, "quantity", { min: 1, max: 10 });
     const idempotencyKey = normalizeIdempotencyKey(req.headers.get("idempotency-key"));
     try {
-      const create = (idempotencyRecordId: string) =>
-        createOrder(user.id, bagId, quantity, idempotencyRecordId);
+      const create = (idempotencyRecordId: string, ownerToken: string) =>
+        createOrder(user.id, bagId, quantity, idempotencyRecordId, ownerToken);
       const order = await idempotentOrderRequest(
         `${user.id}:${idempotencyKey}`,
         `${bagId}:${quantity}`,
         create
       );
-      return json({ order }, { status: 201 });
+      return json({ order: toCustomerOrderDto(order) }, { status: 201 });
     } catch (error) {
       throwOrderApiError(error);
     }

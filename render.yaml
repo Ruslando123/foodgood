@@ -62,6 +62,8 @@ services:
         sync: false
       - key: METRICS_SECRET
         sync: false
+      - key: LOAD_TEST_MODE
+        value: "false"
 
   - type: worker
     name: foodgood-payments-worker
@@ -88,6 +90,8 @@ services:
       - key: METRICS_SECRET
         sync: false
       - key: ALLOW_MOCK_PAYMENTS_IN_PRODUCTION
+        value: "false"
+      - key: LOAD_TEST_MODE
         value: "false"
       - key: FREEDOMPAY_MERCHANT_ID
         sync: false

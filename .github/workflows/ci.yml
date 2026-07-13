@@ -1,13 +1,20 @@
-name: CI
+name: Production gate
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: production-gate-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  production-gate:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgis/postgis:16-3.4-alpine
         env:
           POSTGRES_USER: foodgood
           POSTGRES_PASSWORD: foodgood
@@ -17,17 +24,27 @@ jobs:
           --health-cmd "pg_isready -U foodgood -d foodgood_test"
           --health-interval 2s --health-timeout 5s --health-retries 30
     env:
+      DATABASE_URL: postgresql://foodgood:foodgood@localhost:5432/foodgood_test?schema=public
+      DIRECT_URL: postgresql://foodgood:foodgood@localhost:5432/foodgood_test?schema=public
       TEST_DATABASE_URL: postgresql://foodgood:foodgood@localhost:5432/foodgood_test?schema=public
+      E2E_DATABASE_URL: postgresql://foodgood:foodgood@localhost:5432/foodgood_test?schema=public
+      SESSION_SECRET: ci-session-secret-at-least-32-bytes-long
+      OTP_SECRET: ci-otp-secret-at-least-32-bytes-long
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
+        with:
+          node-version: 22
+          cache: npm
       - run: npm ci
-      - run: npx prisma migrate deploy
-        env: { DATABASE_URL: postgresql://foodgood:foodgood@localhost:5432/foodgood_test?schema=public }
       - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm test
+      - run: npm run test:upgrade
+      - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - run: npm run build
+        env:
+          E2E_SKIP_BUILD: "true"

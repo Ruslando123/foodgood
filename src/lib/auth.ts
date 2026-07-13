@@ -15,7 +15,10 @@ export const DEV_OTP_CODE = "0000";
  * знает номер, получает доступ к аккаунту.
  */
 export function isDevOtpEnabled(): boolean {
-  return process.env.NODE_ENV !== "production" && process.env.FOODGOOD_DISABLE_DEV_OTP !== "true";
+  const localProductionE2e = process.env.FOODGOOD_E2E_DEV_OTP === "true"
+    && /(?:localhost|127\.0\.0\.1):\d+/.test(process.env.DATABASE_URL ?? "");
+  return (process.env.NODE_ENV !== "production" || localProductionE2e)
+    && process.env.FOODGOOD_DISABLE_DEV_OTP !== "true";
 }
 
 function secret(): Uint8Array {

@@ -50,3 +50,4 @@ prisma/dev.db-journal
 !.env.example
 prisma/test.db
 prisma/test.db-journal
+/load/fixtures.local.json

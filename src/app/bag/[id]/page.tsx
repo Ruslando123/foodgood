@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { IconArrowLeft, IconClock, IconGift, IconMapPin, IconMinus, IconPackage, IconPlus, IconReceipt, IconShieldCheck } from "@tabler/icons-react";
@@ -27,9 +27,100 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const [quantity, setQuantity] = useState(1);
   const [paying, setPaying] = useState(false); // показ мок-экрана оплаты
   const [processing, setProcessing] = useState(false);
+  const [checkoutPending, setCheckoutPending] = useState(false);
   const checkoutKey = useRef<string | null>(null);
   const bagRequest = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 });
   const [similar, setSimilar] = useState<Bag[]>([]);
+
+  const checkoutStorageKey = `foodgood:checkout:${id}`;
+
+  const clearCheckoutKey = useCallback(() => {
+    checkoutKey.current = null;
+    setCheckoutPending(false);
+    try {
+      sessionStorage.removeItem(checkoutStorageKey);
+    } catch {
+      // The in-memory key still keeps retries safe for this page lifetime.
+    }
+  }, [checkoutStorageKey]);
+
+  function restoreCheckoutKey(userId: string): string | null {
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(checkoutStorageKey) ?? "null") as {
+        key?: unknown;
+        bagId?: unknown;
+        quantity?: unknown;
+        userId?: unknown;
+      } | null;
+      if (
+        stored &&
+        typeof stored.key === "string" &&
+        stored.bagId === id &&
+        stored.quantity === quantity &&
+        stored.userId === userId
+      ) {
+        checkoutKey.current = stored.key;
+        setCheckoutPending(true);
+        return stored.key;
+      }
+    } catch {
+      // An unreadable value is not a valid retry boundary.
+    }
+    clearCheckoutKey();
+    return null;
+  }
+
+  function checkoutKeyFor(userId: string): string {
+    const restored = restoreCheckoutKey(userId);
+    if (restored) return restored;
+    const key = crypto.randomUUID();
+    checkoutKey.current = key;
+    setCheckoutPending(true);
+    try {
+      sessionStorage.setItem(checkoutStorageKey, JSON.stringify({ key, bagId: id, quantity, userId }));
+    } catch {
+      // sessionStorage can be disabled; the ref remains the best safe fallback.
+    }
+    return key;
+  }
+
+  const changeQuantity = useCallback((next: (current: number) => number) => {
+    setQuantity((current) => {
+      const changed = next(current);
+      if (changed !== current) clearCheckoutKey();
+      return changed;
+    });
+  }, [clearCheckoutKey]);
+
+  function cancelCheckout() {
+    if (processing) return;
+    clearCheckoutKey();
+    setPaying(false);
+  }
+
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(checkoutStorageKey) ?? "null") as {
+        key?: unknown;
+        bagId?: unknown;
+        quantity?: unknown;
+      } | null;
+      if (
+        stored &&
+        typeof stored.key === "string" &&
+        stored.bagId === id &&
+        Number.isInteger(stored.quantity) &&
+        Number(stored.quantity) >= 1 &&
+        Number(stored.quantity) <= 10
+      ) {
+        checkoutKey.current = stored.key;
+        setQuantity(Number(stored.quantity));
+        setCheckoutPending(true);
+      }
+    } catch {
+      clearCheckoutKey();
+    }
+  }, [checkoutStorageKey, clearCheckoutKey, id]);
 
   useEffect(() => {
     let mounted = true;
@@ -44,7 +135,9 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         const data = await api<{ bag: Bag }>(`/api/bags/${id}`, { signal: controller.signal });
         if (!mounted || sequence !== request.sequence) return;
         setBag(data.bag);
-        setQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1)));
+        if (!checkoutKey.current) {
+          changeQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1)));
+        }
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         if (mounted && sequence === request.sequence) {
@@ -67,7 +160,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       if (timer) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [id]);
+  }, [changeQuantity, id]);
 
   useEffect(() => {
     if (!bag) return;
@@ -95,12 +188,16 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         router.push(`/login?next=/bag/${id}`);
         return;
       }
+      if (restoreCheckoutKey(user.id)) {
+        setPaying(true);
+        return;
+      }
       if (latest.status !== "ACTIVE" || latest.quantityLeft < quantity) {
-        setQuantity(Math.max(1, Math.min(quantity, latest.quantityLeft || 1)));
+        changeQuantity((current) => Math.max(1, Math.min(current, latest.quantityLeft || 1)));
         setError("Остаток изменился. Проверьте количество и попробуйте снова.");
         return;
       }
-      checkoutKey.current = crypto.randomUUID();
+      checkoutKeyFor(user.id);
       setPaying(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось начать оформление");
@@ -113,11 +210,13 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
     setProcessing(true);
     setError(null);
     try {
+      if (!checkoutKey.current) throw new Error("Сессия оплаты истекла. Начните оформление снова.");
       const { order } = await api<{ order: Order }>("/api/orders", {
         method: "POST",
-        headers: { "Idempotency-Key": checkoutKey.current ?? crypto.randomUUID() },
+        headers: { "Idempotency-Key": checkoutKey.current },
         body: JSON.stringify({ bagId: id, quantity }),
       });
+      clearCheckoutKey();
       router.push(`/orders?new=${order.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не получилось оплатить");
@@ -138,6 +237,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   if (!bag) return <div className="max-w-md mx-auto min-h-dvh flex items-center justify-center text-muted">Загрузка…</div>;
 
   const available = bag.status === "ACTIVE" && bag.quantityLeft > 0;
+  const canCheckout = available || checkoutPending;
   const total = bag.price * quantity;
   const now = new Date();
   const pickupStarted = new Date(bag.pickupStart) <= now;
@@ -201,14 +301,14 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
             <span className="text-[13px] font-medium">Количество</span>
             <div className="flex items-center gap-3">
               <button
-                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                onClick={() => changeQuantity((q) => Math.max(1, q - 1))}
                 className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f2f4f2]"
               >
                 <IconMinus size={18} />
               </button>
               <span className="font-bold w-5 text-center">{quantity}</span>
               <button
-                onClick={() => setQuantity((q) => Math.min(bag.quantityLeft, q + 1))}
+                onClick={() => changeQuantity((q) => Math.min(bag.quantityLeft, q + 1))}
                 className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f2f4f2]"
               >
                 <IconPlus size={18} />
@@ -223,10 +323,10 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       <div className="fixed inset-x-0 bottom-[68px] z-10 mx-auto max-w-md border-t border-black/[0.05] bg-white/95 px-4 py-3 backdrop-blur-xl">
         <button
           onClick={startCheckout}
-          disabled={!available || processing}
+          disabled={!canCheckout || processing}
           className="w-full rounded-[13px] bg-primary py-3.5 text-[14px] font-semibold text-white shadow-sm disabled:bg-black/20"
         >
-          {processing ? "Проверяем наличие…" : available ? `Забронировать за ${formatPrice(total)}` : "Недоступно 😔"}
+          {processing ? "Проверяем наличие…" : checkoutPending ? "Повторить оплату" : available ? `Забронировать за ${formatPrice(total)}` : "Недоступно 😔"}
         </button>
       </div>
 
@@ -238,7 +338,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       )}
 
       {paying && (
-        <div className="fixed inset-0 z-30 bg-black/50 flex items-end justify-center" onClick={() => !processing && setPaying(false)}>
+        <div className="fixed inset-0 z-30 bg-black/50 flex items-end justify-center" onClick={cancelCheckout}>
           <div
             className="w-full max-w-md space-y-4 rounded-t-[24px] bg-white p-6"
             onClick={(e) => e.stopPropagation()}
@@ -260,7 +360,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
               {processing ? "Обработка…" : `Оплатить ${formatPrice(total)}`}
             </button>
             <button
-              onClick={() => setPaying(false)}
+              onClick={cancelCheckout}
               disabled={processing}
               className="w-full py-2 text-muted text-sm"
             >

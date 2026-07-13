@@ -124,6 +124,7 @@ model Order {
   completedAt        DateTime?
   supportStatus      String    @default("NONE") // NONE | OPEN | RESOLVED
   supportNote        String    @default("")
+  idempotencyRecordId String?  @unique
 
   bag            Bag             @relation(fields: [bagId], references: [id])
   user           User            @relation(fields: [userId], references: [id])
@@ -131,6 +132,7 @@ model Order {
   paymentEvents  PaymentEvent[]
   outboxMessages OutboxMessage[]
   review         Review?
+  idempotencyRecord OrderIdempotencyKey? @relation(fields: [idempotencyRecordId], references: [id], onDelete: SetNull)
 
   @@index([userId, status])
   @@index([userId, status, createdAt(sort: Desc), id(sort: Desc)])
@@ -245,9 +247,12 @@ model OrderIdempotencyKey {
   fingerprint String
   status      String   @default("PROCESSING") // PROCESSING | SUCCEEDED | FAILED
   resultJson  String?
+  ownerToken  String?
   expiresAt   DateTime
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  order Order?
 
   @@index([expiresAt])
   @@index([status, expiresAt])

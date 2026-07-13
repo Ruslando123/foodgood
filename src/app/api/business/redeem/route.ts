@@ -4,6 +4,7 @@ import { redeemOrder, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { requiredString } from "@/shared/validation";
+import { toMerchantOrderDto } from "@/modules/api/dto";
 
 /** Выдача заказа на кассе: сканирование/ввод pickup-кода. */
 export async function POST(req: NextRequest) {
@@ -14,7 +15,7 @@ export async function POST(req: NextRequest) {
     const code = requiredString(body.code, "code", { min: 6, max: 6 }).toUpperCase();
     try {
       const order = await redeemOrder(user.id, code);
-      return json({ order });
+      return json({ order: toMerchantOrderDto(order) });
     } catch (error) {
       throwOrderApiError(error);
     }

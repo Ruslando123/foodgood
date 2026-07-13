@@ -83,27 +83,61 @@ export async function issueOtp(phone: string): Promise<{ codeLength: number; dev
 }
 
 export async function consumeOtp(phone: string, code: string): Promise<void> {
-  const challenge = await prisma.otpChallenge.findFirst({
-    where: { phone, activeKey: phone, consumedAt: null },
-    orderBy: { createdAt: "desc" },
-  });
-  if (!challenge) throw new OtpError("INVALID_OTP", "Неверный код");
-  if (challenge.expiresAt <= new Date()) throw new OtpError("OTP_EXPIRED", "Срок действия кода истёк");
-  if (challenge.attempts >= challenge.maxAttempts) {
-    throw new OtpError("OTP_RATE_LIMITED", "Превышено количество попыток. Запросите новый код");
-  }
+  const outcome = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{
+      id: string;
+      codeHash: string;
+      attempts: number;
+      maxAttempts: number;
+      expiresAt: Date;
+    }>>`
+      SELECT id, "codeHash", attempts, "maxAttempts", "expiresAt"
+      FROM "OtpChallenge"
+      WHERE phone = ${phone} AND "activeKey" = ${phone} AND "consumedAt" IS NULL
+      ORDER BY "createdAt" DESC
+      LIMIT 1
+      FOR UPDATE
+    `;
+    const challenge = rows[0];
+    if (!challenge) return { code: "INVALID_OTP" as const, message: "Неверный код" };
 
-  if (!codeMatches(challenge.codeHash, phone, code)) {
-    await prisma.otpChallenge.updateMany({
-      where: { id: challenge.id, activeKey: phone, consumedAt: null, attempts: challenge.attempts },
-      data: { attempts: { increment: 1 } },
+    const now = new Date();
+    if (challenge.expiresAt <= now) {
+      await tx.otpChallenge.update({
+        where: { id: challenge.id },
+        data: { activeKey: null, consumedAt: now },
+      });
+      return { code: "OTP_EXPIRED" as const, message: "Срок действия кода истёк" };
+    }
+    if (challenge.attempts >= challenge.maxAttempts) {
+      await tx.otpChallenge.update({
+        where: { id: challenge.id },
+        data: { activeKey: null, consumedAt: now },
+      });
+      return {
+        code: "OTP_RATE_LIMITED" as const,
+        message: "Превышено количество попыток. Запросите новый код",
+      };
+    }
+
+    if (!codeMatches(challenge.codeHash, phone, code)) {
+      const attempts = challenge.attempts + 1;
+      await tx.otpChallenge.update({
+        where: { id: challenge.id },
+        data: {
+          attempts,
+          ...(attempts >= challenge.maxAttempts ? { activeKey: null, consumedAt: now } : {}),
+        },
+      });
+      return { code: "INVALID_OTP" as const, message: "Неверный код" };
+    }
+
+    await tx.otpChallenge.update({
+      where: { id: challenge.id },
+      data: { activeKey: null, consumedAt: now },
     });
-    throw new OtpError("INVALID_OTP", "Неверный код");
-  }
-
-  const consumed = await prisma.otpChallenge.updateMany({
-    where: { id: challenge.id, activeKey: phone, consumedAt: null, attempts: challenge.attempts },
-    data: { activeKey: null, consumedAt: new Date() },
+    return null;
   });
-  if (!consumed.count) throw new OtpError("INVALID_OTP", "Код уже использован");
+
+  if (outcome) throw new OtpError(outcome.code, outcome.message);
 }

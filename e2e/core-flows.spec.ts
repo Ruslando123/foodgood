@@ -5,8 +5,17 @@ async function login(page: Page, phone: string, expectedPath: RegExp) {
   await page.getByLabel("Номер телефона").fill(phone);
   await page.getByRole("button", { name: "Продолжить" }).click();
   await page.getByRole("button", { name: /Использовать демо-код/ }).click();
-  await page.getByRole("button", { name: "Войти" }).click();
+  await Promise.all([
+    page.waitForURL(expectedPath),
+    page.getByRole("button", { name: "Войти" }).click(),
+  ]);
   await expect(page).toHaveURL(expectedPath);
+}
+
+async function orderStatus(page: Page, orderId: string) {
+  const response = await page.request.get(`/api/orders/${orderId}`);
+  if (!response.ok()) return null;
+  return (await response.json()).order.status as string;
 }
 
 test("клиент покупает, владелец выдаёт, клиент оставляет один отзыв", async ({ page, browser }) => {
@@ -19,6 +28,9 @@ test("клиент покупает, владелец выдаёт, клиент
   await page.getByRole("button", { name: /Забронировать за/ }).click();
   await page.getByRole("button", { name: /Оплатить/ }).click();
   await expect(page).toHaveURL(/\/orders\?new=/);
+  const orderId = new URL(page.url()).searchParams.get("new")!;
+  await expect.poll(() => orderStatus(page, orderId)).toBe("PAID");
+  await page.reload();
   const code = (await page.locator("p.font-mono").first().innerText()).trim();
   expect(code).toMatch(/^[A-Z2-9]{6}$/);
 
@@ -31,6 +43,7 @@ test("клиент покупает, владелец выдаёт, клиент
   await expect(merchantPage.getByText("Заказ выдан!", { exact: false })).toBeVisible();
   await merchantContext.close();
 
+  await expect.poll(() => orderStatus(page, orderId)).toBe("COMPLETED");
   await page.goto("/orders");
   await page.getByRole("button", { name: "История" }).click();
   await page.getByRole("button", { name: "Оставить отзыв" }).click();
@@ -52,8 +65,49 @@ test("владелец публикует пакет", async ({ page }) => {
 test("администратор открывает рабочие разделы", async ({ page }) => {
   await login(page, "+7 701 000 00 03", /\/admin\/venues/);
   await expect(page.getByRole("heading", { name: "Заведения" })).toBeVisible();
-  await page.getByRole("link", { name: "Заказы" }).click();
+  await Promise.all([
+    page.waitForURL(/\/admin\/orders/),
+    page.getByRole("link", { name: "Заказы" }).click(),
+  ]);
   await expect(page.getByRole("heading", { name: "Заказы" })).toBeVisible();
+});
+
+test("повторяет оплату тем же ключом после потери ответа", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("foodgood-location", JSON.stringify({ lat: 43.2389, lng: 76.8897, cityId: "almaty" })));
+  await login(page, "+7 707 000 00 02", /\/$/);
+
+  let firstOrderId: string | null = null;
+  const keys: string[] = [];
+  await page.route("**/api/orders", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    keys.push(route.request().headers()["idempotency-key"] ?? "");
+    if (keys.length === 1) {
+      const response = await route.fetch();
+      firstOrderId = (await response.json()).order.id as string;
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
+
+  const bagLinks = page.locator('a[href^="/bag/"]');
+  await expect(bagLinks.first()).toBeVisible();
+  await bagLinks.nth(1).click();
+  await page.getByRole("button", { name: /Забронировать за/ }).click();
+  await page.getByRole("button", { name: /Оплатить/ }).click();
+  await expect(page.getByRole("button", { name: "Повторить оплату" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Повторить оплату" }).click();
+  await page.getByRole("button", { name: /Оплатить/ }).click();
+  await expect(page).toHaveURL(/\/orders\?new=/);
+
+  const retriedOrderId = new URL(page.url()).searchParams.get("new");
+  expect(keys).toHaveLength(2);
+  expect(keys[1]).toBe(keys[0]);
+  expect(retriedOrderId).toBe(firstOrderId);
 });
 
 test("каталог не смешивает города", async ({ request }) => {

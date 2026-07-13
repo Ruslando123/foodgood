@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { requireUser } from "@/modules/auth/server";
 import { cancelOrder, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, assertSameOrigin, json } from "@/shared/server/api";
+import { toCustomerOrderDto } from "@/modules/api/dto";
 
 export async function POST(
   req: NextRequest,
@@ -13,7 +14,7 @@ export async function POST(
     const { id } = await params;
     try {
       const order = await cancelOrder(user.id, id);
-      return json({ order });
+      return json({ order: toCustomerOrderDto(order) });
     } catch (error) {
       throwOrderApiError(error);
     }

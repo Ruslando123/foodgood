@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { applyMockPaymentFault } from "./mock-payment-fault";
 
 export type ProviderPaymentStatus = "HELD" | "CAPTURED" | "REFUNDED" | "NOT_FOUND";
 export type PaymentProviderErrorCode = "DECLINED" | "UNKNOWN" | "TIMEOUT";
@@ -27,6 +28,7 @@ export class MockPaymentProvider implements PaymentProvider {
   private readonly statuses = new Map<string, ProviderPaymentStatus>();
 
   async hold(_amountKzt: number, orderId: string, idempotencyKey: string) {
+    await applyMockPaymentFault();
     const existing = this.refsByKey.get(idempotencyKey);
     if (existing) return { providerRef: existing };
     const providerRef = `mock_${orderId}_${randomUUID().slice(0, 8)}`;
@@ -36,6 +38,7 @@ export class MockPaymentProvider implements PaymentProvider {
   }
 
   async capture(providerRef: string, idempotencyKey: string) {
+    await applyMockPaymentFault();
     const key = `capture:${idempotencyKey}`;
     if (this.refsByKey.has(key)) return;
     this.refsByKey.set(key, providerRef);
@@ -44,6 +47,7 @@ export class MockPaymentProvider implements PaymentProvider {
   }
 
   async refund(providerRef: string, idempotencyKey: string) {
+    await applyMockPaymentFault();
     const key = `refund:${idempotencyKey}`;
     if (this.refsByKey.has(key)) return;
     this.refsByKey.set(key, providerRef);
@@ -52,6 +56,7 @@ export class MockPaymentProvider implements PaymentProvider {
   }
 
   async getStatus(providerRef: string): Promise<ProviderPaymentStatus> {
+    await applyMockPaymentFault();
     return this.statuses.get(providerRef) ?? (providerRef.startsWith("mock_") ? "HELD" : "NOT_FOUND");
   }
 
