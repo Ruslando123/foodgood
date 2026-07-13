@@ -49,6 +49,8 @@ export async function queryCatalog(input: {
   cityId?: string;
   lat?: number;
   lng?: number;
+  todayStartUtc?: Date;
+  tomorrowStartUtc?: Date;
   cursor?: string | null;
   limit: number;
 }) {
@@ -56,8 +58,11 @@ export async function queryCatalog(input: {
   const hasLocation = lat !== undefined && lng !== undefined;
   const effectiveSort: CatalogSort = query.sort === "distance" && !hasLocation ? "soon" : query.sort;
   const cursor = decodeCursor(input.cursor ?? null, effectiveSort);
+  const point = hasLocation
+    ? Prisma.sql`ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography`
+    : Prisma.sql`NULL::geography`;
   const distance = hasLocation
-    ? Prisma.sql`ST_Distance(venue.location, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography) / 1000.0`
+    ? Prisma.sql`ST_Distance(venue.location, ${point}) / 1000.0`
     : Prisma.sql`NULL::double precision`;
   const discount = Prisma.sql`(1.0 - bag.price::double precision / GREATEST(1, bag."originalPrice"))`;
   const sortExpression = effectiveSort === "price"
@@ -65,7 +70,7 @@ export async function queryCatalog(input: {
     : effectiveSort === "discount"
       ? discount
       : effectiveSort === "distance"
-        ? distance
+        ? Prisma.sql`(venue.location <-> ${point}) / 1000.0`
         : Prisma.sql`bag."pickupEnd"`;
   const direction = effectiveSort === "discount" ? Prisma.sql`DESC` : Prisma.sql`ASC`;
   const filters: Prisma.Sql[] = [
@@ -76,16 +81,29 @@ export async function queryCatalog(input: {
   ];
   if (cityId) filters.push(Prisma.sql`venue."cityId" = ${cityId}`);
   if (query.q) {
-    const needle = `%${query.q}%`;
-    filters.push(Prisma.sql`(bag.title ILIKE ${needle} OR venue.name ILIKE ${needle} OR venue.address ILIKE ${needle})`);
+    const needle = `%${query.q.toLocaleLowerCase("ru")}%`;
+    filters.push(Prisma.sql`bag.id IN (
+      SELECT search_bag.id FROM "Bag" search_bag
+      WHERE lower(search_bag.title) LIKE ${needle}
+      UNION
+      SELECT search_bag.id FROM "Venue" search_venue
+      JOIN "Bag" search_bag ON search_bag."venueId" = search_venue.id
+      WHERE lower(search_venue.name || ' ' || search_venue.address) LIKE ${needle}
+    )`);
   }
   if (query.category) filters.push(Prisma.sql`venue.category = ${query.category}`);
   if (query.maxPrice !== null) filters.push(Prisma.sql`bag.price <= ${query.maxPrice}`);
   if (query.minDiscount > 0) filters.push(Prisma.sql`${discount} >= ${query.minDiscount / 100}`);
   if (query.minRating > 0) filters.push(Prisma.sql`venue."ratingAverage" >= ${query.minRating}`);
   if (query.availableNow) filters.push(Prisma.sql`bag."pickupStart" <= now() AND bag."pickupEnd" > now()`);
-  if (query.todayOnly) filters.push(Prisma.sql`bag."pickupStart" >= date_trunc('day', now()) AND bag."pickupStart" < date_trunc('day', now()) + interval '1 day'`);
-  if (query.maxDistance !== null && hasLocation) filters.push(Prisma.sql`ST_DWithin(venue.location, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography, ${query.maxDistance * 1000})`);
+  if (query.todayOnly) {
+    if (!input.todayStartUtc || !input.tomorrowStartUtc) throw new Error("todayOnly requires city-local UTC boundaries");
+    filters.push(Prisma.sql`bag."pickupStart" >= ${input.todayStartUtc} AND bag."pickupStart" < ${input.tomorrowStartUtc}`);
+  }
+  if (query.maxDistance !== null && hasLocation) filters.push(Prisma.sql`ST_DWithin(venue.location, ${point}, ${query.maxDistance * 1000})`);
+  if (effectiveSort === "distance" && !cityId && query.maxDistance === null) {
+    filters.push(Prisma.sql`ST_DWithin(venue.location, ${point}, 50000)`);
+  }
   if (cursor) {
     const value = effectiveSort === "soon" ? new Date(String(cursor.value)) : Number(cursor.value);
     filters.push(effectiveSort === "discount"

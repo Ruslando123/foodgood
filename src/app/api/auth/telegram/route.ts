@@ -7,7 +7,7 @@ import { consumeRateLimit, requestIp } from "@/shared/server/rate-limit";
 
 /** Авторизация из Telegram WebApp по initData. */
 export async function POST(req: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     if (!telegramAuthEnabled()) {
       throw new ApiError(503, "TELEGRAM_AUTH_DISABLED", "Вход через Telegram временно отключён");
     }

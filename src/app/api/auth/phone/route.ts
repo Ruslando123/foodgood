@@ -7,7 +7,7 @@ import { consumeRateLimit, requestIp } from "@/shared/server/rate-limit";
 
 /** Issues a durable, one-time OTP and delegates production delivery to SMS. */
 export async function POST(req: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const { phone } = await readJsonObject(req);
     const normalized = normalizePhone(String(phone ?? ""));
     if (!normalized) {

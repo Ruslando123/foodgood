@@ -5,9 +5,9 @@ services:
     region: frankfurt
     plan: starter
     buildCommand: npm ci && npm run build
-    preDeployCommand: npx prisma migrate deploy
+    preDeployCommand: DATABASE_URL=$DIRECT_URL npx prisma migrate deploy && npm run jobs:backfill-reminders
     startCommand: npm start
-    healthCheckPath: /api/health
+    healthCheckPath: /api/health/ready
     autoDeployTrigger: checksPass
     envVars:
       - key: NODE_VERSION
@@ -16,6 +16,8 @@ services:
         fromDatabase:
           name: foodgood-db
           property: connectionString
+      - key: DIRECT_URL
+        sync: false
       - key: DATABASE_CONNECTION_LIMIT
         value: "5"
       - key: DATABASE_PGBOUNCER
@@ -81,6 +83,10 @@ services:
         value: "true"
       - key: REDIS_URL
         sync: false
+      - key: WORKER_METRICS_PORT
+        value: "9100"
+      - key: METRICS_SECRET
+        sync: false
       - key: ALLOW_MOCK_PAYMENTS_IN_PRODUCTION
         value: "false"
       - key: FREEDOMPAY_MERCHANT_ID
@@ -106,6 +112,10 @@ services:
         value: "3"
       - key: DATABASE_PGBOUNCER
         value: "true"
+      - key: WORKER_METRICS_PORT
+        value: "9100"
+      - key: METRICS_SECRET
+        sync: false
       - key: REDIS_URL
         sync: false
 
@@ -128,6 +138,11 @@ services:
       - key: DATABASE_PGBOUNCER
         value: "true"
 
+      - key: WORKER_METRICS_PORT
+        value: "9100"
+      - key: METRICS_SECRET
+        sync: false
+
   - type: worker
     name: foodgood-outbox-worker
     runtime: node
@@ -149,6 +164,10 @@ services:
       - key: TELEGRAM_NOTIFICATIONS_ENABLED
         value: "false"
       - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: WORKER_METRICS_PORT
+        value: "9100"
+      - key: METRICS_SECRET
         sync: false
 
 databases:

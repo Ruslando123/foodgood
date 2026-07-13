@@ -7,7 +7,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     assertSameOrigin(req);
     const user = await requireUser();
     const { id } = await params;

@@ -7,7 +7,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return apiRoute(async () => {
+  return apiRoute(_req, async () => {
     const user = await requireUser();
     const { id } = await params;
     const order = await prisma.order.findUnique({

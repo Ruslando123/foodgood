@@ -6,7 +6,7 @@ import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { integer, optionalString } from "@/shared/validation";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const user = await requireUser();
     const { id } = await params;
     const order = await prisma.order.findUnique({ where: { id }, include: { bag: true, review: true } });

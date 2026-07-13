@@ -5,7 +5,7 @@ import { ApiError, apiRoute, json, readJsonObject } from "@/shared/server/api";
 import { requiredString } from "@/shared/validation";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const admin = await requireAdmin();
     const { id } = await params;
     const body = await readJsonObject(req);

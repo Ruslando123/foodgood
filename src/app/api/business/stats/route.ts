@@ -3,8 +3,8 @@ import { requireMerchant } from "@/modules/auth/server";
 import { apiRoute, json } from "@/shared/server/api";
 
 /** Сводка мерчанта: выручка, комиссия платформы, спасённые пакеты. */
-export async function GET() {
-  return apiRoute(async () => {
+export async function GET(request: Request) {
+  return apiRoute(request, async () => {
     const user = await requireMerchant();
     const [completed, activePaid] = await Promise.all([
       prisma.order.aggregate({

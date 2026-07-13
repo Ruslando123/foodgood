@@ -1,24 +1,30 @@
 import { randomUUID } from "crypto";
 import { prisma } from "./db";
+import { startLeaseHeartbeat } from "./lease-heartbeat";
 import { queueRefund } from "./orders";
+import { workerClaims, workerFailures, workerJobDuration, workerLeaseLost, workerSuccesses } from "./metrics";
 
 export type BatchQueue = "notifications" | "refunds";
+type BatchJobType = "FANOUT_NEW_BAG" | "REFUND_CANCELLED_BAG" | "PICKUP_REMINDER";
 type ClaimedJob = {
   id: string;
   queue: string;
-  type: string;
+  type: BatchJobType;
   payloadJson: string;
-  attempts: number;
+  failureAttempts: number;
 };
+type JobResult = { done: boolean; payloadJson?: string };
 
 const LEASE_MS = 60_000;
-const MAX_ATTEMPTS = 8;
+const MAX_FAILURE_ATTEMPTS = 8;
+const JOB_CONCURRENCY = 5;
 
 export async function enqueueBatchJob(input: {
   queue: BatchQueue;
-  type: "FANOUT_NEW_BAG" | "REFUND_CANCELLED_BAG";
+  type: BatchJobType;
   payload: Record<string, unknown>;
   dedupeKey: string;
+  nextAttemptAt?: Date;
 }): Promise<void> {
   await prisma.batchJob.upsert({
     where: { dedupeKey: input.dedupeKey },
@@ -28,12 +34,13 @@ export async function enqueueBatchJob(input: {
       type: input.type,
       payloadJson: JSON.stringify(input.payload),
       dedupeKey: input.dedupeKey,
+      nextAttemptAt: input.nextAttemptAt ?? new Date(0),
     },
   });
 }
 
-async function claimJobs(queue: BatchQueue, limit: number, workerId: string): Promise<ClaimedJob[]> {
-  return prisma.$queryRaw<ClaimedJob[]>`
+async function claimJob(queue: BatchQueue, leaseToken: string): Promise<ClaimedJob | null> {
+  const [job] = await prisma.$queryRaw<ClaimedJob[]>`
     WITH candidates AS (
       SELECT id
       FROM "BatchJob"
@@ -43,64 +50,146 @@ async function claimJobs(queue: BatchQueue, limit: number, workerId: string): Pr
         AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" < now())
       ORDER BY "nextAttemptAt", id
       FOR UPDATE SKIP LOCKED
-      LIMIT ${limit}
+      LIMIT 1
     )
     UPDATE "BatchJob" job
     SET status = 'PROCESSING',
-        "leaseOwner" = ${workerId},
+        "leaseOwner" = ${leaseToken},
         "leaseExpiresAt" = now() + interval '60 seconds',
-        attempts = attempts + 1,
         "updatedAt" = now()
     FROM candidates
     WHERE job.id = candidates.id
-    RETURNING job.id, job.queue, job.type, job."payloadJson", job.attempts
+    RETURNING job.id, job.queue, job.type, job."payloadJson", job."failureAttempts"
   `;
+  return job ?? null;
 }
 
 export async function runBatchJobs(
   queue: BatchQueue,
   jobLimit = 20,
   batchSize = 100,
-  workerId = randomUUID()
+  processWorkerId = randomUUID()
 ): Promise<number> {
-  const jobs = await claimJobs(queue, jobLimit, workerId);
+  let claimed = 0;
   let processed = 0;
-  for (const job of jobs) {
-    try {
-      const done = await processJob(job, batchSize);
-      await prisma.batchJob.updateMany({
-        where: { id: job.id, leaseOwner: workerId, status: "PROCESSING" },
-        data: done
-          ? { status: "SUCCEEDED", leaseOwner: null, leaseExpiresAt: null, lastError: null }
-          : { status: "PENDING", nextAttemptAt: new Date(), leaseOwner: null, leaseExpiresAt: null },
-      });
-      processed += 1;
-    } catch (error) {
-      const failed = job.attempts >= MAX_ATTEMPTS;
-      await prisma.batchJob.updateMany({
-        where: { id: job.id, leaseOwner: workerId },
-        data: {
-          status: failed ? "FAILED" : "RETRY",
-          nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 5_000 * 2 ** Math.max(0, job.attempts - 1))),
-          leaseOwner: null,
-          leaseExpiresAt: null,
-          lastError: error instanceof Error ? error.message : String(error),
-        },
-      });
+  const workers = Array.from({ length: Math.min(JOB_CONCURRENCY, jobLimit) }, async () => {
+    while (claimed < jobLimit) {
+      claimed += 1;
+      const leaseToken = `${processWorkerId}:${randomUUID()}`;
+      const job = await claimJob(queue, leaseToken);
+      if (!job) return;
+      workerClaims.inc({ worker: queue });
+      if (await processClaimedJob(job, batchSize, leaseToken)) processed += 1;
     }
-  }
+  });
+  await Promise.all(workers);
   return processed;
 }
 
-async function processJob(job: ClaimedJob, batchSize: number): Promise<boolean> {
-  const payload = JSON.parse(job.payloadJson) as { bagId?: string; cursor?: string };
+class BatchJobLeaseLostError extends Error {}
+
+async function renewJobLease(id: string, leaseToken: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+    UPDATE "BatchJob"
+    SET "leaseExpiresAt" = now() + interval '60 seconds', "updatedAt" = now()
+    WHERE id = ${id} AND status = 'PROCESSING'
+      AND "leaseOwner" = ${leaseToken} AND "leaseExpiresAt" > now()
+    RETURNING id
+  `;
+  return rows.length === 1;
+}
+
+async function processClaimedJob(job: ClaimedJob, batchSize: number, leaseToken: string): Promise<boolean> {
+  const startedAt = performance.now();
+  const heartbeat = startLeaseHeartbeat(
+    () => renewJobLease(job.id, leaseToken),
+    LEASE_MS / 3
+  );
+  try {
+    const result = await processJob(job, batchSize);
+    if (heartbeat.lost()) throw new BatchJobLeaseLostError("Batch job lease was lost during processing");
+    const payloadJson = result.payloadJson ?? job.payloadJson;
+    const updated = await prisma.$queryRaw<Array<{ id: string }>>`
+      UPDATE "BatchJob"
+      SET status = ${result.done ? "SUCCEEDED" : "PENDING"},
+          "nextAttemptAt" = CASE WHEN ${result.done} THEN "nextAttemptAt" ELSE now() END,
+          "payloadJson" = ${payloadJson}, "failureAttempts" = 0,
+          "batchesProcessed" = "batchesProcessed" + 1,
+          "leaseOwner" = NULL, "leaseExpiresAt" = NULL, "lastError" = NULL,
+          "updatedAt" = now()
+      WHERE id = ${job.id} AND status = 'PROCESSING'
+        AND "leaseOwner" = ${leaseToken} AND "leaseExpiresAt" > now()
+      RETURNING id
+    `;
+    const succeeded = updated.length === 1;
+    if (succeeded) workerSuccesses.inc({ worker: job.queue });
+    workerJobDuration.observe({ worker: job.queue, result: succeeded ? "success" : "fenced" }, (performance.now() - startedAt) / 1000);
+    return succeeded;
+  } catch (error) {
+    if (error instanceof BatchJobLeaseLostError || heartbeat.lost()) {
+      workerLeaseLost.inc({ worker: job.queue });
+      workerJobDuration.observe({ worker: job.queue, result: "lease_lost" }, (performance.now() - startedAt) / 1000);
+      return false;
+    }
+    const nextFailureAttempt = job.failureAttempts + 1;
+    const failed = nextFailureAttempt >= MAX_FAILURE_ATTEMPTS;
+    const delaySeconds = Math.round(Math.min(15 * 60, 5 * 2 ** Math.max(0, nextFailureAttempt - 1)));
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const updated = await prisma.$executeRaw`
+      UPDATE "BatchJob"
+      SET "failureAttempts" = "failureAttempts" + 1,
+          status = ${failed ? "FAILED" : "RETRY"},
+          "nextAttemptAt" = now() + (${delaySeconds} * interval '1 second'),
+          "leaseOwner" = NULL, "leaseExpiresAt" = NULL, "lastError" = ${errorMessage},
+          "updatedAt" = now()
+      WHERE id = ${job.id} AND status = 'PROCESSING'
+        AND "leaseOwner" = ${leaseToken} AND "leaseExpiresAt" > now()
+    `;
+    if (updated) workerFailures.inc({ worker: job.queue });
+    workerJobDuration.observe({ worker: job.queue, result: failed ? "failed" : "retry" }, (performance.now() - startedAt) / 1000);
+    return false;
+  } finally {
+    await heartbeat.stop();
+  }
+}
+
+async function processJob(job: ClaimedJob, batchSize: number): Promise<JobResult> {
+  const payload = JSON.parse(job.payloadJson) as { bagId?: string; cursor?: string; orderId?: string };
+  if (job.type === "PICKUP_REMINDER") {
+    if (!payload.orderId) throw new Error("Pickup reminder job has no orderId");
+    return pickupReminder(payload.orderId);
+  }
   if (!payload.bagId) throw new Error("Batch job has no bagId");
-  if (job.type === "FANOUT_NEW_BAG") return fanoutNewBag(job.id, payload.bagId, payload.cursor, batchSize);
+  if (job.type === "FANOUT_NEW_BAG") return fanoutNewBag(payload.bagId, payload.cursor, batchSize);
   if (job.type === "REFUND_CANCELLED_BAG") return refundCancelledBag(payload.bagId, batchSize);
   throw new Error(`Unsupported batch job type: ${job.type}`);
 }
 
-async function fanoutNewBag(jobId: string, bagId: string, cursor: string | undefined, batchSize: number): Promise<boolean> {
+async function pickupReminder(orderId: string): Promise<JobResult> {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { user: true, bag: { include: { venue: true } } },
+  });
+  if (!order || !order.user.notificationReminders || !["PAID", "READY_FOR_PICKUP"].includes(order.status) || order.bag.pickupEnd <= new Date()) {
+    return { done: true };
+  }
+  await prisma.notification.createMany({
+    data: [{
+      userId: order.userId,
+      channel: "IN_APP",
+      recipient: order.userId,
+      type: "PICKUP_REMINDER",
+      status: "SENT",
+      sentAt: new Date(),
+      dedupeKey: `pickup-reminder:${order.id}`,
+      payloadJson: JSON.stringify({ orderId: order.id, venueName: order.bag.venue.name, title: order.bag.title, pickupStart: order.bag.pickupStart }),
+    }],
+    skipDuplicates: true,
+  });
+  return { done: true };
+}
+
+async function fanoutNewBag(bagId: string, cursor: string | undefined, batchSize: number): Promise<JobResult> {
   const bag = await prisma.bag.findUniqueOrThrow({ where: { id: bagId }, include: { venue: true } });
   const followers = await prisma.favorite.findMany({
     where: { venueId: bag.venueId, user: { notificationOffers: true } },
@@ -124,15 +213,12 @@ async function fanoutNewBag(jobId: string, bagId: string, cursor: string | undef
       skipDuplicates: true,
     });
   }
-  if (followers.length < batchSize) return true;
-  await prisma.batchJob.update({
-    where: { id: jobId },
-    data: { payloadJson: JSON.stringify({ bagId, cursor: followers.at(-1)!.id }) },
-  });
-  return false;
+  return followers.length < batchSize
+    ? { done: true }
+    : { done: false, payloadJson: JSON.stringify({ bagId, cursor: followers.at(-1)!.id }) };
 }
 
-async function refundCancelledBag(bagId: string, batchSize: number): Promise<boolean> {
+async function refundCancelledBag(bagId: string, batchSize: number): Promise<JobResult> {
   const bag = await prisma.bag.findUniqueOrThrow({ where: { id: bagId }, include: { venue: true } });
   const orders = await prisma.order.findMany({
     where: { bagId, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
@@ -155,6 +241,7 @@ async function refundCancelledBag(bagId: string, batchSize: number): Promise<boo
           operationId: operation.id,
           orderId: order.id,
           type: "TELEGRAM_BAG_CANCELLED",
+          nextAttemptAt: new Date(0),
           payloadJson: JSON.stringify({
             telegramId: details.user.telegramId,
             text: `😔 «${bag.venue.name}» отменил пакет «${bag.title}». Деньги вернутся на карту.`,
@@ -163,13 +250,5 @@ async function refundCancelledBag(bagId: string, batchSize: number): Promise<boo
       });
     }
   }
-  return orders.length < batchSize;
-}
-
-export async function renewBatchJobLease(jobId: string, workerId: string): Promise<boolean> {
-  const result = await prisma.batchJob.updateMany({
-    where: { id: jobId, leaseOwner: workerId, status: "PROCESSING" },
-    data: { leaseExpiresAt: new Date(Date.now() + LEASE_MS) },
-  });
-  return result.count === 1;
+  return { done: orders.length < batchSize };
 }

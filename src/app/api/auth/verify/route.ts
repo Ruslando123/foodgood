@@ -6,7 +6,7 @@ import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit, requestIp } from "@/shared/server/rate-limit";
 
 export async function POST(req: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const { phone, code } = await readJsonObject(req);
     const normalized = normalizePhone(String(phone ?? ""));
     if (!normalized) {

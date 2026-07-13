@@ -18,7 +18,25 @@ WHERE bag.status = 'ACTIVE'
     ST_SetSRID(ST_MakePoint(76.8897, 43.2389), 4326)::geography,
     10000
   )
-ORDER BY distance_m, bag.id
+ORDER BY venue.location <-> ST_SetSRID(ST_MakePoint(76.8897, 43.2389), 4326)::geography, bag.id
+LIMIT 25;
+
+EXPLAIN (ANALYZE, BUFFERS, VERBOSE)
+SELECT bag.id
+FROM "Bag" bag
+JOIN "Venue" venue ON venue.id = bag."venueId"
+WHERE bag.status = 'ACTIVE'
+  AND bag."quantityLeft" > 0
+  AND bag."pickupEnd" > now()
+  AND bag.id IN (
+    SELECT search_bag.id FROM "Bag" search_bag
+    WHERE lower(search_bag.title) LIKE '%пекарня%'
+    UNION
+    SELECT search_bag.id FROM "Venue" search_venue
+    JOIN "Bag" search_bag ON search_bag."venueId" = search_venue.id
+    WHERE lower(search_venue.name || ' ' || search_venue.address) LIKE '%пекарня%'
+  )
+ORDER BY bag."pickupEnd", bag.id
 LIMIT 25;
 
 EXPLAIN (ANALYZE, BUFFERS, VERBOSE)

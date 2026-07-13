@@ -26,17 +26,37 @@ export function json<T>(data: T, init?: ResponseInit) {
   return NextResponse.json(data, init);
 }
 
+const STATIC_API_SEGMENTS = new Set([
+  "api", "admin", "business", "auth", "orders", "bags", "venues", "owners", "users", "operations",
+  "reviews", "favorites", "notifications", "metrics", "health", "live", "ready", "deep", "internal",
+  "reconcile", "redeem", "finance", "export", "stats", "phone", "verify", "logout", "logout-all", "me",
+  "support", "cancel", "retry", "review", "media",
+]);
+
+function routeLabel(request?: Request): string {
+  if (!request) return "unknown";
+  return new URL(request.url).pathname
+    .split("/")
+    .map((segment) => !segment || STATIC_API_SEGMENTS.has(segment) ? segment : ":id")
+    .join("/");
+}
+
 export async function apiRoute(
-  handler: () => Promise<NextResponse>
+  requestOrHandler: Request | (() => Promise<NextResponse>),
+  optionalHandler?: () => Promise<NextResponse>
 ): Promise<NextResponse<ApiErrorBody | unknown>> {
+  const request = typeof requestOrHandler === "function" ? undefined : requestOrHandler;
+  const handler = typeof requestOrHandler === "function" ? requestOrHandler : optionalHandler;
+  if (!handler) throw new Error("API handler is required");
+  const labels = { method: request?.method ?? "UNKNOWN", route: routeLabel(request) };
   const stop = apiDuration.startTimer();
   try {
     const response = await handler();
-    stop({ status: String(response.status) });
+    stop({ ...labels, status: String(response.status) });
     return response;
   } catch (error) {
     if (error instanceof ApiError) {
-      stop({ status: String(error.status) });
+      stop({ ...labels, status: String(error.status) });
       return NextResponse.json(
         {
           error: {
@@ -50,7 +70,7 @@ export async function apiRoute(
     }
 
     logEvent("error", "api.unhandled_error", {}, error);
-    stop({ status: "500" });
+    stop({ ...labels, status: "500" });
     return NextResponse.json(
       { error: { code: "INTERNAL_ERROR", message: "Внутренняя ошибка сервера" } },
       { status: 500 }

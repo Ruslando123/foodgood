@@ -5,7 +5,8 @@ import { assertPaymentProviderReady, paymentProvider, PaymentProviderError } fro
 import { generatePickupCode } from "./qr";
 import { PLATFORM_FEE_PCT } from "./config";
 import { telegramNotificationsEnabled } from "./telegram";
-import { paymentFailures } from "./metrics";
+import { paymentFailures, workerClaims, workerFailures, workerJobDuration, workerLeaseLost, workerSuccesses } from "./metrics";
+import { startLeaseHeartbeat } from "./lease-heartbeat";
 
 export class OrderError extends Error {}
 class OperationLeaseLostError extends Error {}
@@ -197,6 +198,7 @@ export async function cancelBagWithRefunds(merchantId: string, bagId: string) {
         type: "REFUND_CANCELLED_BAG",
         dedupeKey: `refund-cancelled-bag:${bag.id}`,
         payloadJson: JSON.stringify({ bagId: bag.id }),
+        nextAttemptAt: new Date(0),
       },
     });
   });
@@ -226,8 +228,26 @@ async function ensureOperation(tx: Prisma.TransactionClient, paymentId: string, 
 }
 
 /** Claim is atomic, while network work happens after the transaction closes. */
-export async function reconcilePendingPayments(limit = 50, workerId: string = randomUUID()): Promise<number> {
-  const candidates = await prisma.$queryRaw<Array<{ id: string }>>`
+export async function reconcilePendingPayments(limit = 50, processWorkerId: string = randomUUID()): Promise<number> {
+  let claimed = 0;
+  let processed = 0;
+  const concurrency = Math.min(WORKER_CONCURRENCY, limit);
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (claimed < limit) {
+      claimed += 1;
+      const leaseToken = `${processWorkerId}:${randomUUID()}`;
+      const candidate = await claimPaymentOperation(leaseToken);
+      if (!candidate) return;
+      workerClaims.inc({ worker: "payments" });
+      if (await processPaymentOperation(candidate.id, leaseToken)) processed += 1;
+    }
+  });
+  await Promise.all(workers);
+  return processed;
+}
+
+async function claimPaymentOperation(leaseToken: string): Promise<{ id: string } | null> {
+  const [candidate] = await prisma.$queryRaw<Array<{ id: string }>>`
     WITH candidates AS (
       SELECT id FROM "PaymentOperation"
       WHERE status IN ('PENDING', 'RETRY', 'PROCESSING')
@@ -235,31 +255,34 @@ export async function reconcilePendingPayments(limit = 50, workerId: string = ra
         AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" < now())
       ORDER BY "nextAttemptAt", id
       FOR UPDATE SKIP LOCKED
-      LIMIT ${limit}
+      LIMIT 1
     )
     UPDATE "PaymentOperation" operation
-    SET status = 'PROCESSING', "leaseOwner" = ${workerId},
+    SET status = 'PROCESSING', "leaseOwner" = ${leaseToken},
         "leaseExpiresAt" = now() + interval '60 seconds'
     FROM candidates WHERE operation.id = candidates.id
     RETURNING operation.id
   `;
-  let next = 0;
-  let processed = 0;
-  const workers = Array.from({ length: Math.min(WORKER_CONCURRENCY, candidates.length) }, async () => {
-    while (next < candidates.length) {
-      const candidate = candidates[next++];
-      if (await processPaymentOperation(candidate.id, workerId)) processed += 1;
-    }
-  });
-  await Promise.all(workers); // bounded by WORKER_CONCURRENCY, never by queue size
-  return processed;
+  return candidate ?? null;
 }
 
-async function processPaymentOperation(operationId: string, workerId: string): Promise<boolean> {
+async function processPaymentOperation(operationId: string, leaseToken: string): Promise<boolean> {
+  const startedAt = performance.now();
+  let metricResult = "success";
   const operation = await prisma.paymentOperation.findUniqueOrThrow({
     where: { id: operationId },
     include: { payment: { include: { order: { include: { bag: { include: { venue: true } }, user: true } } } } },
   });
+  const heartbeat = startLeaseHeartbeat(
+    async () => (await prisma.$queryRaw<Array<{ id: string }>>`
+      UPDATE "PaymentOperation"
+      SET "leaseExpiresAt" = now() + interval '60 seconds'
+      WHERE id = ${operationId} AND status = 'PROCESSING'
+        AND "leaseOwner" = ${leaseToken} AND "leaseExpiresAt" > now()
+      RETURNING id
+    `).length === 1,
+    LEASE_MS / 3
+  );
   try {
     const payment = operation.payment;
     if (operation.type === "HOLD") {
@@ -272,7 +295,8 @@ async function processPaymentOperation(operationId: string, workerId: string): P
       if (!hold || hold.status !== "HELD") {
         throw new Error(`Unexpected hold status ${hold?.status ?? "NOT_FOUND"}`);
       }
-      await finalizeHold(operation.id, workerId, payment.id, payment.orderId, hold.providerRef);
+      if (heartbeat.lost()) throw new OperationLeaseLostError(`Payment operation lease lost: ${operation.id}`);
+      await finalizeHold(operation.id, leaseToken, payment.id, payment.orderId, hold.providerRef);
     } else {
       if (!payment.providerRef) throw new Error("Missing provider reference");
       let providerStatus = await providerCall("get status", paymentProvider.getStatus(payment.providerRef));
@@ -285,33 +309,56 @@ async function processPaymentOperation(operationId: string, workerId: string): P
         providerStatus = await providerCall("confirm refund", paymentProvider.getStatus(payment.providerRef));
       }
       if (operation.type === "CAPTURE" && providerStatus === "CAPTURED") {
-        await finalizeCapture(operation.id, workerId, payment.id, payment.orderId, payment.provider, payment.providerRef, payment.amount);
+        if (heartbeat.lost()) throw new OperationLeaseLostError(`Payment operation lease lost: ${operation.id}`);
+        await finalizeCapture(operation.id, leaseToken, payment.id, payment.orderId, payment.provider, payment.providerRef, payment.amount);
       } else if (operation.type === "REFUND" && providerStatus === "REFUNDED") {
-        await finalizeRefund(operation.id, workerId, payment.id, payment.orderId, payment.provider, payment.providerRef, payment.amount);
+        if (heartbeat.lost()) throw new OperationLeaseLostError(`Payment operation lease lost: ${operation.id}`);
+        await finalizeRefund(operation.id, leaseToken, payment.id, payment.orderId, payment.provider, payment.providerRef, payment.amount);
       } else {
         throw new Error(`Unexpected provider status ${providerStatus}`);
       }
     }
   } catch (error) {
-    if (error instanceof OperationLeaseLostError) return true;
+    if (error instanceof OperationLeaseLostError) {
+      metricResult = "lease_lost";
+      workerLeaseLost.inc({ worker: "payments" });
+      return false;
+    }
+    metricResult = "failure";
+    workerFailures.inc({ worker: "payments" });
     paymentFailures.inc({ operation: operation.type });
     if (operation.type === "HOLD" && error instanceof PaymentProviderError && error.code === "DECLINED") {
-      await declineHold(operation.id, workerId, operation.payment.id, operation.payment.orderId, operation.payment.order.bagId, operation.payment.order.quantity);
+      await declineHold(operation.id, leaseToken, operation.payment.id, operation.payment.orderId, operation.payment.order.bagId, operation.payment.order.quantity);
     } else {
-      await retryOperation(operation.id, workerId, operation.attempts, error);
+      await retryOperation(operation.id, leaseToken, operation.attempts, error);
     }
+  } finally {
+    await heartbeat.stop();
+    workerJobDuration.observe({ worker: "payments", result: metricResult }, (performance.now() - startedAt) / 1000);
   }
+  if (metricResult === "success") workerSuccesses.inc({ worker: "payments" });
   return true;
 }
 
-async function finalizeHold(operationId: string, workerId: string, paymentId: string, orderId: string, providerRef: string) {
+async function finalizeHold(operationId: string, leaseToken: string, paymentId: string, orderId: string, providerRef: string) {
   await prisma.$transaction(async (tx) => {
-    await renewOperationLease(tx, operationId, workerId);
+    await renewOperationLease(tx, operationId, leaseToken);
     await tx.payment.update({ where: { id: paymentId }, data: { providerRef, status: "HELD" } });
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { bag: true } });
     if (!order) throw new OrderError("Заказ не найден");
     if (order.status === "PENDING_PAYMENT" && ["ACTIVE", "SOLD_OUT"].includes(order.bag.status) && order.bag.pickupEnd > new Date()) {
       await tx.order.update({ where: { id: orderId }, data: { status: "PAID" } });
+      await tx.batchJob.upsert({
+        where: { dedupeKey: `pickup-reminder:${orderId}` },
+        update: {},
+        create: {
+          queue: "notifications",
+          type: "PICKUP_REMINDER",
+          dedupeKey: `pickup-reminder:${orderId}`,
+          payloadJson: JSON.stringify({ orderId }),
+          nextAttemptAt: new Date(order.bag.pickupStart.getTime() - 60 * 60_000),
+        },
+      });
     } else if (order.status !== "REFUND_PENDING") {
       const finalStatus: FinalRefundStatus = order.bag.pickupEnd <= new Date() ? "EXPIRED" : "CANCELLED";
       const queued = await tx.order.updateMany({
@@ -321,13 +368,13 @@ async function finalizeHold(operationId: string, workerId: string, paymentId: st
       if (queued.count) await ensureOperation(tx, paymentId, "REFUND");
     }
     await recordPaymentEvent(tx, { operationId, paymentId, orderId, provider: paymentProvider.name, providerRef, type: "HOLD", status: "SUCCEEDED" });
-    await succeedOperation(tx, operationId);
+    await succeedOperation(tx, operationId, leaseToken);
   });
 }
 
-async function finalizeCapture(operationId: string, workerId: string, paymentId: string, orderId: string, provider: string, providerRef: string, amount: number) {
+async function finalizeCapture(operationId: string, leaseToken: string, paymentId: string, orderId: string, provider: string, providerRef: string, amount: number) {
   await prisma.$transaction(async (tx) => {
-    await renewOperationLease(tx, operationId, workerId);
+    await renewOperationLease(tx, operationId, leaseToken);
     await tx.payment.update({ where: { id: paymentId }, data: { status: "CAPTURED" } });
     await tx.order.updateMany({ where: { id: orderId, status: "CAPTURE_PENDING" }, data: { status: "COMPLETED", completedAt: new Date() } });
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { user: true, bag: { include: { venue: true } } } });
@@ -339,19 +386,20 @@ async function finalizeCapture(operationId: string, workerId: string, paymentId:
           operationId,
           orderId,
           type: "TELEGRAM_CAPTURED",
+          nextAttemptAt: new Date(0),
           payloadJson: JSON.stringify({ telegramId: order.user.telegramId, text: `✅ Заказ в «${order.bag.venue.name}» выдан. Приятного аппетита!` }),
         },
       });
     }
     await recordPaymentEvent(tx, { operationId, paymentId, orderId, provider, providerRef, type: "CAPTURE", status: "SUCCEEDED", amount });
-    await succeedOperation(tx, operationId);
+    await succeedOperation(tx, operationId, leaseToken);
   });
 }
 
 /** Fresh reads inside the transaction prevent duplicate inventory restoration. */
-async function finalizeRefund(operationId: string, workerId: string, paymentId: string, orderId: string, provider: string, providerRef: string, amount: number) {
+async function finalizeRefund(operationId: string, leaseToken: string, paymentId: string, orderId: string, provider: string, providerRef: string, amount: number) {
   await prisma.$transaction(async (tx) => {
-    await renewOperationLease(tx, operationId, workerId);
+    await renewOperationLease(tx, operationId, leaseToken);
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { bag: true } });
     if (!order) throw new OrderError("Заказ не найден");
     const finalStatus = (order.refundTargetStatus ?? "CANCELLED") as FinalRefundStatus;
@@ -375,13 +423,13 @@ async function finalizeRefund(operationId: string, workerId: string, paymentId: 
       }
     }
     await recordPaymentEvent(tx, { operationId, paymentId, orderId, provider, providerRef, type: "REFUND", status: "SUCCEEDED", amount });
-    await succeedOperation(tx, operationId);
+    await succeedOperation(tx, operationId, leaseToken);
   });
 }
 
-async function declineHold(operationId: string, workerId: string, paymentId: string, orderId: string, bagId: string, quantity: number) {
+async function declineHold(operationId: string, leaseToken: string, paymentId: string, orderId: string, bagId: string, quantity: number) {
   await prisma.$transaction(async (tx) => {
-    await renewOperationLease(tx, operationId, workerId);
+    await renewOperationLease(tx, operationId, leaseToken);
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { bag: true } });
     if (order) {
       const finalStatus: FinalRefundStatus = order.bag.pickupEnd <= new Date() ? "EXPIRED" : "CANCELLED";
@@ -400,25 +448,24 @@ async function declineHold(operationId: string, workerId: string, paymentId: str
       }
     }
     await recordPaymentEvent(tx, { operationId, paymentId, orderId, provider: paymentProvider.name, type: "HOLD", status: "FAILED" });
-    await succeedOperation(tx, operationId);
+    await succeedOperation(tx, operationId, leaseToken);
   });
 }
 
-async function retryOperation(id: string, workerId: string, previousAttempts: number, error: unknown): Promise<void> {
+async function retryOperation(id: string, leaseToken: string, previousAttempts: number, error: unknown): Promise<void> {
   const attempts = previousAttempts + 1;
   const exhausted = attempts >= MAX_PAYMENT_ATTEMPTS;
-  const updated = await prisma.paymentOperation.updateMany({
-    where: { id, status: "PROCESSING", leaseOwner: workerId },
-    data: {
-      attempts,
-      status: exhausted ? "NEEDS_REVIEW" : "RETRY",
-      nextAttemptAt: new Date(Date.now() + Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1))),
-      leaseOwner: null,
-      leaseExpiresAt: null,
-      lastError: errorMessage(error),
-    },
-  });
-  if (updated.count && exhausted) console.error("PAYMENT_OPERATION_NEEDS_REVIEW", { operationId: id });
+  const retryDelayMs = Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1));
+  const updated = await prisma.$queryRaw<Array<{ id: string }>>`
+    UPDATE "PaymentOperation"
+    SET attempts = ${attempts}, status = ${exhausted ? "NEEDS_REVIEW" : "RETRY"},
+        "nextAttemptAt" = now() + (${retryDelayMs} * interval '1 millisecond'),
+        "leaseOwner" = NULL, "leaseExpiresAt" = NULL, "lastError" = ${errorMessage(error)}
+    WHERE id = ${id} AND status = 'PROCESSING' AND "leaseOwner" = ${leaseToken}
+      AND "leaseExpiresAt" > now()
+    RETURNING id
+  `;
+  if (updated.length && exhausted) console.error("PAYMENT_OPERATION_NEEDS_REVIEW", { operationId: id });
 }
 
 /**
@@ -426,24 +473,26 @@ async function retryOperation(id: string, workerId: string, previousAttempts: nu
  * finish after its lease was claimed elsewhere; the current owner will then
  * reconcile the provider's idempotent result.
  */
-async function renewOperationLease(tx: Prisma.TransactionClient, id: string, workerId: string): Promise<void> {
-  const renewed = await tx.paymentOperation.updateMany({
-    where: {
-      id,
-      status: "PROCESSING",
-      leaseOwner: workerId,
-      leaseExpiresAt: { gt: new Date() },
-    },
-    data: { leaseExpiresAt: new Date(Date.now() + LEASE_MS) },
-  });
-  if (!renewed.count) throw new OperationLeaseLostError(`Payment operation lease lost: ${id}`);
+async function renewOperationLease(tx: Prisma.TransactionClient, id: string, leaseToken: string): Promise<void> {
+  const renewed = await tx.$queryRaw<Array<{ id: string }>>`
+    UPDATE "PaymentOperation"
+    SET "leaseExpiresAt" = now() + interval '60 seconds'
+    WHERE id = ${id} AND status = 'PROCESSING' AND "leaseOwner" = ${leaseToken}
+      AND "leaseExpiresAt" > now()
+    RETURNING id
+  `;
+  if (!renewed.length) throw new OperationLeaseLostError(`Payment operation lease lost: ${id}`);
 }
 
-async function succeedOperation(tx: Prisma.TransactionClient, id: string) {
-  await tx.paymentOperation.update({
-    where: { id },
-    data: { status: "SUCCEEDED", leaseOwner: null, leaseExpiresAt: null, lastError: null },
-  });
+async function succeedOperation(tx: Prisma.TransactionClient, id: string, leaseToken: string) {
+  const succeeded = await tx.$queryRaw<Array<{ id: string }>>`
+    UPDATE "PaymentOperation"
+    SET status = 'SUCCEEDED', "leaseOwner" = NULL, "leaseExpiresAt" = NULL, "lastError" = NULL
+    WHERE id = ${id} AND status = 'PROCESSING' AND "leaseOwner" = ${leaseToken}
+      AND "leaseExpiresAt" > now()
+    RETURNING id
+  `;
+  if (!succeeded.length) throw new OperationLeaseLostError(`Payment operation lease lost: ${id}`);
 }
 
 async function recordPaymentEvent(tx: Prisma.TransactionClient, input: {

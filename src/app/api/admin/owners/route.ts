@@ -7,7 +7,7 @@ import { requiredString } from "@/shared/validation";
 
 /** Список номеров, которым администратор уже выдал доступ владельца. */
 export async function GET(request: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(request, async () => {
     await requireAdmin();
     const params = request.nextUrl.searchParams;
     const query = (params.get("q") ?? "").trim();
@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
 
 /** Добавляет номер заранее: владелец сможет войти и сам создать заведение. */
 export async function POST(req: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const admin = await requireAdmin();
     const body = await readJsonObject(req);
     const phone = normalizePhone(requiredString(body.phone, "phone", { max: 30 }));

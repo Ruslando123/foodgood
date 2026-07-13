@@ -19,8 +19,9 @@ import { resetDb, createFixtures, inMinutes } from "./helpers";
 import { NextRequest } from "next/server";
 import { GET as getBags } from "@/app/api/bags/route";
 import { POST as verifyPhone } from "@/app/api/auth/verify/route";
-import { createPickupReminders } from "@/lib/notifications";
+import { scheduleMissingPickupReminders } from "@/lib/notifications";
 import { runBatchJobs } from "@/lib/jobs";
+import { moderateReview, reconcileVenueRatings } from "@/lib/reviews";
 
 beforeEach(resetDb);
 afterEach(() => vi.restoreAllMocks());
@@ -102,18 +103,33 @@ describe("внутренние уведомления", () => {
     const { customer, venue, bag } = await createFixtures();
     await prisma.favorite.create({ data: { userId: customer.id, venueId: venue.id } });
     await prisma.batchJob.create({
-      data: { queue: "notifications", type: "FANOUT_NEW_BAG", payloadJson: JSON.stringify({ bagId: bag.id }), dedupeKey: `test-fanout:${bag.id}` },
+      data: { queue: "notifications", type: "FANOUT_NEW_BAG", payloadJson: JSON.stringify({ bagId: bag.id }), dedupeKey: `test-fanout:${bag.id}`, nextAttemptAt: new Date(0) },
     });
     await expect(runBatchJobs("notifications")).resolves.toBe(1);
     await expect(prisma.notification.findMany({ where: { userId: customer.id, type: "NEW_FAVORITE_VENUE_BAG" } })).resolves.toHaveLength(1);
+  });
+
+  it("считает успешные страницы отдельно от failure attempts", async () => {
+    const { venue, bag } = await createFixtures();
+    const followers = await Promise.all(Array.from({ length: 3 }, (_, index) => prisma.user.create({ data: { telegramId: `batch-follower-${index}` } })));
+    await prisma.favorite.createMany({ data: followers.map((user) => ({ userId: user.id, venueId: venue.id })) });
+    const job = await prisma.batchJob.create({
+      data: { queue: "notifications", type: "FANOUT_NEW_BAG", payloadJson: JSON.stringify({ bagId: bag.id }), dedupeKey: `paged-fanout:${bag.id}`, nextAttemptAt: new Date(0) },
+    });
+    for (let page = 0; page < 4; page += 1) await runBatchJobs("notifications", 1, 1);
+    await expect(prisma.batchJob.findUniqueOrThrow({ where: { id: job.id } })).resolves.toMatchObject({
+      status: "SUCCEEDED",
+      failureAttempts: 0,
+      batchesProcessed: 4,
+    });
   });
 
   it("создаёт одно напоминание перед выдачей и не дублирует его", async () => {
     const { customer, bag } = await createFixtures({ pickupStart: inMinutes(30), pickupEnd: inMinutes(90) });
     const order = await createOrder(customer.id, bag.id, 1);
     expect(order.status).toBe("PAID");
-    await expect(createPickupReminders()).resolves.toBe(1);
-    await expect(createPickupReminders()).resolves.toBe(0);
+    await expect(runBatchJobs("notifications")).resolves.toBe(1);
+    await expect(runBatchJobs("notifications")).resolves.toBe(0);
     await expect(prisma.notification.findMany({ where: { userId: customer.id, type: "PICKUP_REMINDER" } })).resolves.toHaveLength(1);
   });
 
@@ -121,7 +137,8 @@ describe("внутренние уведомления", () => {
     const { customer, bag } = await createFixtures({ pickupStart: inMinutes(30), pickupEnd: inMinutes(90) });
     await prisma.user.update({ where: { id: customer.id }, data: { notificationReminders: false } });
     await createOrder(customer.id, bag.id, 1);
-    await expect(createPickupReminders()).resolves.toBe(0);
+    await expect(runBatchJobs("notifications")).resolves.toBe(1);
+    await expect(prisma.notification.count({ where: { type: "PICKUP_REMINDER" } })).resolves.toBe(0);
   });
 
   it("обрабатывает больше одного пакета по 500 заказов", async () => {
@@ -136,7 +153,10 @@ describe("внутренние уведомления", () => {
         pickupCode: `R${String(index).padStart(5, "0")}`,
       })),
     });
-    await expect(createPickupReminders()).resolves.toBe(501);
+    await expect(scheduleMissingPickupReminders()).resolves.toBe(500);
+    await expect(runBatchJobs("notifications", 500)).resolves.toBe(500);
+    await expect(scheduleMissingPickupReminders()).resolves.toBe(1);
+    await expect(runBatchJobs("notifications", 10)).resolves.toBe(1);
     await expect(prisma.notification.count({ where: { type: "PICKUP_REMINDER" } })).resolves.toBe(501);
   });
 });
@@ -302,6 +322,36 @@ describe("redeemOrder (выдача по коду)", () => {
       .resolves.toMatchObject({ status: "SUCCEEDED", attempts: 0 });
     await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
       .resolves.toMatchObject({ status: "COMPLETED" });
+  });
+
+  it("выдаёт разным coroutine одного процесса разные lease token", async () => {
+    const { customer, venue, bag } = await createFixtures();
+    const secondBag = await prisma.bag.create({
+      data: { venueId: venue.id, title: "Второй пакет", price: 900, originalPrice: 2700, quantityTotal: 2, quantityLeft: 2, pickupStart: inMinutes(60), pickupEnd: inMinutes(120) },
+    });
+    await queueOrder(customer.id, bag.id, 1);
+    await queueOrder(customer.id, secondBag.id, 1);
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const originalHold = paymentProvider.hold.bind(paymentProvider);
+    vi.spyOn(paymentProvider, "hold").mockImplementation(async (amount, orderId, key) => {
+      await gate;
+      return originalHold(amount, orderId, key);
+    });
+
+    const processing = reconcilePendingPayments(10, "same-process");
+    let claimed: Array<{ leaseOwner: string | null }> = [];
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      claimed = await prisma.paymentOperation.findMany({ where: { status: "PROCESSING" }, select: { leaseOwner: true } });
+      if (claimed.length === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(claimed).toHaveLength(2);
+    expect(new Set(claimed.map((item) => item.leaseOwner)).size).toBe(2);
+    expect(claimed.every((item) => item.leaseOwner?.startsWith("same-process:"))).toBe(true);
+    release();
+    await processing;
   });
 
   it("не помечает заказ выданным, если capture не подтверждён", async () => {
@@ -662,6 +712,21 @@ describe("расширенные продуктовые сценарии", () =>
     const review = await prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 5, comment: "Отлично" } });
     expect(review).toMatchObject({ rating: 5, moderationStatus: "PUBLISHED" });
     await expect(prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 4 } })).rejects.toThrow();
+  });
+
+  it("применяет delta рейтинга один раз при конкурентной модерации и умеет сверяться", async () => {
+    const { merchant, customer, venue, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    await redeemOrder(merchant.id, order.pickupCode);
+    const review = await prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 5 } });
+    await prisma.venue.update({ where: { id: venue.id }, data: { ratingSum: 5, ratingCount: 1, ratingAverage: 5 } });
+
+    await Promise.all([moderateReview(review.id, "HIDDEN"), moderateReview(review.id, "HIDDEN")]);
+    await expect(prisma.venue.findUniqueOrThrow({ where: { id: venue.id } })).resolves.toMatchObject({ ratingSum: 0, ratingCount: 0, ratingAverage: 0 });
+
+    await prisma.venue.update({ where: { id: venue.id }, data: { ratingSum: 99, ratingCount: 9, ratingAverage: 11 } });
+    await reconcileVenueRatings();
+    await expect(prisma.venue.findUniqueOrThrow({ where: { id: venue.id } })).resolves.toMatchObject({ ratingSum: 0, ratingCount: 0, ratingAverage: 0 });
   });
 });
 

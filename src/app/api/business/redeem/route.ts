@@ -7,7 +7,7 @@ import { requiredString } from "@/shared/validation";
 
 /** Выдача заказа на кассе: сканирование/ввод pickup-кода. */
 export async function POST(req: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const user = await requireMerchant();
     await consumeRateLimit(`order:redeem:${user.id}`, { limit: 30, windowMs: 60 * 1000 });
     const body = await readJsonObject(req);

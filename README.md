@@ -52,6 +52,7 @@ baseline через `migrate resolve` без сверки фактической
 
 ```bash
 npm test   # поднимает временный PostgreSQL через Docker Compose, применяет миграции и запускает Vitest
+npm run test:upgrade # обновляет схему коммита e5efe8a и требует пустой prisma migrate diff
 ```
 
 Для CI или уже запущенной БД достаточно передать `TEST_DATABASE_URL` — Docker тогда не используется.
@@ -60,26 +61,35 @@ npm test   # поднимает временный PostgreSQL через Docker 
 
 ## Нагрузочный прогон
 
-[`load/k6.js`](load/k6.js) содержит отдельные сценарии каталога, гонки за последний пакет, выдачи, массового истечения и деградации платёжного провайдера. Перед запуском staging должен быть заполнен production-подобным объёмом данных, а провайдер — переведён в управляемый fault mode.
+[`load/k6.js`](load/k6.js) содержит warm-up (5 мин), ожидаемый peak (15 мин), spike 2× (7 мин) и soak (30 мин), а также отдельные сценарии каталога, истории, уведомлений, гонки за последний пакет, выдачи, массового истечения и деградации mock-провайдера. Перед запуском staging должен быть заполнен production-подобным объёмом данных.
 
 ```bash
+LOAD_SEED_CONFIRM=foodgood-load-only \
+LOAD_VENUES=100 LOAD_BAGS_PER_VENUE=50 LOAD_EXPIRY_ORDERS=10000 \
+npm run load:seed
+
 BASE_URL=https://staging.example \
 CUSTOMER_COOKIE='foodgood_session=...' \
 MERCHANT_COOKIE='foodgood_session=...' \
 LAST_BAG_ID='...' \
 PICKUP_CODES='ABC234,DEF567' \
 npm run load:k6
+
+LOAD_DRAIN_TIMEOUT_MS=300000 npm run load:check
 ```
 
-После гонки за последний пакет дополнительно проверяются DB-инварианты: отрицательных остатков нет, успешный hold один на проданную единицу, повторных capture/refund нет.
+Seed создаёт production-подобный каталог и отдельный пакет с 10 000 заказов, истекающий во время теста. Финальная проверка автоматически контролирует отсутствие отрицательных остатков, уникальность HOLD/CAPTURE/REFUND, queue drain time и просроченные lease. Используйте seed только на одноразовой staging-базе. Пока production provider не подключён, payment-сценарии запускаются только на изолированном staging с явно разрешённым mock.
 
 ## Production-инфраструктура
 
 - Redis (`REDIS_URL`) обслуживает rate limit и короткий кэш идемпотентных ответов. Durable результат заказа остаётся в PostgreSQL.
 - Фото сохраняются в S3-compatible storage; `S3_PUBLIC_BASE_URL` должен указывать на CDN. Локальная файловая система остаётся только fallback для разработки.
 - Каталог фильтруется и сортируется PostgreSQL, использует PostGIS/GiST для радиуса, trigram-индексы для поиска, агрегированный рейтинг и составной cursor.
-- `/api/metrics` отдаёт Prometheus-метрики HTTP/query latency, queue lag, соединений БД и payment failures. Правила алертов находятся в [`ops/alerts.yml`](ops/alerts.yml).
+- `/api/metrics` отдаёт Prometheus-метрики HTTP/query latency, queue depth/oldest age, expired leases, heartbeat, соединений БД и payment failures. Каждый worker отдаёт свои process-метрики на `WORKER_METRICS_PORT` (`/metrics`). Правила находятся в [`ops/alerts.yml`](ops/alerts.yml), действия — в [`ops/runbook.md`](ops/runbook.md).
 - `DATABASE_CONNECTION_LIMIT` ограничивает Prisma pool каждого процесса. Конфигурация `render.yaml`: web 5 + workers 4/3/3/3 = 18 соединений; лимит PgBouncer/PostgreSQL должен оставлять минимум 20% резерва сверх этого и административных подключений.
+- Миграции используют отдельный `DIRECT_URL`; PgBouncer URL применяется только работающими web/worker процессами.
+- Health разделён на дешёвые `/api/health/live` и `/api/health/ready`, а также кэшируемый на 20 секунд `/api/health/deep` для очередей, workers и S3.
+- Pickup reminder создаётся как scheduled durable job при успешном HOLD; старые заказы один раз догоняются командой `npm run jobs:backfill-reminders` после миграций, без постоянного сканирования обычным worker.
 
 ## Текущее состояние
 

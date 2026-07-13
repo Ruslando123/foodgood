@@ -4,7 +4,7 @@ import { requireAdmin } from "@/modules/auth/server";
 import { apiRoute, json } from "@/shared/server/api";
 
 export async function GET(request: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(request, async () => {
     await requireAdmin();
     const params = request.nextUrl.searchParams;
     const query = (params.get("q") ?? "").trim();

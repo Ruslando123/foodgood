@@ -14,12 +14,13 @@ import { sendSmsCode } from "@/lib/sms";
 import { pluralRu } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
 import { integer, requiredString } from "@/shared/validation";
-import { idempotentOrderRequest } from "@/modules/orders/idempotency";
+import { idempotentOrderRequest, normalizeIdempotencyKey } from "@/modules/orders/idempotency";
 import { assertSameOrigin } from "@/shared/server/api";
 import { filterAndSortCatalog, parseCatalogQuery } from "@/modules/catalog/query";
 import { isInKazakhstan, kazakhstanCityById, nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { readVenuePhoto, removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { csvCell, parseFinanceDateRange } from "@/lib/csv";
+import { zonedDayBounds } from "@/lib/timezone";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -105,6 +106,8 @@ describe("venue photos", () => {
       await expect(saveVenuePhoto(new File([tiny], "tiny.png"))).rejects.toThrow("PHOTO_DIMENSIONS");
       await removeVenuePhoto(url);
       await expect(readVenuePhoto(filename)).resolves.toBeNull();
+      vi.stubEnv("NODE_ENV", "production");
+      await expect(saveVenuePhoto(new File([png], "venue.png", { type: "image/png" }))).rejects.toThrow("PHOTO_STORAGE_CONFIG");
     } finally {
       vi.unstubAllEnvs();
       await rm(directory, { recursive: true, force: true });
@@ -273,6 +276,23 @@ describe("границы безопасности", () => {
     await expect(
       idempotentOrderRequest(key, "bag-2:1", async () => ({ id: "order-2" }))
     ).rejects.toThrow("другими параметрами");
+  });
+
+  it("требует безопасный Idempotency-Key и нормализует пробелы", () => {
+    expect(normalizeIdempotencyKey("  mobile.retry_123  ")).toBe("mobile.retry_123");
+    expect(() => normalizeIdempotencyKey(null)).toThrow("требуется Idempotency-Key");
+    expect(() => normalizeIdempotencyKey("unsafe key!")).toThrow("Некорректный");
+  });
+});
+
+describe("границы дня города", () => {
+  it("переключает todayOnly в полночь Алматы (UTC+5)", () => {
+    const before = zonedDayBounds(new Date("2026-07-11T18:59:59.000Z"), "Asia/Almaty");
+    expect(before.startUtc.toISOString()).toBe("2026-07-10T19:00:00.000Z");
+    expect(before.endUtc.toISOString()).toBe("2026-07-11T19:00:00.000Z");
+    const after = zonedDayBounds(new Date("2026-07-11T19:00:00.000Z"), "Asia/Almaty");
+    expect(after.startUtc.toISOString()).toBe("2026-07-11T19:00:00.000Z");
+    expect(after.endUtc.toISOString()).toBe("2026-07-12T19:00:00.000Z");
   });
 });
 

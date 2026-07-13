@@ -15,7 +15,12 @@
     "worker:notifications": "tsx scripts/worker.ts notifications",
     "worker:outbox": "tsx scripts/worker.ts outbox",
     "load:k6": "k6 run load/k6.js",
+    "load:seed": "tsx scripts/seed-load.ts",
+    "load:check": "tsx scripts/check-load-invariants.ts",
+    "ratings:reconcile": "tsx scripts/reconcile-ratings.ts",
+    "jobs:backfill-reminders": "tsx scripts/backfill-reminders.ts",
     "test": "node scripts/test.mjs",
+    "test:upgrade": "node scripts/test-upgrade.mjs",
     "test:e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {

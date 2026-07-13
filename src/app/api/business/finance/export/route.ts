@@ -7,7 +7,7 @@ import { apiRoute } from "@/shared/server/api";
 const HEADER = ["order_id", "date", "venue", "package", "quantity", "gross_kzt", "fee_kzt", "net_kzt"];
 
 export async function GET(request: Request) {
-  return apiRoute(async () => {
+  return apiRoute(request, async () => {
     const user = await requireMerchant();
     const range = parseFinanceDateRange(request.url);
     const encoder = new TextEncoder();

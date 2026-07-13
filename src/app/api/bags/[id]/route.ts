@@ -6,7 +6,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return apiRoute(async () => {
+  return apiRoute(_req, async () => {
     const { id } = await params;
     const bag = await prisma.bag.findUnique({
       where: { id },

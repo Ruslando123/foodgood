@@ -85,6 +85,8 @@ model Venue {
 
   @@index([cityId, status])
   @@index([ownerId])
+  @@index([status])
+  @@index([location], type: Gist, map: "Venue_location_gist_idx")
 }
 
 model Bag {
@@ -105,7 +107,7 @@ model Bag {
   orders Order[]
 
   @@index([status, pickupEnd])
-  @@index([venueId, createdAt])
+  @@index([venueId, createdAt(sort: Desc)])
 }
 
 model Order {
@@ -131,7 +133,7 @@ model Order {
   review         Review?
 
   @@index([userId, status])
-  @@index([userId, status, createdAt, id])
+  @@index([userId, status, createdAt(sort: Desc), id(sort: Desc)])
   @@index([bagId, status])
   @@index([createdAt])
 }
@@ -289,19 +291,20 @@ model Favorite {
 /// Durable batch work created by short HTTP transactions and consumed by
 /// independently scalable notification/refund workers.
 model BatchJob {
-  id             String    @id @default(cuid())
-  queue          String
-  type           String
-  payloadJson    String    @default("{}")
-  dedupeKey      String?   @unique
-  status         String    @default("PENDING") // PENDING | PROCESSING | RETRY | SUCCEEDED | FAILED
-  attempts       Int       @default(0)
-  nextAttemptAt  DateTime  @default(now())
-  leaseOwner     String?
-  leaseExpiresAt DateTime?
-  lastError      String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  queue            String
+  type             String
+  payloadJson      String    @default("{}")
+  dedupeKey        String?   @unique
+  status           String    @default("PENDING") // PENDING | PROCESSING | RETRY | SUCCEEDED | FAILED
+  failureAttempts  Int       @default(0)
+  batchesProcessed Int       @default(0)
+  nextAttemptAt    DateTime  @default(now())
+  leaseOwner       String?
+  leaseExpiresAt   DateTime?
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
 
   @@index([queue, status, nextAttemptAt])
   @@index([leaseExpiresAt])

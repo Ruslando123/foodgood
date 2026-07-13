@@ -6,7 +6,7 @@ import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(_req, async () => {
     const user = await requireMerchant(); const { id } = await params;
     const bag = await prisma.bag.findUnique({ where: { id }, include: { venue: true, _count: { select: { orders: true } } } });
     if (!bag || bag.venue.ownerId !== user.id) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
@@ -15,7 +15,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(_req, async () => {
     const user = await requireMerchant(); const { id } = await params;
     const source = await prisma.bag.findUnique({ where: { id }, include: { venue: true } });
     if (!source || source.venue.ownerId !== user.id) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
@@ -38,7 +38,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const user = await requireMerchant();
     const { id } = await params;
     const body = await readJsonObject(req);

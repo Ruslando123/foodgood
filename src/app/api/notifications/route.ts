@@ -3,8 +3,8 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 
-export async function GET() {
-  return apiRoute(async () => {
+export async function GET(request: Request) {
+  return apiRoute(request, async () => {
     const user = await requireUser();
     const [account, unreadCount] = await Promise.all([
       prisma.user.findUniqueOrThrow({ where: { id: user.id }, select: { notificationReminders: true, notificationOffers: true } }),
@@ -18,7 +18,7 @@ export async function GET() {
 }
 
 export async function PATCH(request: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(request, async () => {
     const user = await requireUser();
     const body = await readJsonObject(request);
     if (body.action === "markAllRead") {

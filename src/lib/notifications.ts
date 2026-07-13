@@ -1,40 +1,35 @@
 import { prisma } from "@/lib/db";
 
-/** Создаёт одно внутреннее напоминание за час до начала выдачи. */
-export async function createPickupReminders(now = new Date()): Promise<number> {
-  const pickupBefore = new Date(now.getTime() + 60 * 60_000);
-  const batchSize = 500;
-  let cursor: string | undefined;
-  let created = 0;
-  while (true) {
-    const orders = await prisma.order.findMany({
-      where: {
-        status: { in: ["PAID", "READY_FOR_PICKUP"] },
-        bag: { pickupStart: { gt: now, lte: pickupBefore } },
-        user: { notificationReminders: true },
-      },
-      include: { bag: { include: { venue: true } } },
-      orderBy: { id: "asc" },
-      take: batchSize,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    });
-    if (!orders.length) break;
-    const result = await prisma.notification.createMany({
-      data: orders.map((order) => ({
-        userId: order.userId,
-        channel: "IN_APP",
-        recipient: order.userId,
-        type: "PICKUP_REMINDER",
-        status: "SENT",
-        sentAt: now,
-        dedupeKey: `pickup-reminder:${order.id}`,
-        payloadJson: JSON.stringify({ orderId: order.id, venueName: order.bag.venue.name, title: order.bag.title, pickupStart: order.bag.pickupStart }),
-      })),
-      skipDuplicates: true,
-    });
-    created += result.count;
-    if (orders.length < batchSize) break;
-    cursor = orders.at(-1)?.id;
-  }
-  return created;
+/**
+ * Bounded deployment backfill for orders created before scheduled reminder
+ * jobs existed. Normal orders create their job atomically when HOLD succeeds.
+ */
+export async function scheduleMissingPickupReminders(limit = 500): Promise<number> {
+  const orders = await prisma.$queryRaw<Array<{ id: string; pickupStart: Date }>>`
+    SELECT orders.id, bag."pickupStart"
+    FROM "Order" orders
+    JOIN "Bag" bag ON bag.id = orders."bagId"
+    JOIN "User" account ON account.id = orders."userId"
+    WHERE orders.status IN ('PAID', 'READY_FOR_PICKUP')
+      AND bag."pickupEnd" > now()
+      AND account."notificationReminders" = true
+      AND NOT EXISTS (
+        SELECT 1 FROM "BatchJob" job
+        WHERE job."dedupeKey" = 'pickup-reminder:' || orders.id
+      )
+    ORDER BY bag."pickupStart", orders.id
+    LIMIT ${limit}
+  `;
+  if (!orders.length) return 0;
+  const result = await prisma.batchJob.createMany({
+    data: orders.map((order) => ({
+      queue: "notifications",
+      type: "PICKUP_REMINDER",
+      dedupeKey: `pickup-reminder:${order.id}`,
+      payloadJson: JSON.stringify({ orderId: order.id }),
+      nextAttemptAt: new Date(order.pickupStart.getTime() - 60 * 60_000),
+    })),
+    skipDuplicates: true,
+  });
+  return result.count;
 }

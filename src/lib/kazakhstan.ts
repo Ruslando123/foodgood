@@ -5,6 +5,7 @@ export type KazakhstanCity = {
   name: string;
   lat: number;
   lng: number;
+  timeZone: string;
 };
 
 // Областные центры и крупнейшие города Казахстана для ручного выбора и подписи GPS.
@@ -29,7 +30,7 @@ export const KAZAKHSTAN_CITIES: KazakhstanCity[] = [
   { id: "kokshetau", name: "Кокшетау", lat: 53.2833, lng: 69.3833 },
   { id: "zhezkazgan", name: "Жезказган", lat: 47.7833, lng: 67.7 },
   { id: "konaev", name: "Конаев", lat: 43.8833, lng: 77.0833 },
-].sort((a, b) => a.name.localeCompare(b.name, "ru"));
+].map((city) => ({ ...city, timeZone: "Asia/Almaty" })).sort((a, b) => a.name.localeCompare(b.name, "ru"));
 
 export const KAZAKHSTAN_CENTER = { lat: 48.0196, lng: 66.9237 };
 

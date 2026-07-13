@@ -8,7 +8,7 @@ import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(_request, async () => {
     await requireAdmin();
     const { id } = await params;
     const venue = await prisma.venue.findUnique({ where: { id }, include: { owner: true } });
@@ -18,7 +18,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const admin = await requireAdmin();
     const { id } = await params;
     const existing = await prisma.venue.findUnique({ where: { id } });
@@ -80,7 +80,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(_request, async () => {
     await requireAdmin();
     const { id } = await params;
     const venue = await prisma.venue.findUnique({ where: { id }, include: { bags: { include: { orders: true } } } });

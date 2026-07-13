@@ -4,8 +4,8 @@ import { requireMerchant } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 
-export async function GET() {
-  return apiRoute(async () => {
+export async function GET(request: Request) {
+  return apiRoute(request, async () => {
     const user = await requireMerchant();
     const bags = await prisma.bag.findMany({
       where: { venue: { ownerId: user.id } },
@@ -22,7 +22,7 @@ export async function GET() {
 
 /** Публикация пакета-сюрприза «в 2 клика». */
 export async function POST(req: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const user = await requireMerchant();
     const body = await readJsonObject(req);
     const venueId = requiredString(body.venueId, "venueId", { max: 64 });
@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
           type: "FANOUT_NEW_BAG",
           dedupeKey: `fanout-new-bag:${created.id}`,
           payloadJson: JSON.stringify({ bagId: created.id }),
+          nextAttemptAt: new Date(0),
         },
       });
       return created;

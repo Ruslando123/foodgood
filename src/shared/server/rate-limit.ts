@@ -1,13 +1,21 @@
 import { ApiError } from "@/shared/server/api";
 import { prisma } from "@/lib/db";
 import { redisReady } from "@/lib/redis";
+import { rateLimitFallback } from "@/lib/metrics";
+
+const RATE_LIMIT_SCRIPT = `
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+local ttl = redis.call('PTTL', KEYS[1])
+return { count, ttl }
+`;
 
 export function requestIp(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   return forwarded || request.headers.get("x-real-ip") || "unknown";
 }
 
-/** Локальный лимитер для MVP. В production его можно заменить Redis без изменения routes. */
+/** Redis fixed-window limiter with a durable PostgreSQL fallback. */
 export async function consumeRateLimit(
   key: string,
   options: { limit: number; windowMs: number }
@@ -16,10 +24,10 @@ export async function consumeRateLimit(
   if (redis) {
     try {
       const redisKey = `rate-limit:${key}`;
-      const count = await redis.incr(redisKey);
-      if (count === 1) await redis.pexpire(redisKey, options.windowMs);
+      const result = await redis.eval(RATE_LIMIT_SCRIPT, 1, redisKey, options.windowMs) as [number, number];
+      const count = Number(result[0]);
+      const ttl = Number(result[1]);
       if (count > options.limit) {
-        const ttl = await redis.pttl(redisKey);
         throw new ApiError(429, "RATE_LIMITED", "Слишком много попыток. Попробуйте позже", {
           retryAfterSeconds: Math.max(1, Math.ceil(ttl / 1000)),
         });
@@ -30,6 +38,7 @@ export async function consumeRateLimit(
       // PostgreSQL is the safe fallback during a Redis outage.
     }
   }
+  rateLimitFallback.inc();
   const now = new Date();
   const nextReset = new Date(now.getTime() + options.windowMs);
   const [bucket] = await prisma.$queryRaw<Array<{ count: number; resetAt: Date }>>`

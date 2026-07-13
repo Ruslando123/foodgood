@@ -12,11 +12,16 @@ export const MIN_VENUE_PHOTO_HEIGHT = 160;
 
 const root = () => path.resolve(process.env.VENUE_UPLOAD_DIR ?? path.join(process.cwd(), "data", "uploads", "venues"));
 
-function objectStorage() {
+type ObjectStorage = { bucket: string; publicBaseUrl: string; client: S3Client };
+const globalStorage = globalThis as unknown as { venueStorage?: ObjectStorage; venueStorageKey?: string };
+
+function objectStorage(): ObjectStorage | null {
   const bucket = process.env.S3_BUCKET;
   const publicBaseUrl = process.env.S3_PUBLIC_BASE_URL;
   if (!bucket || !publicBaseUrl) return null;
-  return {
+  const configKey = [bucket, publicBaseUrl, process.env.S3_REGION, process.env.S3_ENDPOINT, process.env.S3_FORCE_PATH_STYLE].join("|");
+  if (globalStorage.venueStorage && globalStorage.venueStorageKey === configKey) return globalStorage.venueStorage;
+  const storage = {
     bucket,
     publicBaseUrl: publicBaseUrl.replace(/\/$/, ""),
     client: new S3Client({
@@ -28,6 +33,9 @@ function objectStorage() {
         : undefined,
     }),
   };
+  globalStorage.venueStorage = storage;
+  globalStorage.venueStorageKey = configKey;
+  return storage;
 }
 
 function detectedExtension(bytes: Uint8Array): "jpg" | "png" | "webp" | null {
@@ -66,6 +74,7 @@ export async function saveVenuePhoto(file: File): Promise<string> {
     }));
     return `${storage.publicBaseUrl}/${key}`;
   }
+  if (process.env.NODE_ENV === "production") throw new Error("PHOTO_STORAGE_CONFIG");
   await mkdir(root(), { recursive: true });
   await writeFile(path.join(root(), filename), bytes, { flag: "wx" });
   return `/api/media/venues/${filename}`;
@@ -81,6 +90,7 @@ export async function checkVenuePhotoStorage(): Promise<boolean> {
       return false;
     }
   }
+  if (process.env.NODE_ENV === "production") return false;
   try {
     await mkdir(root(), { recursive: true });
     await access(root(), constants.R_OK | constants.W_OK);
@@ -91,6 +101,7 @@ export async function checkVenuePhotoStorage(): Promise<boolean> {
 }
 
 export async function readVenuePhoto(filename: string): Promise<{ bytes: Buffer; type: string } | null> {
+  if (process.env.NODE_ENV === "production") return null;
   if (!/^[a-f0-9-]+\.(jpg|png|webp)$/.test(filename)) return null;
   try {
     const bytes = await readFile(path.join(root(), filename));
@@ -106,6 +117,7 @@ export async function removeVenuePhoto(photo: string): Promise<void> {
     await storage.client.send(new DeleteObjectCommand({ Bucket: storage.bucket, Key: key })).catch(() => undefined);
     return;
   }
+  if (process.env.NODE_ENV === "production") return;
   const match = photo.match(/^\/api\/media\/venues\/([a-f0-9-]+\.(?:jpg|png|webp))$/);
   if (!match) return;
   await unlink(path.join(root(), match[1])).catch(() => undefined);

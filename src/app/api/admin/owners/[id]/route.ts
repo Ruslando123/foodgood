@@ -5,7 +5,7 @@ import { apiRoute, ApiError, json } from "@/shared/server/api";
 
 /** Отзывает доступ владельца, но не удаляет историю заказов пользователя. */
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(_req, async () => {
     const admin = await requireAdmin();
     const { id } = await params;
     const owner = await prisma.user.findUnique({ where: { id }, include: { _count: { select: { venues: true } } } });

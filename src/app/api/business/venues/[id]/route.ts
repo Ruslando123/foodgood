@@ -14,14 +14,14 @@ async function ownedVenue(ownerId: string, id: string) {
 }
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(_req, async () => {
     const owner = await requireMerchant(); const { id } = await params;
     return json({ venue: await ownedVenue(owner.id, id) });
   });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     const owner = await requireMerchant(); const { id } = await params;
     await ownedVenue(owner.id, id);
     const body = await readJsonObject(req);
@@ -45,7 +45,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     assertSameOrigin(req);
     const owner = await requireMerchant();
     const { id } = await params;

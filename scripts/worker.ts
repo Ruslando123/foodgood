@@ -1,12 +1,13 @@
 import { prisma } from "../src/lib/db";
 import { runBatchJobs } from "../src/lib/jobs";
-import { createPickupReminders } from "../src/lib/notifications";
 import { dispatchOutbox } from "../src/lib/outbox";
 import { expireStale, reconcilePendingPayments } from "../src/lib/orders";
 import { pruneExpiredOrderIdempotencyKeys } from "../src/modules/orders/idempotency";
 import { pruneExpiredRateLimits } from "../src/shared/server/rate-limit";
 import { logEvent } from "../src/lib/monitoring";
 import { workerRuns } from "../src/lib/metrics";
+import { metricsRegistry, workerBatchSize, workerDuration } from "../src/lib/metrics";
+import { createServer } from "node:http";
 
 type WorkerName = "payments" | "expiry" | "notifications" | "outbox";
 const name = process.argv[2] as WorkerName;
@@ -17,6 +18,16 @@ if (!["payments", "expiry", "notifications", "outbox"].includes(name)) {
 let stopping = false;
 process.on("SIGTERM", () => { stopping = true; });
 process.on("SIGINT", () => { stopping = true; });
+
+const metricsPort = Number(process.env.WORKER_METRICS_PORT || 9100);
+const metricsServer = createServer(async (request, response) => {
+  if (request.url !== "/metrics") { response.writeHead(404).end(); return; }
+  const secret = process.env.METRICS_SECRET;
+  if (secret && request.headers.authorization !== `Bearer ${secret}`) { response.writeHead(401).end(); return; }
+  response.writeHead(200, { "Content-Type": metricsRegistry.contentType, "Cache-Control": "no-store" });
+  response.end(await metricsRegistry.metrics());
+});
+metricsServer.listen(metricsPort);
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -34,8 +45,7 @@ async function tick() {
   }
   if (name === "notifications") {
     const fanout = await runBatchJobs("notifications");
-    const reminders = await createPickupReminders();
-    return { fanout, reminders };
+    return { fanout };
   }
   return { dispatched: await dispatchOutbox(100) };
 }
@@ -43,6 +53,7 @@ async function tick() {
 async function main() {
   logEvent("info", "worker.started", { worker: name });
   do {
+    const startedAt = performance.now();
     try {
       const result = await tick();
       await prisma.systemState.upsert({
@@ -51,9 +62,12 @@ async function main() {
         create: { key: `worker:${name}`, valueJson: JSON.stringify({ status: "ok", ...result, finishedAt: new Date().toISOString() }) },
       });
       workerRuns.inc({ worker: name, result: "ok" });
+      workerDuration.observe({ worker: name, result: "ok" }, (performance.now() - startedAt) / 1000);
+      workerBatchSize.observe({ worker: name }, Object.values(result).reduce((sum, value) => sum + (typeof value === "number" ? value : 0), 0));
       if (Object.values(result).some(Boolean)) logEvent("info", "worker.batch", { worker: name, ...result });
     } catch (error) {
       workerRuns.inc({ worker: name, result: "failed" });
+      workerDuration.observe({ worker: name, result: "failed" }, (performance.now() - startedAt) / 1000);
       logEvent("error", "worker.failed", { worker: name }, error);
       await delay(5_000);
     }
@@ -61,4 +75,7 @@ async function main() {
   } while (!process.env.WORKER_ONCE && !stopping);
 }
 
-main().finally(() => prisma.$disconnect());
+main().finally(async () => {
+  metricsServer.close();
+  await prisma.$disconnect();
+});

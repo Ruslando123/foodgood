@@ -7,8 +7,8 @@ import { requireMerchant, requireUser } from "@/modules/auth/server";
 import { apiRoute, ApiError, assertSameOrigin, json } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
 
-export async function GET() {
-  return apiRoute(async () => {
+export async function GET(request: Request) {
+  return apiRoute(request, async () => {
     const user = await requireUser();
     const venues = await prisma.venue.findMany({ where: user.role === "ADMIN" ? {} : { ownerId: user.id } });
     return json({ venues });
@@ -17,7 +17,7 @@ export async function GET() {
 
 /** Владелец создаёт заведение сам после того, как админ выдал ему доступ. */
 export async function POST(req: NextRequest) {
-  return apiRoute(async () => {
+  return apiRoute(req, async () => {
     assertSameOrigin(req);
     const owner = await requireMerchant();
     const form = await req.formData();
