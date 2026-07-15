@@ -31,14 +31,16 @@ jobs:
       SESSION_SECRET: ci-session-secret-at-least-32-bytes-long
       OTP_SECRET: ci-otp-secret-at-least-32-bytes-long
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run production:config
       - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm test

@@ -1,4 +1,12 @@
 services:
+  - type: keyvalue
+    name: foodgood-redis
+    region: frankfurt
+    plan: starter
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot
+
   - type: web
     name: foodgood-web
     runtime: node
@@ -12,24 +20,33 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: foodgood-db
-          property: connectionString
+          property: connectionPoolString
       - key: DIRECT_URL
-        sync: false
+        fromDatabase:
+          name: foodgood-db
+          property: connectionString
       - key: DATABASE_CONNECTION_LIMIT
         value: "5"
       - key: DATABASE_PGBOUNCER
         value: "true"
       - key: REDIS_URL
-        sync: false
+        fromService:
+          type: keyvalue
+          name: foodgood-redis
+          property: connectionString
       - key: SESSION_SECRET
-        generateValue: true
+        sync: false
       - key: OTP_SECRET
-        generateValue: true
+        sync: false
       - key: CRON_SECRET
-        generateValue: true
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
       - key: ADMIN_PHONE
         sync: false
       - key: MOBIZON_API_KEY
@@ -44,10 +61,14 @@ services:
         sync: false
       - key: ALLOW_MOCK_PAYMENTS_IN_PRODUCTION
         value: "false"
-      - key: FREEDOMPAY_MERCHANT_ID
+      - key: FREEDOM_PAY_MERCHANT_ID
         sync: false
-      - key: FREEDOMPAY_SECRET_KEY
+      - key: FREEDOM_PAY_SECRET_KEY
         sync: false
+      - key: FREEDOM_PAY_TEST_MODE
+        value: "false"
+      # Render does not provision S3 buckets/CDNs. Supply least-privilege
+      # credentials for an external S3-compatible bucket and CDN hostname.
       - key: S3_BUCKET
         sync: false
       - key: S3_ENDPOINT
@@ -72,30 +93,37 @@ services:
     plan: starter
     buildCommand: npm ci && npm run db:generate
     startCommand: npm run worker:payments
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 90
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: foodgood-db
-          property: connectionString
+          property: connectionPoolString
       - key: DATABASE_CONNECTION_LIMIT
         value: "4"
       - key: DATABASE_PGBOUNCER
         value: "true"
       - key: REDIS_URL
-        sync: false
-      - key: WORKER_METRICS_PORT
-        value: "9100"
-      - key: METRICS_SECRET
-        sync: false
+        fromService:
+          type: keyvalue
+          name: foodgood-redis
+          property: connectionString
       - key: ALLOW_MOCK_PAYMENTS_IN_PRODUCTION
         value: "false"
       - key: LOAD_TEST_MODE
         value: "false"
-      - key: FREEDOMPAY_MERCHANT_ID
+      - key: FREEDOM_PAY_MERCHANT_ID
         sync: false
-      - key: FREEDOMPAY_SECRET_KEY
+      - key: FREEDOM_PAY_SECRET_KEY
+        sync: false
+      - key: FREEDOM_PAY_TEST_MODE
+        value: "false"
+      - key: APP_BASE_URL
         sync: false
 
   - type: worker
@@ -105,23 +133,26 @@ services:
     plan: starter
     buildCommand: npm ci && npm run db:generate
     startCommand: npm run worker:expiry
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 90
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: foodgood-db
-          property: connectionString
+          property: connectionPoolString
       - key: DATABASE_CONNECTION_LIMIT
         value: "3"
       - key: DATABASE_PGBOUNCER
         value: "true"
-      - key: WORKER_METRICS_PORT
-        value: "9100"
-      - key: METRICS_SECRET
-        sync: false
       - key: REDIS_URL
-        sync: false
+        fromService:
+          type: keyvalue
+          name: foodgood-redis
+          property: connectionString
 
   - type: worker
     name: foodgood-notifications-worker
@@ -130,22 +161,22 @@ services:
     plan: starter
     buildCommand: npm ci && npm run db:generate
     startCommand: npm run worker:notifications
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 90
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: foodgood-db
-          property: connectionString
+          property: connectionPoolString
       - key: DATABASE_CONNECTION_LIMIT
         value: "3"
       - key: DATABASE_PGBOUNCER
         value: "true"
 
-      - key: WORKER_METRICS_PORT
-        value: "9100"
-      - key: METRICS_SECRET
-        sync: false
 
   - type: worker
     name: foodgood-outbox-worker
@@ -154,13 +185,17 @@ services:
     plan: starter
     buildCommand: npm ci && npm run db:generate
     startCommand: npm run worker:outbox
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 90
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: foodgood-db
-          property: connectionString
+          property: connectionPoolString
       - key: DATABASE_CONNECTION_LIMIT
         value: "3"
       - key: DATABASE_PGBOUNCER
@@ -168,10 +203,6 @@ services:
       - key: TELEGRAM_NOTIFICATIONS_ENABLED
         value: "false"
       - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: WORKER_METRICS_PORT
-        value: "9100"
-      - key: METRICS_SECRET
         sync: false
 
 databases:

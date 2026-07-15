@@ -146,7 +146,7 @@ model Payment {
   provider    String   @default("mock")
   providerRef String?
   amount      Int // KZT
-  status      String   @default("PENDING_HOLD") // PENDING_HOLD | HELD | CAPTURED | REFUNDED
+  status      String   @default("PENDING_HOLD") // PENDING_HOLD | HELD | CAPTURED | REFUNDED | FAILED
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -160,7 +160,7 @@ model PaymentOperation {
   paymentId      String
   type           String // HOLD | CAPTURE | REFUND
   idempotencyKey String    @unique
-  status         String    @default("PENDING") // PENDING | PROCESSING | RETRY | SUCCEEDED | NEEDS_REVIEW
+  status         String    @default("PENDING") // PENDING | PROCESSING | WAITING_PROVIDER | RETRY | SUCCEEDED | NEEDS_REVIEW
   attempts       Int       @default(0)
   nextAttemptAt  DateTime  @default(now())
   leaseOwner     String?

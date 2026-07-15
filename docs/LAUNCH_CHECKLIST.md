@@ -17,7 +17,7 @@
 
 - Mobizon Kazakhstan account, API key, and an approved sender name.
 - Freedom Pay Kazakhstan merchant account with test mode and manual clearing enabled.
-- A Freedom Pay implementation of `PaymentProvider`; production intentionally rejects the current mock.
+- Freedom Pay Merchant API with signed result callback, two-step hold/capture, cancel/refund, and daily reconciliation.
 
 The retired `/api/internal/reconcile` endpoint is not a scheduler target. All reconciliation is performed by the dedicated workers above.
 
@@ -33,8 +33,10 @@ OTP_SECRET=<different random secret>
 ADMIN_PHONE=+7...
 MOBIZON_API_KEY=...
 MOBIZON_SENDER=FoodGood
-FREEDOMPAY_MERCHANT_ID=...
-FREEDOMPAY_SECRET_KEY=...
+APP_BASE_URL=https://foodgood.example.kz
+FREEDOM_PAY_MERCHANT_ID=...
+FREEDOM_PAY_SECRET_KEY=...
+FREEDOM_PAY_TEST_MODE=false
 S3_ENDPOINT=https://...
 S3_REGION=...
 S3_BUCKET=...
@@ -42,7 +44,6 @@ S3_ACCESS_KEY_ID=...
 S3_SECRET_ACCESS_KEY=...
 S3_PUBLIC_BASE_URL=https://cdn.example.kz
 METRICS_SECRET=<different random secret>
-WORKER_METRICS_PORT=<unique port for each worker service>
 TELEGRAM_AUTH_ENABLED=false
 TELEGRAM_NOTIFICATIONS_ENABLED=false
 ALLOW_MOCK_PAYMENTS_IN_PRODUCTION=false
@@ -56,6 +57,7 @@ The `production-gate` GitHub Actions check must be required by the protected mai
 
 ```bash
 npm ci
+npm audit --omit=dev --audit-level=high
 npm run lint
 npx tsc --noEmit
 npm test
@@ -76,9 +78,19 @@ Never run `npm run seed` against production.
 | `worker:notifications` | durable notification and reminder jobs | queue age/depth, failed jobs |
 | `worker:outbox` | Telegram/external outbox delivery | failed outbox messages, queue age |
 
-Each service exposes `/metrics` on its own `WORKER_METRICS_PORT`. Scrape all four ports and alert on missing `worker:*` heartbeat state as well as the Prometheus rules in `ops/alerts.yml`.
+Scrape the authenticated web `/api/metrics` endpoint. It aggregates durable queue state and the four worker heartbeats from PostgreSQL. Load `ops/prometheus/alerts.yml` and configure Render deploy/unhealthy notifications in the Dashboard.
 
 ## Staging smoke test
+
+First deploy migrations with the direct database URL, then run:
+
+```bash
+STAGING_BASE_URL=https://... METRICS_SECRET=... npm run staging:smoke
+BASE_URL=https://... npm run load:k6:staging
+STAGING_DATABASE_URL=... RESTORE_DATABASE_URL=... RESTORE_CONFIRM_EMPTY=true npm run staging:restore
+```
+
+The staging load profile is read-only so it cannot generate real Freedom Pay operations. Run the full mutating `load:k6` plus `load:check` only in a separate mock-provider load environment. The restore target must be an isolated empty PostgreSQL 16/PostGIS database. A staging gate is incomplete without the restore evidence.
 
 1. Request an SMS code and verify expiry, single use, and guaranteed lock after five parallel failures.
 2. Create an order and observe `PENDING_PAYMENT -> PAID` through the payments worker.
@@ -96,7 +108,7 @@ Each service exposes `/metrics` on its own `WORKER_METRICS_PORT`. Scrape all fou
 - Validate test merchant ID, secret, callback URL allowlist, signature verification, and manual clearing.
 - Reconcile duplicate callbacks and repeat HOLD/CAPTURE/REFUND calls with stable idempotency keys.
 - Exercise timeout-after-success, declined payment, delayed callback, refund, and daily settlement reconciliation.
-- Confirm the mock provider is rejected with `ALLOW_MOCK_PAYMENTS_IN_PRODUCTION=false`.
+- Confirm production rejects mock payments and that the configuration guard finds no enabled mock-payment bypass assignment.
 
 ### SMS
 

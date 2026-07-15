@@ -23,7 +23,7 @@ async function activeQueueDepth() {
   const [row] = await prisma.$queryRaw<Array<{ count: bigint; lag: number | null }>>`
     SELECT COUNT(*) AS count, EXTRACT(EPOCH FROM now() - MIN("nextAttemptAt"))::double precision AS lag
     FROM (
-      SELECT "nextAttemptAt" FROM "PaymentOperation" WHERE status IN ('PENDING','RETRY','PROCESSING')
+      SELECT "nextAttemptAt" FROM "PaymentOperation" WHERE status IN ('PENDING','RETRY','PROCESSING','WAITING_PROVIDER')
       UNION ALL
       SELECT "nextAttemptAt" FROM "OutboxMessage" WHERE status IN ('PENDING','RETRY','PROCESSING')
       UNION ALL

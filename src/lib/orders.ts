@@ -9,12 +9,15 @@ import { paymentFailures, workerClaims, workerFailures, workerJobDuration, worke
 import { startLeaseHeartbeat } from "./lease-heartbeat";
 import { PAYMENT_PROVIDER_TIMEOUT_MS } from "./payment-config";
 import { transitionBagOrders, transitionOrder } from "@/modules/orders/state-machine";
+import type { FreedomPayFields } from "./freedompay";
 
 export class OrderError extends Error {}
 class OperationLeaseLostError extends Error {}
 
 type FinalRefundStatus = "CANCELLED" | "EXPIRED";
 type OperationType = "HOLD" | "CAPTURE" | "REFUND";
+
+export type FreedomPayResultDecision = { status: "ok" | "rejected" | "error"; description: string };
 
 export const ACTIVE_PICKUP_ORDER_STATUSES = ["PENDING_PAYMENT", "PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING"];
 
@@ -288,8 +291,185 @@ async function ensureOperation(tx: Prisma.TransactionClient, paymentId: string, 
   });
 }
 
+/** Applies a verified Freedom Pay result callback and fences any in-flight worker. */
+export async function applyFreedomPayResult(fields: FreedomPayFields): Promise<FreedomPayResultDecision> {
+  const idempotencyKey = fields.pg_order_id;
+  const providerRef = fields.pg_payment_id;
+  const amount = Number(fields.pg_amount);
+  const result = fields.pg_result;
+  if (!idempotencyKey || !providerRef || !Number.isFinite(amount) || amount <= 0) {
+    return { status: "error", description: "Missing payment fields" };
+  }
+  if (fields.pg_currency !== "KZT") return { status: "rejected", description: "Unsupported currency" };
+  if (!["0", "1", "2"].includes(result)) return { status: "error", description: "Invalid payment result" };
+  if (result === "1" && !["0", "1"].includes(fields.pg_captured)) {
+    return { status: "error", description: "Invalid capture status" };
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "PaymentOperation"
+      WHERE "idempotencyKey" = ${idempotencyKey} AND type = 'HOLD'
+      FOR UPDATE
+    `;
+    if (!locked.length) return { status: "rejected" as const, description: "Unknown order" };
+    const operation = await tx.paymentOperation.findUniqueOrThrow({
+      where: { id: locked[0].id },
+      include: { payment: { include: { order: { include: { bag: true } } } } },
+    });
+    const payment = operation.payment;
+    const order = payment.order;
+    if (payment.provider !== "freedompay") return { status: "rejected" as const, description: "Wrong provider" };
+    if (payment.amount !== amount) return { status: "rejected" as const, description: "Amount mismatch" };
+    if (payment.providerRef && payment.providerRef !== providerRef) {
+      return { status: "rejected" as const, description: "Payment reference mismatch" };
+    }
+    if (operation.status === "SUCCEEDED") return { status: "ok" as const, description: "Already processed" };
+
+    if (result === "2") {
+      await tx.payment.update({ where: { id: payment.id }, data: { providerRef } });
+      await parkOperationFromCallback(tx, operation.id);
+      return { status: "ok" as const, description: "Payment is pending" };
+    }
+
+    if (result === "0") {
+      await failHoldFromCallback(tx, operation.id, payment.id, order.id, order.bagId, order.quantity, providerRef);
+      return { status: "ok" as const, description: "Payment failure recorded" };
+    }
+
+    const providerStatus = fields.pg_captured === "1" ? "CAPTURED" : "HELD";
+    const orderCanBePaid =
+      order.status === "PENDING_PAYMENT" &&
+      ["ACTIVE", "SOLD_OUT"].includes(order.bag.status) &&
+      order.bag.pickupEnd > new Date();
+    if (!orderCanBePaid && !["PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING", "COMPLETED"].includes(order.status)) {
+      if (fields.pg_can_reject === "1") {
+        await failHoldFromCallback(tx, operation.id, payment.id, order.id, order.bagId, order.quantity, providerRef);
+        return { status: "rejected" as const, description: "Order is no longer payable" };
+      }
+      await tx.payment.update({ where: { id: payment.id }, data: { providerRef, status: providerStatus } });
+      const finalStatus: FinalRefundStatus = order.bag.pickupEnd <= new Date() ? "EXPIRED" : "CANCELLED";
+      await transitionOrder(tx, {
+        id: order.id,
+        from: ["PENDING_PAYMENT", "CANCELLED", "EXPIRED"],
+        to: "REFUND_PENDING",
+        data: { refundTargetStatus: finalStatus },
+      });
+      await ensureOperation(tx, payment.id, "REFUND");
+      await completeHoldFromCallback(tx, operation.id, payment.id, order.id, providerRef, providerStatus);
+      return { status: "ok" as const, description: "Payment accepted and refund queued" };
+    }
+
+    await tx.payment.update({ where: { id: payment.id }, data: { providerRef, status: providerStatus } });
+    if (orderCanBePaid) {
+      await transitionOrder(tx, { id: order.id, from: "PENDING_PAYMENT", to: "PAID" });
+      await tx.batchJob.upsert({
+        where: { dedupeKey: `pickup-reminder:${order.id}` },
+        update: {},
+        create: {
+          queue: "notifications",
+          type: "PICKUP_REMINDER",
+          dedupeKey: `pickup-reminder:${order.id}`,
+          payloadJson: JSON.stringify({ orderId: order.id }),
+          nextAttemptAt: new Date(order.bag.pickupStart.getTime() - 60 * 60_000),
+        },
+      });
+    }
+    await completeHoldFromCallback(tx, operation.id, payment.id, order.id, providerRef, providerStatus);
+    return { status: "ok" as const, description: "Payment recorded" };
+  });
+}
+
+async function parkOperationFromCallback(tx: Prisma.TransactionClient, operationId: string) {
+  await tx.paymentOperation.update({
+    where: { id: operationId },
+    data: {
+      status: "WAITING_PROVIDER",
+      nextAttemptAt: new Date(Date.now() + 2 * 60_000),
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      lastError: null,
+    },
+  });
+}
+
+async function completeHoldFromCallback(
+  tx: Prisma.TransactionClient,
+  operationId: string,
+  paymentId: string,
+  orderId: string,
+  providerRef: string,
+  providerStatus: "HELD" | "CAPTURED"
+) {
+  await tx.paymentEvent.upsert({
+    where: { operationId },
+    update: {
+      paymentId,
+      orderId,
+      provider: "freedompay",
+      providerRef,
+      type: "HOLD",
+      status: "SUCCEEDED",
+      metadataJson: JSON.stringify({ source: "webhook", providerStatus }),
+    },
+    create: {
+      operationId,
+      paymentId,
+      orderId,
+      provider: "freedompay",
+      providerRef,
+      type: "HOLD",
+      status: "SUCCEEDED",
+      metadataJson: JSON.stringify({ source: "webhook", providerStatus }),
+    },
+  });
+  await tx.paymentOperation.update({
+    where: { id: operationId },
+    data: { status: "SUCCEEDED", leaseOwner: null, leaseExpiresAt: null, lastError: null },
+  });
+}
+
+async function failHoldFromCallback(
+  tx: Prisma.TransactionClient,
+  operationId: string,
+  paymentId: string,
+  orderId: string,
+  bagId: string,
+  quantity: number,
+  providerRef: string
+) {
+  const order = await tx.order.findUnique({ where: { id: orderId }, include: { bag: true } });
+  if (order?.status === "PENDING_PAYMENT") {
+    const finalStatus: FinalRefundStatus = order.bag.pickupEnd <= new Date() ? "EXPIRED" : "CANCELLED";
+    const cancelled = await transitionOrder(tx, { id: orderId, from: "PENDING_PAYMENT", to: finalStatus });
+    if (cancelled) {
+      const restored = await tx.bag.updateMany({
+        where: { id: bagId, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } },
+        data: { quantityLeft: { increment: quantity } },
+      });
+      if (restored.count) {
+        await tx.bag.updateMany({
+          where: { id: bagId, status: "SOLD_OUT", quantityLeft: { gt: 0 } },
+          data: { status: "ACTIVE" },
+        });
+      }
+    }
+  }
+  await tx.payment.update({ where: { id: paymentId }, data: { providerRef, status: "FAILED" } });
+  await tx.paymentEvent.upsert({
+    where: { operationId },
+    update: { paymentId, orderId, provider: "freedompay", providerRef, type: "HOLD", status: "FAILED", metadataJson: JSON.stringify({ source: "webhook" }) },
+    create: { operationId, paymentId, orderId, provider: "freedompay", providerRef, type: "HOLD", status: "FAILED", metadataJson: JSON.stringify({ source: "webhook" }) },
+  });
+  await tx.paymentOperation.update({
+    where: { id: operationId },
+    data: { status: "SUCCEEDED", leaseOwner: null, leaseExpiresAt: null, lastError: null },
+  });
+}
+
 /** Claim is atomic, while network work happens after the transaction closes. */
 export async function reconcilePendingPayments(limit = 50, processWorkerId: string = randomUUID()): Promise<number> {
+  assertPaymentProviderReady();
   let claimed = 0;
   let processed = 0;
   const concurrency = Math.min(WORKER_CONCURRENCY, limit);
@@ -307,11 +487,61 @@ export async function reconcilePendingPayments(limit = 50, processWorkerId: stri
   return processed;
 }
 
+/** Daily provider-vs-ledger audit. Mismatches are recorded for operator review, never auto-corrected. */
+export async function reconcileSettledPayments(limit = 50): Promise<{ checked: number; mismatches: number }> {
+  assertPaymentProviderReady();
+  const since = new Date(Date.now() - 24 * 60 * 60_000);
+  const payments = await prisma.payment.findMany({
+    where: {
+      provider: paymentProvider.name,
+      status: { in: ["HELD", "CAPTURED", "REFUNDED"] },
+      order: { status: { in: ["PAID", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED", "EXPIRED"] } },
+      events: { none: { type: "RECONCILIATION", createdAt: { gte: since } } },
+    },
+    orderBy: { updatedAt: "asc" },
+    take: limit,
+  });
+  let mismatches = 0;
+  for (const payment of payments) {
+    let actual = "UNKNOWN";
+    let error: string | undefined;
+    try {
+      if (!payment.providerRef) throw new Error("Missing provider reference");
+      actual = await providerCall("daily reconciliation", paymentProvider.getStatus(payment.providerRef));
+    } catch (cause) {
+      error = errorMessage(cause);
+    }
+    const matches = !error && actual === payment.status;
+    if (!matches) {
+      mismatches += 1;
+      console.error("PAYMENT_RECONCILIATION_MISMATCH", {
+        paymentId: payment.id,
+        expected: payment.status,
+        actual,
+        error,
+      });
+    }
+    await prisma.paymentEvent.create({
+      data: {
+        paymentId: payment.id,
+        orderId: payment.orderId,
+        provider: payment.provider,
+        providerRef: payment.providerRef,
+        type: "RECONCILIATION",
+        status: matches ? "SUCCEEDED" : "FAILED",
+        amount: payment.amount,
+        metadataJson: JSON.stringify({ expected: payment.status, actual, ...(error ? { error } : {}) }),
+      },
+    });
+  }
+  return { checked: payments.length, mismatches };
+}
+
 async function claimPaymentOperation(leaseToken: string): Promise<{ id: string } | null> {
   const [candidate] = await prisma.$queryRaw<Array<{ id: string }>>`
     WITH candidates AS (
       SELECT id FROM "PaymentOperation"
-      WHERE status IN ('PENDING', 'RETRY', 'PROCESSING')
+      WHERE status IN ('PENDING', 'RETRY', 'PROCESSING', 'WAITING_PROVIDER')
         AND "nextAttemptAt" <= now()
         AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" < now())
       ORDER BY "nextAttemptAt", id
@@ -351,13 +581,19 @@ async function processPaymentOperation(operationId: string, leaseToken: string):
       const hold = known ?? await providerCall(
         "hold",
         paymentProvider.hold(payment.amount, payment.orderId, operation.idempotencyKey)
-          .then(({ providerRef }) => ({ providerRef, status: "HELD" as const }))
       );
-      if (!hold || hold.status !== "HELD") {
-        throw new Error(`Unexpected hold status ${hold?.status ?? "NOT_FOUND"}`);
+      if (!hold) throw new Error("Hold was not created");
+      if (hold.status === "PENDING") {
+        if (heartbeat.lost()) throw new OperationLeaseLostError(`Payment operation lease lost: ${operation.id}`);
+        await waitForProvider(operation.id, leaseToken, payment.id, hold.providerRef);
+      } else if (hold.status === "FAILED") {
+        throw new PaymentProviderError("DECLINED", "Freedom Pay payment failed");
+      } else if (hold.status === "HELD" || hold.status === "CAPTURED") {
+        if (heartbeat.lost()) throw new OperationLeaseLostError(`Payment operation lease lost: ${operation.id}`);
+        await finalizeHold(operation.id, leaseToken, payment.id, payment.orderId, hold.providerRef, hold.status);
+      } else {
+        throw new Error(`Unexpected hold status ${hold.status}`);
       }
-      if (heartbeat.lost()) throw new OperationLeaseLostError(`Payment operation lease lost: ${operation.id}`);
-      await finalizeHold(operation.id, leaseToken, payment.id, payment.orderId, hold.providerRef);
     } else {
       if (!payment.providerRef) throw new Error("Missing provider reference");
       let providerStatus = await providerCall("get status", paymentProvider.getStatus(payment.providerRef));
@@ -365,7 +601,7 @@ async function processPaymentOperation(operationId: string, leaseToken: string):
         await providerCall("capture", paymentProvider.capture(payment.providerRef, operation.idempotencyKey));
         providerStatus = await providerCall("confirm capture", paymentProvider.getStatus(payment.providerRef));
       }
-      if (operation.type === "REFUND" && providerStatus === "HELD") {
+      if (operation.type === "REFUND" && (providerStatus === "HELD" || providerStatus === "CAPTURED")) {
         await providerCall("refund", paymentProvider.refund(payment.providerRef, operation.idempotencyKey));
         providerStatus = await providerCall("confirm refund", paymentProvider.getStatus(payment.providerRef));
       }
@@ -375,6 +611,9 @@ async function processPaymentOperation(operationId: string, leaseToken: string):
       } else if (operation.type === "REFUND" && providerStatus === "REFUNDED") {
         if (heartbeat.lost()) throw new OperationLeaseLostError(`Payment operation lease lost: ${operation.id}`);
         await finalizeRefund(operation.id, leaseToken, payment.id, payment.orderId, payment.provider, payment.providerRef, payment.amount);
+      } else if (providerStatus === "PENDING") {
+        if (heartbeat.lost()) throw new OperationLeaseLostError(`Payment operation lease lost: ${operation.id}`);
+        await waitForProvider(operation.id, leaseToken, payment.id, payment.providerRef);
       } else {
         throw new Error(`Unexpected provider status ${providerStatus}`);
       }
@@ -401,10 +640,33 @@ async function processPaymentOperation(operationId: string, leaseToken: string):
   return true;
 }
 
-async function finalizeHold(operationId: string, leaseToken: string, paymentId: string, orderId: string, providerRef: string) {
+async function waitForProvider(operationId: string, leaseToken: string, paymentId: string, providerRef: string) {
   await prisma.$transaction(async (tx) => {
     await renewOperationLease(tx, operationId, leaseToken);
-    await tx.payment.update({ where: { id: paymentId }, data: { providerRef, status: "HELD" } });
+    await tx.payment.update({ where: { id: paymentId }, data: { providerRef } });
+    const waiting = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE "PaymentOperation"
+      SET status = 'WAITING_PROVIDER', "nextAttemptAt" = now() + interval '2 minutes',
+          "leaseOwner" = NULL, "leaseExpiresAt" = NULL, "lastError" = NULL
+      WHERE id = ${operationId} AND status = 'PROCESSING' AND "leaseOwner" = ${leaseToken}
+        AND "leaseExpiresAt" > now()
+      RETURNING id
+    `;
+    if (!waiting.length) throw new OperationLeaseLostError(`Payment operation lease lost: ${operationId}`);
+  });
+}
+
+async function finalizeHold(
+  operationId: string,
+  leaseToken: string,
+  paymentId: string,
+  orderId: string,
+  providerRef: string,
+  providerStatus: "HELD" | "CAPTURED" = "HELD"
+) {
+  await prisma.$transaction(async (tx) => {
+    await renewOperationLease(tx, operationId, leaseToken);
+    await tx.payment.update({ where: { id: paymentId }, data: { providerRef, status: providerStatus } });
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { bag: true } });
     if (!order) throw new OrderError("Заказ не найден");
     if (order.status === "PENDING_PAYMENT" && ["ACTIVE", "SOLD_OUT"].includes(order.bag.status) && order.bag.pickupEnd > new Date()) {

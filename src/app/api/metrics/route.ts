@@ -11,14 +11,14 @@ export async function GET(request: Request) {
   if (secret && request.headers.get("authorization") !== `Bearer ${secret}`) {
     return new Response("Unauthorized", { status: 401 });
   }
-  const [queueRows, poolRows, failureRows, heartbeatRows, staleOrderRows] = await Promise.all([
+  const [queueRows, poolRows, failureRows, needsReview, reconciliationMismatches, heartbeatRows, staleOrderRows] = await Promise.all([
     prisma.$queryRaw<Array<{ queue: string; lag: number; depth: bigint; expiredLeases: bigint }>>`
       SELECT queue,
              EXTRACT(EPOCH FROM (now() - MIN("nextAttemptAt")))::double precision AS lag,
              COUNT(*) AS depth,
              COUNT(*) FILTER (WHERE status = 'PROCESSING' AND "leaseExpiresAt" < now()) AS "expiredLeases"
       FROM (
-        SELECT 'payments' AS queue, status, "nextAttemptAt", "leaseExpiresAt" FROM "PaymentOperation" WHERE status IN ('PENDING','RETRY','PROCESSING')
+        SELECT 'payments' AS queue, status, "nextAttemptAt", "leaseExpiresAt" FROM "PaymentOperation" WHERE status IN ('PENDING','RETRY','PROCESSING','WAITING_PROVIDER')
         UNION ALL
         SELECT 'outbox', status, "nextAttemptAt", "leaseExpiresAt" FROM "OutboxMessage" WHERE status IN ('PENDING','RETRY','PROCESSING')
         UNION ALL
@@ -36,6 +36,8 @@ export async function GET(request: Request) {
       SELECT COUNT(*) AS failures FROM "PaymentOperation"
       WHERE "lastError" IS NOT NULL AND "updatedAt" > now() - interval '10 minutes'
     `,
+    prisma.paymentOperation.count({ where: { status: "NEEDS_REVIEW" } }),
+    prisma.paymentEvent.count({ where: { type: "RECONCILIATION", status: "FAILED", createdAt: { gt: new Date(Date.now() - 24 * 60 * 60_000) } } }),
     prisma.$queryRaw<Array<{ worker: string; timestamp: number }>>`
       SELECT expected.worker,
              COALESCE(EXTRACT(EPOCH FROM ((state."valueJson"::jsonb ->> 'finishedAt')::timestamptz)), 0)::double precision AS timestamp
@@ -60,7 +62,7 @@ export async function GET(request: Request) {
   const poolMetrics = pool
     ? `foodgood_db_pool_active ${pool.active}\nfoodgood_db_pool_connections ${pool.total}\nfoodgood_db_max_connections ${pool.maximum}`
     : "";
-  const failureMetrics = `foodgood_payment_failures_recent ${failureRows[0]?.failures ?? 0}`;
+  const failureMetrics = `foodgood_payment_failures_recent ${failureRows[0]?.failures ?? 0}\nfoodgood_payment_needs_review ${needsReview}\nfoodgood_payment_reconciliation_mismatches ${reconciliationMismatches}`;
   const heartbeatMetrics = heartbeatRows.map((row) => `foodgood_worker_last_heartbeat_seconds{worker="${row.worker}"} ${row.timestamp}`).join("\n");
   const staleOrderMetrics = staleOrderRows.map((row) => `foodgood_order_status_oldest_age_seconds{status="${row.status}"} ${Math.max(0, row.age ?? 0)}`).join("\n");
   return new Response(`${base}${queueMetrics}\n${poolMetrics}\n${failureMetrics}\n${heartbeatMetrics}\n${staleOrderMetrics}\n`, {

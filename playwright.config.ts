@@ -27,7 +27,6 @@ export default defineConfig({
         SESSION_SECRET: "e2e-session-secret-at-least-32-bytes-long",
         OTP_SECRET: "e2e-otp-secret-at-least-32-bytes-long",
         FOODGOOD_E2E_DEV_OTP: "true",
-        ALLOW_MOCK_PAYMENTS_IN_PRODUCTION: "true",
       },
     },
     {
@@ -38,7 +37,7 @@ export default defineConfig({
       env: {
         DATABASE_URL: process.env.E2E_DATABASE_URL ?? process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "",
         WORKER_METRICS_PORT: "3101",
-        ALLOW_MOCK_PAYMENTS_IN_PRODUCTION: "true",
+        FOODGOOD_E2E_DEV_OTP: "true",
       },
     },
   ],
