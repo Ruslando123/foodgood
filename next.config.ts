@@ -15,8 +15,18 @@ const csp = [
   ...(production ? ["upgrade-insecure-requests"] : []),
 ].join("; ");
 
+const sharpRuntimeFiles = [
+  "node_modules/sharp/**/*",
+  "node_modules/@img/sharp-linux-x64/**/*",
+  "node_modules/@img/sharp-libvips-linux-x64/**/*",
+];
+
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  outputFileTracingIncludes: {
+    "/api/business/venues": sharpRuntimeFiles,
+    "/api/business/venues/*": sharpRuntimeFiles,
+  },
   turbopack: {
     root: process.cwd(),
   },
