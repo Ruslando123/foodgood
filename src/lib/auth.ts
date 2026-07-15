@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { prisma } from "./db";
+import { sessionSecretValue } from "./secrets";
 
 const SESSION_COOKIE = "foodgood_session";
 const SESSION_TTL_DAYS = 30;
@@ -22,15 +23,7 @@ export function isDevOtpEnabled(): boolean {
 }
 
 function secret(): Uint8Array {
-  const raw = process.env.SESSION_SECRET;
-  if (!raw) {
-    // Тихий дефолт в проде означал бы подделываемые сессии
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("SESSION_SECRET must be set in production");
-    }
-    return new TextEncoder().encode("dev-secret-change-in-production");
-  }
-  return new TextEncoder().encode(raw);
+  return new TextEncoder().encode(sessionSecretValue());
 }
 
 export type SessionUser = {

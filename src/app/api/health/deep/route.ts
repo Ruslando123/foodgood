@@ -15,7 +15,7 @@ export async function GET() {
     const [workers, paymentNeedsReview, overduePayments, failedOutbox, overdueOutbox, failedJobs, overdueJobs, storage] = await Promise.all([
       prisma.systemState.findMany({ where: { key: { in: ["worker:payments", "worker:expiry", "worker:notifications", "worker:outbox"] } } }),
       prisma.paymentOperation.count({ where: { status: "NEEDS_REVIEW" } }),
-      prisma.paymentOperation.count({ where: { status: { in: ["PENDING", "RETRY", "PROCESSING"] }, nextAttemptAt: { lt: new Date(checkedAt.getTime() - 5 * 60_000) } } }),
+      prisma.paymentOperation.count({ where: { status: { in: ["PENDING", "RETRY", "PROCESSING", "WAITING_PROVIDER"] }, nextAttemptAt: { lt: new Date(checkedAt.getTime() - 5 * 60_000) } } }),
       prisma.outboxMessage.count({ where: { status: "FAILED" } }),
       prisma.outboxMessage.count({ where: { status: { in: ["PENDING", "RETRY", "PROCESSING"] }, nextAttemptAt: { lt: new Date(checkedAt.getTime() - 5 * 60_000) } } }),
       prisma.batchJob.count({ where: { status: "FAILED" } }),

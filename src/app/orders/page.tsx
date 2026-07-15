@@ -182,7 +182,8 @@ function OrderCard({
 
   return (
     <article className={`space-y-3 rounded-[17px] border bg-white p-4 shadow-[0_3px_14px_rgba(20,40,28,0.06)] ${highlighted ? "border-primary" : "border-black/[0.07]"}`}>
-      {highlighted && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-primary"><IconCheck size={16} />Заказ оплачен и подтверждён</p>}
+      {highlighted && order.status !== "PENDING_PAYMENT" && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-primary"><IconCheck size={16} />Заказ оплачен и подтверждён</p>}
+      {highlighted && order.status === "PENDING_PAYMENT" && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-amber-700"><IconRefresh size={16} />Завершите оплату заказа</p>}
       <div className="flex justify-between gap-2">
         <div>
           <Link href={`/venue/${order.bag.venue.id}`} className="text-[15px] font-bold hover:text-primary">
@@ -221,6 +222,11 @@ function OrderCard({
             <span className="flex items-center gap-1.5">{order.status === "COMPLETED" ? <IconCheck size={16} className="text-primary" /> : <IconRefresh size={16} />} {STATUS_LABEL[order.status]}</span>
             {order.payment?.status === "REFUNDED" && <p className="mt-1 text-xs text-muted">Возврат отмечен платёжной системой</p>}
           </div>
+          {order.status === "PENDING_PAYMENT" && order.payment?.checkoutUrl && (
+            <a href={order.payment.checkoutUrl} className="block rounded-xl bg-primary px-3 py-2.5 text-center text-sm font-semibold text-white">
+              Продолжить оплату
+            </a>
+          )}
           <Link href={`/bag/${order.bag.id}`} className="block rounded-xl bg-primary/10 px-3 py-2.5 text-center text-sm font-semibold text-primary">
             Заказать снова
           </Link>

@@ -18,6 +18,7 @@ export type PublicVenueDto = {
 
 export type PublicPaymentDto = {
   status: string;
+  checkoutUrl?: string;
 };
 
 export type PublicBagDto = {
@@ -94,7 +95,7 @@ export const customerOrderSelect = {
   createdAt: true,
   completedAt: true,
   bag: { select: publicBagSelect },
-  payment: { select: { status: true } },
+  payment: { select: { id: true, provider: true, providerRef: true, status: true } },
   review: { select: { id: true, rating: true, comment: true } },
 } as const satisfies Prisma.OrderSelect;
 
@@ -166,7 +167,14 @@ export function toCustomerOrderDto(order: CustomerOrderMappable): CustomerOrderD
     createdAt: isoDate(order.createdAt),
     completedAt: order.completedAt ? isoDate(order.completedAt) : null,
     bag: toPublicBagDto(order.bag),
-    payment: order.payment ? { status: order.payment.status } : null,
+    payment: order.payment
+      ? {
+          status: order.payment.status,
+          ...(order.payment.provider === "freedompay" && order.payment.providerRef && order.payment.status === "PENDING_HOLD"
+            ? { checkoutUrl: `/api/payments/freedompay/checkout?payment=${encodeURIComponent(order.payment.id)}` }
+            : {}),
+        }
+      : null,
     review: order.review
       ? { id: order.review.id, rating: order.review.rating, comment: order.review.comment }
       : null,

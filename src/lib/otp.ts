@@ -1,6 +1,7 @@
 import { createHmac, randomInt, timingSafeEqual } from "crypto";
 import { prisma } from "./db";
 import { DEV_OTP_CODE, isDevOtpEnabled } from "./auth";
+import { otpSecretValue } from "./secrets";
 import { sendSmsCode } from "./sms";
 
 const OTP_TTL_MS = 5 * 60_000;
@@ -18,10 +19,7 @@ export class OtpError extends Error {
 }
 
 function secret(): string {
-  const value = process.env.OTP_SECRET || process.env.SESSION_SECRET;
-  if (value) return value;
-  if (process.env.NODE_ENV === "production") throw new Error("OTP_SECRET must be set in production");
-  return "dev-otp-secret-change-me";
+  return otpSecretValue();
 }
 
 function hashCode(phone: string, code: string): string {

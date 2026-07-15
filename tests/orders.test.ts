@@ -9,6 +9,7 @@ import {
   customerOrderScopeWhere,
   cancelBagWithRefunds as queueCancelBagWithRefunds,
   reconcilePendingPayments,
+  applyFreedomPayResult,
   markOrderReady,
   OrderError,
 } from "@/modules/orders";
@@ -256,6 +257,96 @@ describe("createOrder", () => {
   it("отклоняет неактивный пакет", async () => {
     const { customer, bag } = await createFixtures({ bagStatus: "CANCELLED" });
     await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("недоступен");
+  });
+});
+
+describe("Freedom Pay webhook", () => {
+  it("worker паркует незавершённую оплату и reconciliation завершает её позже", async () => {
+    const { customer, bag } = await createFixtures();
+    const order = await queueOrder(customer.id, bag.id, 1);
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
+    vi.spyOn(paymentProvider, "findHoldByIdempotencyKey")
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ providerRef: "fp-pending", status: "HELD" });
+    vi.spyOn(paymentProvider, "hold").mockResolvedValueOnce({ providerRef: "fp-pending", status: "PENDING" });
+
+    await reconcilePendingPayments();
+    const waiting = await prisma.paymentOperation.findUniqueOrThrow({
+      where: { paymentId_type: { paymentId: payment.id, type: "HOLD" } },
+    });
+    expect(waiting).toMatchObject({ status: "WAITING_PROVIDER" });
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).resolves.toMatchObject({ providerRef: "fp-pending", status: "PENDING_HOLD" });
+
+    await prisma.paymentOperation.update({ where: { id: waiting.id }, data: { nextAttemptAt: new Date(0) } });
+    await reconcilePendingPayments();
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "PAID" });
+  });
+
+  it("идемпотентно подтверждает hold и создаёт одно напоминание", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 2 });
+    const order = await queueOrder(customer.id, bag.id, 1);
+    const payment = await prisma.payment.update({
+      where: { orderId: order.id },
+      data: { provider: "freedompay", providerRef: "fp-webhook-1" },
+    });
+    const operation = await prisma.paymentOperation.findUniqueOrThrow({
+      where: { paymentId_type: { paymentId: payment.id, type: "HOLD" } },
+    });
+    const fields = {
+      pg_order_id: operation.idempotencyKey,
+      pg_payment_id: "fp-webhook-1",
+      pg_amount: String(payment.amount),
+      pg_currency: "KZT",
+      pg_result: "1",
+      pg_captured: "0",
+      pg_can_reject: "1",
+    };
+
+    await expect(applyFreedomPayResult(fields)).resolves.toMatchObject({ status: "ok" });
+    await expect(applyFreedomPayResult(fields)).resolves.toMatchObject({ status: "ok" });
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "PAID" });
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).resolves.toMatchObject({ status: "HELD" });
+    await expect(prisma.paymentOperation.findUniqueOrThrow({ where: { id: operation.id } })).resolves.toMatchObject({ status: "SUCCEEDED" });
+    await expect(prisma.paymentEvent.count({ where: { operationId: operation.id } })).resolves.toBe(1);
+    await expect(prisma.batchJob.count({ where: { dedupeKey: `pickup-reminder:${order.id}` } })).resolves.toBe(1);
+  });
+
+  it("на отказе отменяет заказ и один раз возвращает остаток", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 2 });
+    const order = await queueOrder(customer.id, bag.id, 1);
+    const payment = await prisma.payment.update({
+      where: { orderId: order.id },
+      data: { provider: "freedompay", providerRef: "fp-webhook-failed" },
+    });
+    const operation = await prisma.paymentOperation.findUniqueOrThrow({
+      where: { paymentId_type: { paymentId: payment.id, type: "HOLD" } },
+    });
+    const fields = {
+      pg_order_id: operation.idempotencyKey,
+      pg_payment_id: "fp-webhook-failed",
+      pg_amount: String(payment.amount),
+      pg_currency: "KZT",
+      pg_result: "0",
+      pg_captured: "0",
+      pg_can_reject: "1",
+    };
+
+    await applyFreedomPayResult(fields);
+    await applyFreedomPayResult(fields);
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "CANCELLED" });
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).resolves.toMatchObject({ status: "FAILED" });
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 2 });
+  });
+
+  it("отклоняет подмену суммы и валюты", async () => {
+    const { customer, bag } = await createFixtures();
+    const order = await queueOrder(customer.id, bag.id, 1);
+    const payment = await prisma.payment.update({ where: { orderId: order.id }, data: { provider: "freedompay" } });
+    const operation = await prisma.paymentOperation.findUniqueOrThrow({ where: { paymentId_type: { paymentId: payment.id, type: "HOLD" } } });
+    const base = { pg_order_id: operation.idempotencyKey, pg_payment_id: "fp-tampered", pg_result: "1", pg_captured: "0" };
+    await expect(applyFreedomPayResult({ ...base, pg_amount: String(payment.amount + 1), pg_currency: "KZT" })).resolves.toMatchObject({ status: "rejected" });
+    await expect(applyFreedomPayResult({ ...base, pg_amount: String(payment.amount), pg_currency: "USD" })).resolves.toMatchObject({ status: "rejected" });
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "PENDING_PAYMENT" });
   });
 });
 

@@ -1,0 +1,90 @@
+groups:
+  - name: foodgood-availability
+    rules:
+      - alert: FoodGoodWebDown
+        expr: up{job="foodgood-web"} == 0 or absent(up{job="foodgood-web"})
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: FoodGood web is unreachable
+          runbook: docs/PRODUCTION_RUNBOOK.md#web-or-database-down
+
+      - alert: FoodGoodWorkerHeartbeatMissing
+        expr: time() - foodgood_worker_last_heartbeat_seconds > 120
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "FoodGood worker {{ $labels.worker }} heartbeat is stale"
+          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-missing
+
+      - alert: FoodGoodHighServerErrorRate
+        expr: >-
+          sum(rate(foodgood_http_request_duration_seconds_count{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(foodgood_http_request_duration_seconds_count[5m])), 1) > 0.02
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: FoodGood HTTP 5xx rate is above 2%
+          runbook: docs/PRODUCTION_RUNBOOK.md#web-or-database-down
+
+  - name: foodgood-payments
+    rules:
+      - alert: FoodGoodPaymentNeedsReview
+        expr: foodgood_payment_needs_review > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: A payment operation requires manual review
+          runbook: docs/PRODUCTION_RUNBOOK.md#payment-needs-review
+
+      - alert: FoodGoodPaymentReconciliationMismatch
+        expr: foodgood_payment_reconciliation_mismatches > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: Freedom Pay and the FoodGood ledger disagree
+          runbook: docs/PRODUCTION_RUNBOOK.md#reconciliation-mismatch
+
+      - alert: FoodGoodPaymentFailures
+        expr: foodgood_payment_failures_recent > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Payment operations are failing repeatedly
+          runbook: docs/PRODUCTION_RUNBOOK.md#payment-needs-review
+
+      - alert: FoodGoodQueueLag
+        expr: foodgood_queue_lag_seconds > 300
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "FoodGood queue {{ $labels.queue }} is more than 5 minutes behind"
+          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-missing
+
+      - alert: FoodGoodExpiredWorkerLease
+        expr: foodgood_queue_expired_leases > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "FoodGood queue {{ $labels.queue }} has expired leases"
+          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-missing
+
+      - alert: FoodGoodIntermediateOrderStuck
+        expr: >-
+          foodgood_order_status_oldest_age_seconds{status="PENDING_PAYMENT"} > 900
+          or foodgood_order_status_oldest_age_seconds{status=~"CAPTURE_PENDING|REFUND_PENDING"} > 300
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "An order is stuck in {{ $labels.status }}"
+          runbook: docs/PRODUCTION_RUNBOOK.md#payment-needs-review
+
+  - name: foodgood-capacity
+    rules:
+      - alert: FoodGoodDatabaseConnectionsHigh
+        expr: foodgood_db_pool_connections / clamp_min(foodgood_db_max_connections, 1) > 0.8
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: PostgreSQL connections are above 80%
+          runbook: docs/PRODUCTION_RUNBOOK.md#web-or-database-down

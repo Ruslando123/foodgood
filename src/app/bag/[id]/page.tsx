@@ -25,7 +25,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const [bag, setBag] = useState<Bag | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(1);
-  const [paying, setPaying] = useState(false); // показ мок-экрана оплаты
+  const [paying, setPaying] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [checkoutPending, setCheckoutPending] = useState(false);
   const checkoutKey = useRef<string | null>(null);
@@ -217,6 +217,15 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         body: JSON.stringify({ bagId: id, quantity }),
       });
       clearCheckoutKey();
+      let current = order;
+      for (let attempt = 0; attempt < 20 && current.status === "PENDING_PAYMENT" && !current.payment?.checkoutUrl; attempt++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 750));
+        current = (await api<{ order: Order }>(`/api/orders/${order.id}`)).order;
+      }
+      if (current.payment?.checkoutUrl) {
+        window.location.assign(current.payment.checkoutUrl);
+        return;
+      }
       router.push(`/orders?new=${order.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не получилось оплатить");
@@ -349,8 +358,8 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
               <div className="flex justify-between font-bold text-base pt-2 border-t border-black/5"><span>Итого</span><span>{formatPrice(total)}</span></div>
             </div>
             <p className="text-xs text-muted">
-              Деньги холдируются и спишутся только после получения заказа. Демо-режим:
-              реальная карта не нужна.
+              Данные карты вводятся на защищённой странице Freedom Pay. Деньги холдируются
+              и спишутся только после получения заказа.
             </p>
             <button
               onClick={confirmPayment}

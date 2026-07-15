@@ -1,7 +1,7 @@
 import { prisma } from "../src/lib/db";
 import { runBatchJobs } from "../src/lib/jobs";
 import { dispatchOutbox } from "../src/lib/outbox";
-import { expireStale, reconcilePendingPayments } from "../src/lib/orders";
+import { expireStale, reconcilePendingPayments, reconcileSettledPayments } from "../src/lib/orders";
 import { pruneExpiredOrderIdempotencyKeys } from "../src/modules/orders/idempotency";
 import { pruneExpiredRateLimits } from "../src/shared/server/rate-limit";
 import { logEvent } from "../src/lib/monitoring";
@@ -17,6 +17,7 @@ if (!["payments", "expiry", "notifications", "outbox"].includes(name)) {
 }
 
 let stopping = false;
+let lastSettlementReconciliationAt = 0;
 process.on("SIGTERM", () => { stopping = true; });
 process.on("SIGINT", () => { stopping = true; });
 
@@ -39,7 +40,15 @@ async function tick() {
   if (name === "payments") {
     const refunds = await runBatchJobs("refunds");
     const payments = await reconcilePendingPayments(100);
-    return { refunds, payments };
+    let reconciliationChecked = 0;
+    let reconciliationMismatches = 0;
+    if (Date.now() - lastSettlementReconciliationAt >= 15 * 60_000) {
+      const reconciliation = await reconcileSettledPayments(50);
+      reconciliationChecked = reconciliation.checked;
+      reconciliationMismatches = reconciliation.mismatches;
+      lastSettlementReconciliationAt = Date.now();
+    }
+    return { refunds, payments, reconciliationChecked, reconciliationMismatches };
   }
   if (name === "expiry") {
     const expired = await expireStale(500);

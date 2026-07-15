@@ -31,8 +31,8 @@ export type Bag = {
 };
 
 export type Payment = {
-  id: string;
-  status: "HELD" | "CAPTURED" | "REFUNDED";
+  status: "PENDING_HOLD" | "HELD" | "CAPTURED" | "REFUNDED" | "FAILED";
+  checkoutUrl?: string;
 };
 
 export type Order = {
