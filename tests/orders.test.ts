@@ -642,6 +642,19 @@ describe("phone OTP", () => {
     await expect(prisma.otpChallenge.count({ where: { phone, activeKey: phone } })).resolves.toBe(1);
   });
 
+  it("разрешает немедленный повтор кода только в изолированном E2E-режиме", async () => {
+    vi.stubEnv("FOODGOOD_E2E_DEV_OTP", "true");
+    vi.stubEnv("DATABASE_URL", "postgresql://foodgood:foodgood@localhost:55439/foodgood_test?schema=public");
+    const phone = "+77010007891";
+
+    await issueOtp(phone);
+    const repeated = await issueOtp(phone);
+
+    expect(repeated).toMatchObject({ codeLength: 4, devCode: "0000" });
+    await expect(prisma.otpChallenge.count({ where: { phone, activeKey: phone } })).resolves.toBe(1);
+    await expect(consumeOtp(phone, "0000")).resolves.toBeUndefined();
+  });
+
   it("не создаёт сессию для заблокированного аккаунта", async () => {
     const phone = "+77015550199";
     await prisma.user.create({ data: { phone, status: "BLOCKED" } });

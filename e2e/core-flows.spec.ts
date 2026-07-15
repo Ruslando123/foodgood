@@ -26,10 +26,10 @@ test("клиент покупает, владелец выдаёт, клиент
   await bagLinks.first().click();
   await page.getByRole("button", { name: "Добавить в избранное" }).click();
   await page.getByRole("button", { name: /Забронировать за/ }).click();
-  await page.getByRole("button", { name: /Оплатить/ }).click();
+  await page.getByRole("button", { name: "Подтвердить бронь" }).click();
   await expect(page).toHaveURL(/\/orders\?new=/);
   const orderId = new URL(page.url()).searchParams.get("new")!;
-  await expect.poll(() => orderStatus(page, orderId)).toBe("PAID");
+  await expect.poll(() => orderStatus(page, orderId)).toBe("RESERVED");
   await page.reload();
   const code = (await page.locator("p.font-mono").first().innerText()).trim();
   expect(code).toMatch(/^[A-Z2-9]{6}$/);
@@ -39,7 +39,11 @@ test("клиент покупает, владелец выдаёт, клиент
   await login(merchantPage, "+7 701 000 00 02", /\/$/);
   await merchantPage.goto("/business/redeem");
   await merchantPage.getByPlaceholder("Например: K7M2ZQ").fill(code);
-  await merchantPage.getByRole("button", { name: "Выдать заказ" }).click();
+  merchantPage.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("оплата получена заведением");
+    await dialog.accept();
+  });
+  await merchantPage.getByRole("button", { name: "Подтвердить оплату и выдать" }).click();
   await expect(merchantPage.getByText("Заказ выдан!", { exact: false })).toBeVisible();
   await merchantContext.close();
 
@@ -72,7 +76,7 @@ test("администратор открывает рабочие раздел�
   await expect(page.getByRole("heading", { name: "Заказы" })).toBeVisible();
 });
 
-test("повторяет оплату тем же ключом после потери ответа", async ({ page }) => {
+test("повторяет бронирование тем же ключом после потери ответа", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("foodgood-location", JSON.stringify({ lat: 43.2389, lng: 76.8897, cityId: "almaty" })));
   await login(page, "+7 707 000 00 02", /\/$/);
 
@@ -97,11 +101,11 @@ test("повторяет оплату тем же ключом после пот
   await expect(bagLinks.first()).toBeVisible();
   await bagLinks.nth(1).click();
   await page.getByRole("button", { name: /Забронировать за/ }).click();
-  await page.getByRole("button", { name: /Оплатить/ }).click();
-  await expect(page.getByRole("button", { name: "Повторить оплату" })).toBeVisible();
+  await page.getByRole("button", { name: "Подтвердить бронь" }).click();
+  await expect(page.getByRole("button", { name: "Продолжить бронирование" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Повторить оплату" }).click();
-  await page.getByRole("button", { name: /Оплатить/ }).click();
+  await page.getByRole("button", { name: "Продолжить бронирование" }).click();
+  await page.getByRole("button", { name: "Подтвердить бронь" }).click();
   await expect(page).toHaveURL(/\/orders\?new=/);
 
   const retriedOrderId = new URL(page.url()).searchParams.get("new");
