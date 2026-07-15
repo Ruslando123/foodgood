@@ -12,11 +12,13 @@ import {
   api,
   Bag,
   Order,
+  PaymentMode,
   SessionUser,
   formatPrice,
   formatPickupWindow,
   discountPct,
 } from "@/lib/client/api";
+import { twoGisDirectionsUrl } from "@/lib/maps";
 
 export default function BagPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -28,6 +30,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const [paying, setPaying] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [checkoutPending, setCheckoutPending] = useState(false);
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>("ONLINE");
   const checkoutKey = useRef<string | null>(null);
   const bagRequest = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 });
   const [similar, setSimilar] = useState<Bag[]>([]);
@@ -132,9 +135,10 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       const sequence = ++request.sequence;
       request.controller = controller;
       try {
-        const data = await api<{ bag: Bag }>(`/api/bags/${id}`, { signal: controller.signal });
+        const data = await api<{ bag: Bag; paymentMode: PaymentMode }>(`/api/bags/${id}`, { signal: controller.signal });
         if (!mounted || sequence !== request.sequence) return;
         setBag(data.bag);
+        setPaymentMode(data.paymentMode);
         if (!checkoutKey.current) {
           changeQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1)));
         }
@@ -179,11 +183,13 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
     setProcessing(true);
     setError(null);
     try {
-      const [{ user }, { bag: latest }] = await Promise.all([
+      const [{ user }, latestResponse] = await Promise.all([
         api<{ user: SessionUser | null }>("/api/auth/me"),
-        api<{ bag: Bag }>(`/api/bags/${id}`),
+        api<{ bag: Bag; paymentMode: PaymentMode }>(`/api/bags/${id}`),
       ]);
+      const latest = latestResponse.bag;
       setBag(latest);
+      setPaymentMode(latestResponse.paymentMode);
       if (!user) {
         router.push(`/login?next=/bag/${id}`);
         return;
@@ -206,7 +212,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
     }
   }
 
-  async function confirmPayment() {
+  async function confirmOrder() {
     setProcessing(true);
     setError(null);
     try {
@@ -228,7 +234,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       }
       router.push(`/orders?new=${order.id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Не получилось оплатить");
+      setError(e instanceof Error ? e.message : "Не получилось оформить заказ");
       setPaying(false);
     } finally {
       setProcessing(false);
@@ -251,7 +257,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const now = new Date();
   const pickupStarted = new Date(bag.pickupStart) <= now;
   const pickupEnded = new Date(bag.pickupEnd) <= now;
-  const routeUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${bag.venue.lat},${bag.venue.lng}`)}`;
+  const routeUrl = twoGisDirectionsUrl(bag.venue);
 
   return (
     <div className="mx-auto min-h-dvh max-w-md bg-white pb-28">
@@ -292,7 +298,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
           </p>
           <p className="flex items-center gap-2"><IconPackage size={19} className="text-primary" />Осталось: <b>{bag.quantityLeft} шт</b></p>
           <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 font-semibold text-primary">
-            <IconMapPin size={19} />Построить маршрут ↗
+            <IconMapPin size={19} />Маршрут в 2GIS ↗
           </a>
         </div>
 
@@ -301,7 +307,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         <div className="space-y-2.5 rounded-[17px] border border-black/[0.07] bg-[#fafbfa] p-4 text-[12px]">
           <h2 className="text-[14px] font-bold">Важно перед покупкой</h2>
           <p className="flex gap-2"><IconGift size={17} className="shrink-0 text-primary" />Состав пакета заранее неизвестен и зависит от оставшейся свежей еды.</p>
-          <p className="flex gap-2"><IconReceipt size={17} className="shrink-0 text-primary" />Покажите QR-код или шестизначный код сотруднику.</p>
+          <p className="flex gap-2"><IconReceipt size={17} className="shrink-0 text-primary" />Покажите QR-код или шестизначный код сотруднику и оплатите заказ в заведении.</p>
           <p className="flex gap-2"><IconShieldCheck size={17} className="shrink-0 text-primary" />Бесплатная отмена доступна до начала окна выдачи.</p>
         </div>
 
@@ -335,7 +341,11 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
           disabled={!canCheckout || processing}
           className="w-full rounded-[13px] bg-primary py-3.5 text-[14px] font-semibold text-white shadow-sm disabled:bg-black/20"
         >
-          {processing ? "Проверяем наличие…" : checkoutPending ? "Повторить оплату" : available ? `Забронировать за ${formatPrice(total)}` : "Недоступно 😔"}
+          {processing
+            ? "Проверяем наличие…"
+            : checkoutPending
+              ? paymentMode === "PAY_AT_PICKUP" ? "Продолжить бронирование" : "Повторить оплату"
+              : available ? `Забронировать за ${formatPrice(total)}` : "Недоступно 😔"}
         </button>
       </div>
 
@@ -352,21 +362,29 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
             className="w-full max-w-md space-y-4 rounded-t-[24px] bg-white p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="font-bold text-lg">Оплата</h2>
+            <h2 className="font-bold text-lg">{paymentMode === "PAY_AT_PICKUP" ? "Бронирование" : "Оплата"}</h2>
             <div className="text-sm space-y-1">
               <div className="flex justify-between"><span className="text-muted">{bag.title} × {quantity}</span><span>{formatPrice(total)}</span></div>
               <div className="flex justify-between font-bold text-base pt-2 border-t border-black/5"><span>Итого</span><span>{formatPrice(total)}</span></div>
             </div>
-            <p className="text-xs text-muted">
-              Данные карты вводятся на защищённой странице Freedom Pay. Деньги холдируются
-              и спишутся только после получения заказа.
-            </p>
+            {paymentMode === "PAY_AT_PICKUP" ? (
+              <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                Оплатите {formatPrice(total)} непосредственно заведению при получении. Заведение выдаст кассовый чек. FoodGood не принимает деньги за эту бронь.
+              </p>
+            ) : (
+              <p className="text-xs text-muted">
+                Данные карты вводятся на защищённой странице Freedom Pay. Деньги холдируются
+                и спишутся только после получения заказа.
+              </p>
+            )}
             <button
-              onClick={confirmPayment}
+              onClick={confirmOrder}
               disabled={processing}
               className="w-full rounded-[13px] bg-primary py-3.5 font-semibold text-white disabled:opacity-60"
             >
-              {processing ? "Обработка…" : `Оплатить ${formatPrice(total)}`}
+              {processing
+                ? "Обработка…"
+                : paymentMode === "PAY_AT_PICKUP" ? "Подтвердить бронь" : `Оплатить ${formatPrice(total)}`}
             </button>
             <button
               onClick={cancelCheckout}

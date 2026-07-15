@@ -11,8 +11,10 @@ import QrCanvas from "@/components/QrCanvas";
 import OrderSupportButton from "@/components/OrderSupportButton";
 import OrderReviewForm from "@/components/OrderReviewForm";
 import { api, ApiError, Order, formatPrice, formatPickupWindow } from "@/lib/client/api";
+import { twoGisDirectionsUrl } from "@/lib/maps";
 
 const STATUS_LABEL: Record<Order["status"], string> = {
+  RESERVED: "Забронирован · оплата в заведении",
   PENDING_PAYMENT: "Ожидает оплаты",
   PAID: "Оплачен · готовится",
   READY_FOR_PICKUP: "Готов к выдаче",
@@ -90,12 +92,15 @@ function OrdersContent() {
     if (pages[tab].orders === null) void load(tab);
   }, [load, pages, tab]);
 
-  async function cancel(orderId: string) {
-    if (!confirm("Отменить заказ? Деньги будут возвращены на карту.")) return;
-    setBusyOrderId(orderId);
+  async function cancel(order: Order) {
+    const question = order.paymentMethod === "PAY_AT_PICKUP"
+      ? "Отменить бронь? Оплата ещё не производилась."
+      : "Отменить заказ? Деньги будут возвращены на карту.";
+    if (!confirm(question)) return;
+    setBusyOrderId(order.id);
     setError(null);
     try {
-      await api(`/api/orders/${orderId}/cancel`, { method: "POST" });
+      await api(`/api/orders/${order.id}/cancel`, { method: "POST" });
       await load("active", true);
       setPages((current) => ({ ...current, history: { orders: null, nextCursor: null } }));
     } catch (e) {
@@ -153,7 +158,7 @@ function OrdersContent() {
           now={now}
           highlighted={order.id === newOrderId}
           cancelling={busyOrderId === order.id}
-          onCancel={() => cancel(order.id)}
+          onCancel={() => cancel(order)}
         />
       ))}
       {pages[tab].nextCursor && <button type="button" disabled={loadingMore} onClick={() => load(tab, false, pages[tab].nextCursor ?? undefined)} className="w-full rounded-xl border border-black/[0.09] py-3 text-sm font-semibold text-primary disabled:opacity-50">{loadingMore ? "Загружаем…" : "Показать ещё"}</button>}
@@ -174,15 +179,16 @@ function OrderCard({
   cancelling: boolean;
   onCancel: () => void;
 }) {
-  const isActive = ["PAID", "READY_FOR_PICKUP"].includes(order.status);
+  const isActive = ["RESERVED", "PAID", "READY_FOR_PICKUP"].includes(order.status);
   const start = new Date(order.bag.pickupStart).getTime();
   const end = new Date(order.bag.pickupEnd).getTime();
   const canCancel = isActive && now < start;
-  const routeUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${order.bag.venue.lat},${order.bag.venue.lng}`)}`;
+  const routeUrl = twoGisDirectionsUrl(order.bag.venue);
 
   return (
     <article className={`space-y-3 rounded-[17px] border bg-white p-4 shadow-[0_3px_14px_rgba(20,40,28,0.06)] ${highlighted ? "border-primary" : "border-black/[0.07]"}`}>
-      {highlighted && order.status !== "PENDING_PAYMENT" && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-primary"><IconCheck size={16} />Заказ оплачен и подтверждён</p>}
+      {highlighted && order.status === "RESERVED" && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-primary"><IconCheck size={16} />Бронь подтверждена · оплатите при получении</p>}
+      {highlighted && !["RESERVED", "PENDING_PAYMENT"].includes(order.status) && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-primary"><IconCheck size={16} />Заказ оплачен и подтверждён</p>}
       {highlighted && order.status === "PENDING_PAYMENT" && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-amber-700"><IconRefresh size={16} />Завершите оплату заказа</p>}
       <div className="flex justify-between gap-2">
         <div>
@@ -203,9 +209,10 @@ function OrderCard({
             <QrCanvas value={order.pickupCode} size={170} />
             <p className="font-mono text-xl font-bold tracking-widest">{order.pickupCode}</p>
             <p className="text-xs text-muted">Покажите QR или код сотруднику</p>
+            {order.paymentMethod === "PAY_AT_PICKUP" && <p className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">К оплате в заведении: {formatPrice(order.totalPrice)}</p>}
           </div>
           <div className="grid grid-cols-2 gap-2 text-center text-[13px] font-semibold">
-            <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="rounded-[11px] bg-[#edf7f1] px-3 py-2.5 text-primary">Маршрут ↗</a>
+            <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="rounded-[11px] bg-[#edf7f1] px-3 py-2.5 text-primary">Маршрут в 2GIS ↗</a>
             <Link href={`/bag/${order.bag.id}`} className="rounded-[11px] bg-[#f3f4f3] px-3 py-2.5">О пакете</Link>
           </div>
           {canCancel ? (
@@ -219,7 +226,7 @@ function OrderCard({
       ) : (
         <div className="space-y-3">
           <div className="rounded-xl bg-[#f3f4f3] p-3 text-[13px]">
-            <span className="flex items-center gap-1.5">{order.status === "COMPLETED" ? <IconCheck size={16} className="text-primary" /> : <IconRefresh size={16} />} {STATUS_LABEL[order.status]}</span>
+            <span className="flex items-center gap-1.5">{order.status === "COMPLETED" ? <IconCheck size={16} className="text-primary" /> : <IconRefresh size={16} />} {orderStatusLabel(order)}</span>
             {order.payment?.status === "REFUNDED" && <p className="mt-1 text-xs text-muted">Возврат отмечен платёжной системой</p>}
           </div>
           {order.status === "PENDING_PAYMENT" && order.payment?.checkoutUrl && (
@@ -236,6 +243,14 @@ function OrderCard({
       <OrderSupportButton id={order.id} />
     </article>
   );
+}
+
+function orderStatusLabel(order: Order): string {
+  if (order.paymentMethod !== "PAY_AT_PICKUP") return STATUS_LABEL[order.status];
+  if (order.status === "COMPLETED") return "Получен · оплата в заведении";
+  if (order.status === "CANCELLED") return "Бронь отменена";
+  if (order.status === "EXPIRED") return "Не забран";
+  return STATUS_LABEL[order.status];
 }
 
 function PickupCountdown({ now, start, end }: { now: number; start: number; end: number }) {

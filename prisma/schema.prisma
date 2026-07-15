@@ -70,6 +70,7 @@ model Venue {
   photo            String                                @default("🍽️") // emoji or image URL
   contactPhone     String                                @default("")
   openingHours     String                                @default("")
+  twoGisUrl        String                                @default("")
   status           String                                @default("ACTIVE") // ACTIVE | SUSPENDED
   suspensionReason String?
   ownerId          String
@@ -111,27 +112,28 @@ model Bag {
 }
 
 model Order {
-  id                 String    @id @default(cuid())
-  bagId              String
-  userId             String
-  quantity           Int       @default(1)
-  totalPrice         Int // KZT
-  platformFee        Int // KZT, snapshot at purchase time
-  status             String    @default("PENDING_PAYMENT") // PENDING_PAYMENT | PAID | CAPTURE_PENDING | COMPLETED | REFUND_PENDING | CANCELLED | EXPIRED
-  refundTargetStatus String? // CANCELLED | EXPIRED; сохраняется для повторного refund
-  pickupCode         String    @unique
-  createdAt          DateTime  @default(now())
-  completedAt        DateTime?
-  supportStatus      String    @default("NONE") // NONE | OPEN | RESOLVED
-  supportNote        String    @default("")
-  idempotencyRecordId String?  @unique
+  id                  String    @id @default(cuid())
+  bagId               String
+  userId              String
+  quantity            Int       @default(1)
+  totalPrice          Int // KZT
+  platformFee         Int // KZT, snapshot at purchase time
+  paymentMethod       String    @default("ONLINE") // ONLINE | PAY_AT_PICKUP
+  status              String    @default("PENDING_PAYMENT") // RESERVED | PENDING_PAYMENT | PAID | READY_FOR_PICKUP | CAPTURE_PENDING | COMPLETED | REFUND_PENDING | CANCELLED | EXPIRED
+  refundTargetStatus  String? // CANCELLED | EXPIRED; сохраняется для повторного refund
+  pickupCode          String    @unique
+  createdAt           DateTime  @default(now())
+  completedAt         DateTime?
+  supportStatus       String    @default("NONE") // NONE | OPEN | RESOLVED
+  supportNote         String    @default("")
+  idempotencyRecordId String?   @unique
 
-  bag            Bag             @relation(fields: [bagId], references: [id])
-  user           User            @relation(fields: [userId], references: [id])
-  payment        Payment?
-  paymentEvents  PaymentEvent[]
-  outboxMessages OutboxMessage[]
-  review         Review?
+  bag               Bag                  @relation(fields: [bagId], references: [id])
+  user              User                 @relation(fields: [userId], references: [id])
+  payment           Payment?
+  paymentEvents     PaymentEvent[]
+  outboxMessages    OutboxMessage[]
+  review            Review?
   idempotencyRecord OrderIdempotencyKey? @relation(fields: [idempotencyRecordId], references: [id], onDelete: SetNull)
 
   @@index([userId, status])

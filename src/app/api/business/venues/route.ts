@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { VENUE_CATEGORIES } from "@/lib/config";
 import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
+import { normalizeTwoGisUrl } from "@/lib/maps";
 import { requireMerchant, requireUser } from "@/modules/auth/server";
 import { apiRoute, ApiError, assertSameOrigin, json } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
@@ -32,6 +33,9 @@ export async function POST(req: NextRequest) {
     const description = optionalString(body.description, "description", 1000);
     const contactPhone = optionalString(body.contactPhone, "contactPhone", 40);
     const openingHours = optionalString(body.openingHours, "openingHours", 500);
+    let twoGisUrl: string;
+    try { twoGisUrl = normalizeTwoGisUrl(optionalString(body.twoGisUrl, "twoGisUrl", 1000)); }
+    catch { throw new ApiError(400, "INVALID_TWO_GIS_URL", "Укажите ссылку на карточку заведения с сайта 2GIS"); }
     if (!(cat in VENUE_CATEGORIES)) {
       throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
     }
@@ -44,7 +48,7 @@ export async function POST(req: NextRequest) {
     }
     try {
       const venue = await prisma.venue.create({
-        data: { name, address, lat, lng, cityId: nearestKazakhstanCity(lat, lng).id, category: cat, description, contactPhone, openingHours, photo, ownerId: owner.id },
+        data: { name, address, lat, lng, cityId: nearestKazakhstanCity(lat, lng).id, category: cat, description, contactPhone, openingHours, twoGisUrl, photo, ownerId: owner.id },
       });
       return json({ venue }, { status: 201 });
     } catch (error) {

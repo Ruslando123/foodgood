@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { apiRoute, ApiError, json } from "@/shared/server/api";
 import { publicVenueSelect, toPublicVenueDto } from "@/modules/api/dto";
+import { getPaymentMode } from "@/lib/payment-mode";
 
 export async function GET(
   _req: NextRequest,
@@ -31,6 +32,7 @@ export async function GET(
     if (!bag) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
     const ratings = await prisma.review.aggregate({ where: { venueId: bag.venueId, moderationStatus: "PUBLISHED" }, _avg: { rating: true }, _count: { _all: true } });
     return json({
+      paymentMode: getPaymentMode(),
       bag: {
         id: bag.id,
         venueId: bag.venueId,

@@ -260,6 +260,88 @@ describe("createOrder", () => {
   });
 });
 
+describe("оплата при получении", () => {
+  it("создаёт бронь без платёжной операции и комиссии платформы", async () => {
+    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
+    const { customer, bag } = await createFixtures({ price: 1500, quantity: 3 });
+
+    const order = await queueOrder(customer.id, bag.id, 2);
+
+    expect(order).toMatchObject({
+      status: "RESERVED",
+      paymentMethod: "PAY_AT_PICKUP",
+      totalPrice: 3000,
+      platformFee: 0,
+      payment: null,
+    });
+    await expect(prisma.payment.count({ where: { orderId: order.id } })).resolves.toBe(0);
+    await expect(prisma.paymentOperation.count()).resolves.toBe(0);
+    await expect(prisma.batchJob.count({ where: { dedupeKey: `pickup-reminder:${order.id}` } })).resolves.toBe(1);
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 1 });
+  });
+
+  it("отменяет бронь без refund и один раз возвращает остаток", async () => {
+    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
+    const { customer, bag } = await createFixtures({ quantity: 1 });
+    const order = await queueOrder(customer.id, bag.id, 1);
+
+    const cancelled = await queueCancelOrder(customer.id, order.id);
+    expect(cancelled).toMatchObject({ status: "CANCELLED", paymentMethod: "PAY_AT_PICKUP", payment: null });
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({
+      status: "ACTIVE",
+      quantityLeft: 1,
+    });
+    await expect(queueCancelOrder(customer.id, order.id)).rejects.toThrow("нельзя отменить");
+    await expect(prisma.paymentOperation.count()).resolves.toBe(0);
+  });
+
+  it("требует подтверждение кассовой оплаты перед выдачей", async () => {
+    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await queueOrder(customer.id, bag.id, 1);
+
+    await expect(queueRedeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("Подтвердите получение оплаты");
+    const completed = await queueRedeemOrder(merchant.id, order.pickupCode, true);
+    expect(completed).toMatchObject({ status: "COMPLETED", paymentMethod: "PAY_AT_PICKUP", payment: null });
+    expect(completed.completedAt).not.toBeNull();
+  });
+
+  it("разрешает отметить бронь готовой и затем выдать", async () => {
+    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await queueOrder(customer.id, bag.id, 1);
+
+    await expect(markOrderReady(merchant.id, order.id)).resolves.toMatchObject({ status: "READY_FOR_PICKUP" });
+    await expect(queueRedeemOrder(merchant.id, order.pickupCode, true)).resolves.toMatchObject({ status: "COMPLETED" });
+  });
+
+  it("помечает невыкупленную бронь истёкшей без возврата", async () => {
+    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
+    const { customer, bag } = await createFixtures();
+    const order = await queueOrder(customer.id, bag.id, 1);
+    await prisma.bag.update({
+      where: { id: bag.id },
+      data: { pickupStart: inMinutes(-120), pickupEnd: inMinutes(-60) },
+    });
+
+    await expireStale();
+
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "EXPIRED" });
+    await expect(prisma.payment.count({ where: { orderId: order.id } })).resolves.toBe(0);
+  });
+
+  it("отмена пакета закрывает брони без refund job", async () => {
+    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await queueOrder(customer.id, bag.id, 1);
+
+    await queueCancelBagWithRefunds(merchant.id, bag.id);
+
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "CANCELLED" });
+    await expect(prisma.paymentOperation.count()).resolves.toBe(0);
+  });
+});
+
 describe("Freedom Pay webhook", () => {
   it("worker паркует незавершённую оплату и reconciliation завершает её позже", async () => {
     const { customer, bag } = await createFixtures();

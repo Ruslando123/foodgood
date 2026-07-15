@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { checkVenuePhotoStorage } from "@/lib/venue-photos";
 import { json } from "@/shared/server/api";
+import { getPaymentMode } from "@/lib/payment-mode";
 
 type DeepPayload = Record<string, unknown>;
 const globalHealth = globalThis as unknown as { deepHealth?: { expiresAt: number; payload: DeepPayload } };
@@ -23,13 +24,17 @@ export async function GET() {
       checkVenuePhotoStorage(),
     ]);
     const requiredWorkers = process.env.NODE_ENV === "production";
+    const requiredWorkerNames = getPaymentMode() === "PAY_AT_PICKUP"
+      ? ["expiry", "notifications", "outbox"]
+      : ["payments", "expiry", "notifications", "outbox"];
     const workerHealth = Object.fromEntries(["payments", "expiry", "notifications", "outbox"].map((name) => {
       const heartbeat = workers.find((item) => item.key === `worker:${name}`);
       const payload = heartbeat ? safeJson(heartbeat.valueJson) : null;
       const fresh = Boolean(heartbeat && checkedAt.getTime() - heartbeat.updatedAt.getTime() < 2 * 60_000 && payload?.status === "ok");
-      return [name, fresh ? "ok" : requiredWorkers ? "stale" : "not-required"];
+      const required = requiredWorkers && requiredWorkerNames.includes(name);
+      return [name, fresh ? "ok" : required ? "stale" : "not-required"];
     }));
-    const workersFresh = Object.values(workerHealth).every((status) => status === "ok");
+    const workersFresh = requiredWorkerNames.every((name) => workerHealth[name] === "ok");
     const degraded = !storage || (requiredWorkers && !workersFresh) || paymentNeedsReview > 0 || overduePayments > 0 || failedOutbox > 0 || overdueOutbox > 0 || failedJobs > 0 || overdueJobs > 0;
     const payload: DeepPayload = {
       status: degraded ? "degraded" : "ok",

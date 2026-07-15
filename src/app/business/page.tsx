@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { getSessionUser } from "@/lib/auth";
 
 const ORDER_LABELS: Record<string, string> = {
-  PENDING_PAYMENT: "Ожидает оплаты", PAID: "Принят", READY_FOR_PICKUP: "Готов к выдаче", CAPTURE_PENDING: "Списание",
+  RESERVED: "Забронирован", PENDING_PAYMENT: "Ожидает оплаты", PAID: "Принят", READY_FOR_PICKUP: "Готов к выдаче", CAPTURE_PENDING: "Списание",
   COMPLETED: "Выдан", REFUND_PENDING: "Возврат", CANCELLED: "Отменён", EXPIRED: "Истёк",
 };
 
@@ -16,7 +16,7 @@ export default async function BusinessDashboard() {
   const [venues, activeBags, awaitingPickup, completed, recentOrders, recentBags] = await Promise.all([
     prisma.venue.count({ where: { ownerId: user.id } }),
     prisma.bag.count({ where: { ...owner, status: "ACTIVE", pickupEnd: { gt: new Date() } } }),
-    prisma.order.count({ where: { bag: owner, status: { in: ["PAID", "READY_FOR_PICKUP"] } } }),
+    prisma.order.count({ where: { bag: owner, status: { in: ["RESERVED", "PAID", "READY_FOR_PICKUP"] } } }),
     prisma.order.aggregate({ where: { bag: owner, status: "COMPLETED" }, _sum: { totalPrice: true, platformFee: true, quantity: true } }),
     prisma.order.findMany({ where: { bag: owner }, include: { user: true, bag: { include: { venue: true } } }, orderBy: { createdAt: "desc" }, take: 6 }),
     prisma.bag.findMany({ where: owner, include: { venue: true }, orderBy: { createdAt: "desc" }, take: 5 }),
@@ -25,7 +25,7 @@ export default async function BusinessDashboard() {
   const fees = completed._sum.platformFee ?? 0;
   const stats = [
     { label: "К выплате", value: price(gross - fees), hint: `Оборот ${price(gross)}`, href: "/business/orders?status=COMPLETED" },
-    { label: "Ждут выдачи", value: awaitingPickup, hint: awaitingPickup ? "Требуют внимания" : "Новых заказов нет", href: "/business/orders?status=PAID" },
+    { label: "Ждут выдачи", value: awaitingPickup, hint: awaitingPickup ? "Требуют внимания" : "Новых заказов нет", href: "/business/orders?status=RESERVED" },
     { label: "Активные пакеты", value: activeBags, hint: `${venues} заведений`, href: "/business/bags" },
     { label: "Спасено пакетов", value: completed._sum.quantity ?? 0, hint: `Комиссия ${price(fees)}`, href: "/business/orders?status=COMPLETED" },
   ];

@@ -170,7 +170,7 @@ async function pickupReminder(orderId: string): Promise<JobResult> {
     where: { id: orderId },
     include: { user: true, bag: { include: { venue: true } } },
   });
-  if (!order || !order.user.notificationReminders || !["PAID", "READY_FOR_PICKUP"].includes(order.status) || order.bag.pickupEnd <= new Date()) {
+  if (!order || !order.user.notificationReminders || !["RESERVED", "PAID", "READY_FOR_PICKUP"].includes(order.status) || order.bag.pickupEnd <= new Date()) {
     return { done: true };
   }
   await prisma.notification.createMany({
@@ -221,7 +221,7 @@ async function fanoutNewBag(bagId: string, cursor: string | undefined, batchSize
 async function refundCancelledBag(bagId: string, batchSize: number): Promise<JobResult> {
   const bag = await prisma.bag.findUniqueOrThrow({ where: { id: bagId }, include: { venue: true } });
   const orders = await prisma.order.findMany({
-    where: { bagId, status: { in: ["PAID", "READY_FOR_PICKUP"] } },
+    where: { bagId, paymentMethod: "ONLINE", status: { in: ["PAID", "READY_FOR_PICKUP"] } },
     orderBy: { id: "asc" },
     take: batchSize,
     select: { id: true },

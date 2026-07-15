@@ -1,0 +1,2 @@
+ALTER TABLE "Venue"
+  ADD COLUMN "twoGisUrl" TEXT NOT NULL DEFAULT '';

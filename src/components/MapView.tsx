@@ -5,6 +5,7 @@ import type { Map as LeafletMap } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Bag, formatPrice } from "@/lib/client/api";
 import { KAZAKHSTAN_CENTER } from "@/lib/kazakhstan";
+import { twoGisDirectionsUrl } from "@/lib/maps";
 
 type Props = {
   bags: Bag[];
@@ -76,11 +77,11 @@ export default function MapView({ bags, userLocation }: Props) {
         link.style.cssText = "color:#1a7f4e;font-weight:600";
         link.textContent = "Забронировать →";
         const routeLink = document.createElement("a");
-        routeLink.href = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${bag.venue.lat},${bag.venue.lng}`)}`;
+        routeLink.href = twoGisDirectionsUrl(bag.venue);
         routeLink.target = "_blank";
         routeLink.rel = "noopener noreferrer";
         routeLink.style.cssText = "display:block;color:#5f7268;margin-top:4px";
-        routeLink.textContent = "Построить маршрут ↗";
+        routeLink.textContent = "Маршрут в 2GIS ↗";
         popup.append(venueName, title, prices, link, routeLink);
 
         L.marker([bag.venue.lat, bag.venue.lng], { icon }).addTo(map).bindPopup(popup);

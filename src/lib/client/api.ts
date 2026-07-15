@@ -7,6 +7,8 @@ export type Venue = {
   address: string;
   lat: number;
   lng: number;
+  cityId: string;
+  twoGisUrl: string;
   category: string;
   photo: string;
   rating?: number | null;
@@ -35,12 +37,16 @@ export type Payment = {
   checkoutUrl?: string;
 };
 
+export type PaymentMode = "ONLINE" | "PAY_AT_PICKUP";
+
 export type Order = {
   id: string;
   quantity: number;
   totalPrice: number;
   platformFee: number;
+  paymentMethod: PaymentMode;
   status:
+    | "RESERVED"
     | "PENDING_PAYMENT"
     | "PAID"
     | "READY_FOR_PICKUP"

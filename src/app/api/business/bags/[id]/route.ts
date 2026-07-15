@@ -72,7 +72,7 @@ export async function PATCH(
           throw new ApiError(409, "BAG_NOT_EDITABLE", "Закрытый пакет нельзя редактировать");
         }
         const reserved = await tx.order.count({
-          where: { bagId: id, status: { in: ["PENDING_PAYMENT", "PAID", "CAPTURE_PENDING", "COMPLETED"] } },
+          where: { bagId: id, status: { in: ["RESERVED", "PENDING_PAYMENT", "PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING", "COMPLETED"] } },
         });
         if (reserved && (price !== bag.price || pickupStart.getTime() !== bag.pickupStart.getTime() || pickupEnd.getTime() !== bag.pickupEnd.getTime())) {
           throw new ApiError(409, "BAG_HAS_ORDERS", "После первого заказа цену и время выдачи менять нельзя");

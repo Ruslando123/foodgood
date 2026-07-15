@@ -47,6 +47,8 @@ services:
         sync: false
       - key: APP_BASE_URL
         sync: false
+      - key: PAYMENT_MODE
+        value: PAY_AT_PICKUP
       - key: ADMIN_PHONE
         sync: false
       - key: MOBIZON_API_KEY
@@ -125,6 +127,8 @@ services:
         value: "false"
       - key: APP_BASE_URL
         sync: false
+      - key: PAYMENT_MODE
+        value: PAY_AT_PICKUP
 
   - type: worker
     name: foodgood-expiry-worker

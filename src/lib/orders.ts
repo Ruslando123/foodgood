@@ -8,6 +8,7 @@ import { telegramNotificationsEnabled } from "./telegram";
 import { paymentFailures, workerClaims, workerFailures, workerJobDuration, workerLeaseLost, workerSuccesses } from "./metrics";
 import { startLeaseHeartbeat } from "./lease-heartbeat";
 import { PAYMENT_PROVIDER_TIMEOUT_MS } from "./payment-config";
+import { getPaymentMode } from "./payment-mode";
 import { transitionBagOrders, transitionOrder } from "@/modules/orders/state-machine";
 import type { FreedomPayFields } from "./freedompay";
 
@@ -19,7 +20,7 @@ type OperationType = "HOLD" | "CAPTURE" | "REFUND";
 
 export type FreedomPayResultDecision = { status: "ok" | "rejected" | "error"; description: string };
 
-export const ACTIVE_PICKUP_ORDER_STATUSES = ["PENDING_PAYMENT", "PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING"];
+export const ACTIVE_PICKUP_ORDER_STATUSES = ["RESERVED", "PENDING_PAYMENT", "PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING"];
 
 export function customerOrderScopeWhere(userId: string, scope: "active" | "history", now = new Date()): Prisma.OrderWhereInput {
   const activeStatus = { in: ACTIVE_PICKUP_ORDER_STATUSES };
@@ -57,6 +58,18 @@ export async function expireStale(limit = 250): Promise<number> {
     UPDATE "Order" orders SET status = 'EXPIRED'
     FROM candidates WHERE orders.id = candidates.id
   `;
+  const expiredPayAtPickup = await prisma.$executeRaw`
+    WITH candidates AS (
+      SELECT orders.id FROM "Order" orders
+      JOIN "Bag" bag ON bag.id = orders."bagId"
+      WHERE orders."paymentMethod" = 'PAY_AT_PICKUP'
+        AND orders.status IN ('RESERVED', 'READY_FOR_PICKUP')
+        AND bag."pickupEnd" < now()
+      ORDER BY bag."pickupEnd", orders.id FOR UPDATE OF orders SKIP LOCKED LIMIT ${limit}
+    )
+    UPDATE "Order" orders SET status = 'EXPIRED'
+    FROM candidates WHERE orders.id = candidates.id
+  `;
   const refundRows = await prisma.$transaction(async (tx) => {
     const claimed = await tx.$queryRaw<Array<{ id: string; paymentId: string }>>`
       WITH candidates AS (
@@ -79,7 +92,7 @@ export async function expireStale(limit = 250): Promise<number> {
     }
     return claimed.length;
   });
-  return Number(expiredBags) + Number(expiredPending) + refundRows;
+  return Number(expiredBags) + Number(expiredPending) + Number(expiredPayAtPickup) + refundRows;
 }
 
 /** HTTP only reserves inventory and atomically queues HOLD. */
@@ -90,7 +103,8 @@ export async function createOrder(
   idempotencyRecordId?: string,
   idempotencyOwnerToken?: string
 ) {
-  assertPaymentProviderReady();
+  const paymentMode = getPaymentMode();
+  if (paymentMode === "ONLINE") assertPaymentProviderReady();
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
     throw new OrderError("Некорректное количество");
   }
@@ -136,13 +150,19 @@ export async function createOrder(
       userId,
       quantity,
       totalPrice,
-      platformFee: Math.round(totalPrice * PLATFORM_FEE_PCT),
+      platformFee: paymentMode === "ONLINE" ? Math.round(totalPrice * PLATFORM_FEE_PCT) : 0,
+      paymentMethod: paymentMode,
+      status: paymentMode === "ONLINE" ? "PENDING_PAYMENT" : "RESERVED",
       idempotencyRecordId,
     });
-    const payment = await tx.payment.create({
-      data: { orderId: created.id, provider: paymentProvider.name, amount: totalPrice },
-    });
-    await ensureOperation(tx, payment.id, "HOLD");
+    if (paymentMode === "ONLINE") {
+      const payment = await tx.payment.create({
+        data: { orderId: created.id, provider: paymentProvider.name, amount: totalPrice },
+      });
+      await ensureOperation(tx, payment.id, "HOLD");
+    } else {
+      await ensurePickupReminder(tx, created.id, bag.pickupStart);
+    }
     const result = await tx.order.findUniqueOrThrow({ where: { id: created.id }, include: orderInclude });
     return result;
   });
@@ -157,9 +177,27 @@ export async function cancelOrder(userId: string, orderId: string) {
     include: { bag: true },
   });
   if (!order || order.userId !== userId) throw new OrderError("Заказ не найден");
-  if (!["PAID", "READY_FOR_PICKUP"].includes(order.status)) throw new OrderError("Заказ нельзя отменить");
+  const payAtPickup = order.paymentMethod === "PAY_AT_PICKUP";
+  const cancellable = payAtPickup ? ["RESERVED", "READY_FOR_PICKUP"] : ["PAID", "READY_FOR_PICKUP"];
+  if (!cancellable.includes(order.status)) throw new OrderError("Заказ нельзя отменить");
   if (order.bag.pickupStart <= new Date()) {
     throw new OrderError("Окно выдачи уже началось — отмена недоступна");
+  }
+  if (payAtPickup) {
+    return prisma.$transaction(async (tx) => {
+      const current = await tx.order.findUnique({ where: { id: orderId }, include: { bag: true } });
+      if (!current || current.userId !== userId || current.paymentMethod !== "PAY_AT_PICKUP") {
+        throw new OrderError("Заказ не найден");
+      }
+      const cancelled = await transitionOrder(tx, {
+        id: orderId,
+        from: ["RESERVED", "READY_FOR_PICKUP"],
+        to: "CANCELLED",
+      });
+      if (!cancelled) throw new OrderError("Заказ уже обрабатывается");
+      await restoreReservedInventory(tx, current.bagId, current.quantity);
+      return tx.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
+    });
   }
   if (!(await queueRefund(orderId, "CANCELLED"))) {
     throw new OrderError("Заказ уже обрабатывается");
@@ -168,7 +206,7 @@ export async function cancelOrder(userId: string, orderId: string) {
 }
 
 /** HTTP atomically claims PAID -> CAPTURE_PENDING and queues CAPTURE. */
-export async function redeemOrder(merchantId: string, pickupCode: string) {
+export async function redeemOrder(merchantId: string, pickupCode: string, paymentConfirmed = false) {
   const code = pickupCode.trim().toUpperCase();
   const order = await prisma.order.findUnique({
     where: { pickupCode: code },
@@ -180,6 +218,23 @@ export async function redeemOrder(merchantId: string, pickupCode: string) {
   if (order.status === "COMPLETED") throw new OrderError("Заказ уже выдан");
   if (order.status === "CAPTURE_PENDING") {
     throw new OrderError("Списание уже обрабатывается, проверьте статус позже");
+  }
+  if (order.paymentMethod === "PAY_AT_PICKUP") {
+    if (!paymentConfirmed) throw new OrderError("Подтвердите получение оплаты в заведении");
+    if (!["RESERVED", "READY_FOR_PICKUP"].includes(order.status)) {
+      throw new OrderError("Бронь отменена или недоступна для выдачи");
+    }
+    const completed = await prisma.$transaction(async (tx) => transitionOrder(tx, {
+      id: order.id,
+      from: ["RESERVED", "READY_FOR_PICKUP"],
+      to: "COMPLETED",
+      data: { completedAt: new Date() },
+    }));
+    if (!completed) throw new OrderError("Заказ уже обрабатывается");
+    return prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+      include: { ...orderInclude, user: true },
+    });
   }
   if (!["PAID", "READY_FOR_PICKUP"].includes(order.status)) throw new OrderError("Заказ не оплачен или отменён");
   if (!order.payment?.providerRef) throw new OrderError("Для заказа не найден reference платежа");
@@ -213,7 +268,7 @@ export async function markOrderReady(merchantId: string, orderId: string) {
 
     const transitioned = await transitionOrder(tx, {
       id: orderId,
-      from: "PAID",
+      from: ["RESERVED", "PAID"],
       to: "READY_FOR_PICKUP",
     });
     if (!transitioned) throw new OrderError("Заказ нельзя отметить готовым");
@@ -251,6 +306,13 @@ export async function cancelBagWithRefunds(merchantId: string, bagId: string) {
     if (!bag || bag.venue.ownerId !== merchantId) throw new OrderError("Пакет не найден");
     await tx.bag.update({ where: { id: bagId }, data: { status: "CANCELLED" } });
     await transitionBagOrders(tx, bagId, "PENDING_PAYMENT", "CANCELLED");
+    await transitionBagOrders(
+      tx,
+      bagId,
+      ["RESERVED", "READY_FOR_PICKUP"],
+      "CANCELLED",
+      { paymentMethod: "PAY_AT_PICKUP" }
+    );
 
     await tx.batchJob.upsert({
       where: { dedupeKey: `refund-cancelled-bag:${bag.id}` },
@@ -289,6 +351,33 @@ async function ensureOperation(tx: Prisma.TransactionClient, paymentId: string, 
     update: {},
     create: { paymentId, type, idempotencyKey: randomUUID(), nextAttemptAt: new Date(0) },
   });
+}
+
+async function ensurePickupReminder(tx: Prisma.TransactionClient, orderId: string, pickupStart: Date) {
+  await tx.batchJob.upsert({
+    where: { dedupeKey: `pickup-reminder:${orderId}` },
+    update: {},
+    create: {
+      queue: "notifications",
+      type: "PICKUP_REMINDER",
+      dedupeKey: `pickup-reminder:${orderId}`,
+      payloadJson: JSON.stringify({ orderId }),
+      nextAttemptAt: new Date(pickupStart.getTime() - 60 * 60_000),
+    },
+  });
+}
+
+async function restoreReservedInventory(tx: Prisma.TransactionClient, bagId: string, quantity: number) {
+  const restored = await tx.bag.updateMany({
+    where: { id: bagId, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupStart: { gt: new Date() } },
+    data: { quantityLeft: { increment: quantity } },
+  });
+  if (restored.count) {
+    await tx.bag.updateMany({
+      where: { id: bagId, status: "SOLD_OUT", quantityLeft: { gt: 0 } },
+      data: { status: "ACTIVE" },
+    });
+  }
 }
 
 /** Applies a verified Freedom Pay result callback and fences any in-flight worker. */
@@ -469,6 +558,7 @@ async function failHoldFromCallback(
 
 /** Claim is atomic, while network work happens after the transaction closes. */
 export async function reconcilePendingPayments(limit = 50, processWorkerId: string = randomUUID()): Promise<number> {
+  if (getPaymentMode() === "PAY_AT_PICKUP") return 0;
   assertPaymentProviderReady();
   let claimed = 0;
   let processed = 0;
@@ -489,6 +579,7 @@ export async function reconcilePendingPayments(limit = 50, processWorkerId: stri
 
 /** Daily provider-vs-ledger audit. Mismatches are recorded for operator review, never auto-corrected. */
 export async function reconcileSettledPayments(limit = 50): Promise<{ checked: number; mismatches: number }> {
+  if (getPaymentMode() === "PAY_AT_PICKUP") return { checked: 0, mismatches: 0 };
   assertPaymentProviderReady();
   const since = new Date(Date.now() - 24 * 60 * 60_000);
   const payments = await prisma.payment.findMany({
@@ -857,11 +948,18 @@ function errorMessage(error: unknown): string {
 }
 
 async function createOrderRowWithUniqueCode(tx: Prisma.TransactionClient, data: {
-  bagId: string; userId: string; quantity: number; totalPrice: number; platformFee: number; idempotencyRecordId?: string;
+  bagId: string;
+  userId: string;
+  quantity: number;
+  totalPrice: number;
+  platformFee: number;
+  paymentMethod: "ONLINE" | "PAY_AT_PICKUP";
+  status: "PENDING_PAYMENT" | "RESERVED";
+  idempotencyRecordId?: string;
 }) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await tx.order.create({ data: { ...data, pickupCode: generatePickupCode(), status: "PENDING_PAYMENT" } });
+      return await tx.order.create({ data: { ...data, pickupCode: generatePickupCode() } });
     } catch (error) {
       const collision = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
       if (!collision || attempt >= 3) throw error;

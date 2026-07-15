@@ -9,6 +9,7 @@ import { api, Bag, Venue, pluralRu } from "@/lib/client/api";
 import { VENUE_CATEGORIES } from "@/lib/config";
 import VenuePhoto from "@/components/VenuePhoto";
 import FavoriteButton from "@/components/FavoriteButton";
+import { twoGisDirectionsUrl } from "@/lib/maps";
 
 type VenueDetails = Venue & { bags: Omit<Bag, "venue">[]; reviews: { id: string; rating: number; comment: string; createdAt: string; user: { name: string | null } }[] };
 
@@ -35,7 +36,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
     return <div className="max-w-md mx-auto min-h-dvh flex items-center justify-center text-muted">Загрузка…</div>;
   }
 
-  const routeUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${venue.lat},${venue.lng}`)}`;
+  const routeUrl = twoGisDirectionsUrl(venue);
   const bags = venue.bags.map((bag) => ({ ...bag, venue } as Bag));
 
   return (
@@ -62,7 +63,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 rounded-[11px] bg-[#edf7f1] px-3 py-2 font-semibold text-primary"
           >
-            <IconMapPin size={17} />Построить маршрут ↗
+            <IconMapPin size={17} />Маршрут в 2GIS ↗
           </a>
         </section>
 

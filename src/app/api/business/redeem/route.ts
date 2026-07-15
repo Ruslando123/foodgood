@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     const body = await readJsonObject(req);
     const code = requiredString(body.code, "code", { min: 6, max: 6 }).toUpperCase();
     try {
-      const order = await redeemOrder(user.id, code);
+      const order = await redeemOrder(user.id, code, body.paymentConfirmed === true);
       return json({ order: toMerchantOrderDto(order) });
     } catch (error) {
       throwOrderApiError(error);

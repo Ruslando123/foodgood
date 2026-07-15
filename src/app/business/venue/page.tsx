@@ -7,7 +7,7 @@ import { api } from "@/lib/client/api";
 
 export default function VenueRegistrationPage() {
   const router = useRouter();
-  const [form, setForm] = useState({ name: "", address: "", category: "CAFE", lat: "43.2389", lng: "76.8897", description: "" });
+  const [form, setForm] = useState({ name: "", address: "", category: "CAFE", lat: "43.2389", lng: "76.8897", description: "", twoGisUrl: "" });
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +37,11 @@ export default function VenueRegistrationPage() {
     <form onSubmit={submit} className="space-y-3 rounded-2xl border bg-white p-4 sm:p-5">
       {(["name", "address"] as const).map((key) => <input key={key} required value={form[key]} onChange={(event) => set(key, event.target.value)} placeholder={{ name: "Название", address: "Адрес" }[key]} className="w-full rounded-xl border p-3" />)}
       <div className="grid grid-cols-2 gap-3">{(["lat", "lng"] as const).map((key) => <input key={key} required value={form[key]} onChange={(event) => set(key, event.target.value)} placeholder={{ lat: "Широта", lng: "Долгота" }[key]} className="w-full min-w-0 rounded-xl border p-3" />)}</div>
+      <label className="block">
+        <span className="text-xs font-semibold text-muted">Ссылка на карточку в 2GIS</span>
+        <input value={form.twoGisUrl} onChange={(event) => set("twoGisUrl", event.target.value)} inputMode="url" placeholder="https://2gis.kz/almaty/firm/…" className="mt-1 w-full rounded-xl border p-3" />
+        <span className="mt-1 block text-xs text-muted">Необязательно. В 2GIS откройте свою организацию → «Поделиться» → «Скопировать ссылку».</span>
+      </label>
       <textarea value={form.description} onChange={(event) => set("description", event.target.value)} placeholder="Короткое описание" rows={3} className="w-full rounded-xl border p-3" />
       <div>
         <label htmlFor="new-venue-photo" className="text-xs font-semibold text-muted">Фотография заведения</label>

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { ACTIVE_PICKUP_ORDER_STATUSES } from "@/modules/orders";
 
 const ORDER_LABELS: Record<string, string> = {
+  RESERVED: "Забронирован",
   PENDING_PAYMENT: "Ожидает оплаты",
   PAID: "Оплачен",
   CAPTURE_PENDING: "Списание",
