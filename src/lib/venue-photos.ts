@@ -2,7 +2,6 @@ import { randomUUID } from "crypto";
 import { constants } from "fs";
 import { access, mkdir, readFile, unlink, writeFile } from "fs/promises";
 import path from "path";
-import sharp from "sharp";
 import { DeleteObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 export const MAX_VENUE_PHOTO_BYTES = 5 * 1024 * 1024;
@@ -51,6 +50,9 @@ export async function saveVenuePhoto(file: File): Promise<string> {
   const extension = detectedExtension(bytes);
   if (!extension) throw new Error("PHOTO_FORMAT");
   try {
+    // Keep the native dependency out of routes that only check storage health.
+    // Vercel loads the matching Linux binary only for photo-processing routes.
+    const { default: sharp } = await import("sharp");
     const metadata = await sharp(bytes, { limitInputPixels: MAX_VENUE_PHOTO_PIXELS }).metadata();
     const expectedFormat = extension === "jpg" ? "jpeg" : extension;
     if (metadata.format !== expectedFormat) throw new Error("PHOTO_FORMAT");
