@@ -19,7 +19,6 @@ import {
   discountPct,
 } from "@/lib/client/api";
 import { twoGisDirectionsUrl } from "@/lib/maps";
-import { trackProductEvent } from "@/lib/client/product-analytics";
 
 export default function BagPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -316,7 +315,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
 
         <div className="space-y-2.5 rounded-[17px] border border-black/[0.07] bg-[#fafbfa] p-4 text-[12px]">
           <h2 className="text-[14px] font-bold">Важно перед покупкой</h2>
-          <p className="flex gap-2"><IconGift size={17} className="shrink-0 text-primary" />Указан примерный состав. Фактический состав может отличаться и зависит от оставшейся свежей еды.</p>
+          <p className="flex gap-2"><IconGift size={17} className="shrink-0 text-primary" />Состав пакета заранее неизвестен и зависит от оставшейся свежей еды.</p>
           <p className="flex gap-2"><IconReceipt size={17} className="shrink-0 text-primary" />Покажите QR-код или шестизначный код сотруднику и оплатите заказ в заведении.</p>
           <p className="flex gap-2"><IconShieldCheck size={17} className="shrink-0 text-primary" />Бесплатная отмена доступна до начала окна выдачи.</p>
         </div>

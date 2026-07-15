@@ -154,7 +154,6 @@ export async function createOrder(
       totalPrice,
       platformFee: paymentMode === "ONLINE" ? Math.round(totalPrice * PLATFORM_FEE_PCT) : 0,
       paymentMethod: paymentMode,
-      clientSource: normalizeClientSource(clientSource),
       status: paymentMode === "ONLINE" ? "PENDING_PAYMENT" : "RESERVED",
       idempotencyRecordId,
     });
@@ -166,18 +165,6 @@ export async function createOrder(
     } else {
       await ensurePickupReminder(tx, created.id, bag.pickupStart);
     }
-    await recordProductEvent(tx, {
-      name: "order_created",
-      userId,
-      venueId: bag.venueId,
-      bagId,
-      orderId: created.id,
-      amount: totalPrice,
-      platformFee: created.platformFee,
-      quantity,
-      clientSource,
-      dedupeKey: `order_created:${created.id}`,
-    });
     const result = await tx.order.findUniqueOrThrow({ where: { id: created.id }, include: orderInclude });
     return result;
   });
@@ -969,7 +956,6 @@ async function createOrderRowWithUniqueCode(tx: Prisma.TransactionClient, data: 
   totalPrice: number;
   platformFee: number;
   paymentMethod: "ONLINE" | "PAY_AT_PICKUP";
-  clientSource: string;
   status: "PENDING_PAYMENT" | "RESERVED";
   idempotencyRecordId?: string;
 }) {

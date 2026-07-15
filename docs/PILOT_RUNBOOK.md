@@ -5,7 +5,7 @@
 - Staging migration, smoke, load, and isolated backup restore are complete with recorded evidence.
 - `PAYMENT_MODE=PAY_AT_PICKUP` is set explicitly for the web service. No mock or card provider is enabled in production.
 - Every pilot venue confirms that it accepts payment on its own till and issues the fiscal receipt before completing the pickup code.
-- Telegram OTP webhook is healthy, S3/CDN health is green, required worker heartbeats are green, and alerts reach the on-call owner.
+- Mobizon sender is approved, S3/CDN health is green, required worker heartbeats are green, and alerts reach the on-call owner.
 - `main` requires the `production-gate` status check and disallows direct/force pushes.
 
 ## Venue selection
@@ -14,7 +14,7 @@ Choose 1–3 venues with a named owner, predictable pickup window, fewer than 10
 
 ## Daily operating loop
 
-1. Before sales: verify `/api/health/deep`, expiry/notification worker heartbeats, Telegram OTP delivery, and S3 access.
+1. Before sales: verify `/api/health/deep`, expiry/notification worker heartbeats, Mobizon balance, and S3 access.
 2. During sales: watch `RESERVED` orders, no-shows, inventory, and customer support.
 3. At pickup: staff accepts payment, issues the venue receipt, then confirms the pickup code. FoodGood does not collect or settle pilot money.
 4. Record reservations, successful pickups, cancellations, no-shows, support cases, and the amount accepted by each venue.
