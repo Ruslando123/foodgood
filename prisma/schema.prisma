@@ -137,6 +137,7 @@ model Order {
   quantity            Int       @default(1)
   totalPrice          Int // KZT
   platformFee         Int // KZT, snapshot at purchase time
+  clientSource        String    @default("direct") // first-touch source captured at checkout
   paymentMethod       String    @default("ONLINE") // ONLINE | PAY_AT_PICKUP
   status              String    @default("PENDING_PAYMENT") // RESERVED | PENDING_PAYMENT | PAID | READY_FOR_PICKUP | CAPTURE_PENDING | COMPLETED | REFUND_PENDING | CANCELLED | EXPIRED
   refundTargetStatus  String? // CANCELLED | EXPIRED; сохраняется для повторного refund
@@ -144,7 +145,11 @@ model Order {
   createdAt           DateTime  @default(now())
   completedAt         DateTime?
   supportStatus       String    @default("NONE") // NONE | OPEN | RESOLVED
+  supportCategory     String? // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | OTHER
   supportNote         String    @default("")
+  supportOpenedAt     DateTime?
+  supportResolvedAt   DateTime?
+  supportResolution   String    @default("")
   idempotencyRecordId String?   @unique
 
   bag               Bag                  @relation(fields: [bagId], references: [id])

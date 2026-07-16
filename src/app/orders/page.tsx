@@ -12,6 +12,7 @@ import OrderSupportButton from "@/components/OrderSupportButton";
 import OrderReviewForm from "@/components/OrderReviewForm";
 import { api, ApiError, Order, formatPrice, formatPickupWindow } from "@/lib/client/api";
 import { twoGisDirectionsUrl } from "@/lib/maps";
+import { trackProductEvent } from "@/lib/client/product-analytics";
 
 const STATUS_LABEL: Record<Order["status"], string> = {
   RESERVED: "Забронирован · оплата в заведении",
@@ -184,6 +185,11 @@ function OrderCard({
   const end = new Date(order.bag.pickupEnd).getTime();
   const canCancel = isActive && now < start;
   const routeUrl = twoGisDirectionsUrl(order.bag.venue);
+
+  useEffect(() => {
+    if (!isActive) return;
+    void trackProductEvent({ name: "pickup_code_opened", orderId: order.id }).catch(() => undefined);
+  }, [isActive, order.id]);
 
   return (
     <article className={`space-y-3 rounded-[17px] border bg-white p-4 shadow-[0_3px_14px_rgba(20,40,28,0.06)] ${highlighted ? "border-primary" : "border-black/[0.07]"}`}>
