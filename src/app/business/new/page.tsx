@@ -12,6 +12,7 @@ export default function NewBagPage() {
   const [venueId, setVenueId] = useState("");
   const [title, setTitle] = useState("Пакет-сюрприз");
   const [description, setDescription] = useState("");
+  const [allergens, setAllergens] = useState("");
   const [price, setPrice] = useState("1500");
   const [originalPrice, setOriginalPrice] = useState("4500");
   const [quantity, setQuantity] = useState("5");
@@ -56,6 +57,7 @@ export default function NewBagPage() {
           venueId,
           title,
           description,
+          allergens,
           price: Number(price),
           originalPrice: Number(originalPrice),
           quantity: Number(quantity),
@@ -79,8 +81,12 @@ export default function NewBagPage() {
       </header>
 
       <main className="px-4 space-y-3">
+        <div className="rounded-2xl border border-primary/15 bg-primary/[0.055] p-3 text-sm leading-5 text-primary">
+          Основные значения уже заполнены. Проверьте заведение, количество и время — и публикуйте.
+        </div>
         <Field label="Заведение">
           <select
+            aria-label="Заведение"
             value={venueId}
             onChange={(e) => setVenueId(e.target.value)}
             className="w-full bg-card border border-black/10 rounded-xl px-3 py-3"
@@ -103,6 +109,16 @@ export default function NewBagPage() {
             rows={2}
             className="w-full bg-card border border-black/10 rounded-xl px-3 py-3"
           />
+        </Field>
+
+        <Field label="Возможные аллергены (необязательно)">
+          <input
+            value={allergens}
+            onChange={(e) => setAllergens(e.target.value)}
+            placeholder="Например: глютен, молоко, яйца, орехи"
+            className="w-full bg-card border border-black/10 rounded-xl px-3 py-3"
+          />
+          <p className="mt-1 text-[11px] font-normal text-muted">Укажите всё возможное — поле сохранится при повторе пакета.</p>
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
@@ -133,7 +149,7 @@ export default function NewBagPage() {
           disabled={busy || !venueId}
           className="w-full py-3.5 rounded-2xl bg-primary text-white font-bold disabled:opacity-60"
         >
-          {busy ? "Публикуем…" : "Опубликовать"}
+          {busy ? "Публикуем…" : `Опубликовать ${quantity || 0} шт. · ${startTime}–${endTime}`}
         </button>
         <p className="text-xs text-muted text-center">
           Покупатель платит онлайн и забирает заказ по QR-коду в окно выдачи.

@@ -7,6 +7,7 @@ import { apiRoute, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { integer, requiredString } from "@/shared/validation";
 import { customerOrderSelect, toCustomerOrderDto } from "@/modules/api/dto";
+import { clientSourceFromRequest } from "@/lib/product-analytics";
 
 export async function GET(request: NextRequest) {
   return apiRoute(request, async () => {
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
     const idempotencyKey = normalizeIdempotencyKey(req.headers.get("idempotency-key"));
     try {
       const create = (idempotencyRecordId: string, ownerToken: string) =>
-        createOrder(user.id, bagId, quantity, idempotencyRecordId, ownerToken);
+        createOrder(user.id, bagId, quantity, idempotencyRecordId, ownerToken, clientSourceFromRequest(req));
       const order = await idempotentOrderRequest(
         `${user.id}:${idempotencyKey}`,
         `${bagId}:${quantity}`,

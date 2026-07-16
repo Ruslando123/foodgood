@@ -4,6 +4,7 @@ import { requireMerchant } from "@/modules/auth/server";
 import { cancelBagWithRefunds, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
+import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(_req, async () => {
@@ -14,8 +15,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   });
 }
 
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return apiRoute(_req, async () => {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  return apiRoute(req, async () => {
     const user = await requireMerchant(); const { id } = await params;
     const source = await prisma.bag.findUnique({ where: { id }, include: { venue: true } });
     if (!source || source.venue.ownerId !== user.id) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
@@ -24,7 +25,21 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     const pickupStart = new Date(source.pickupStart); const now = new Date();
     do { pickupStart.setDate(pickupStart.getDate() + 1); } while (pickupStart <= now);
     const pickupEnd = new Date(pickupStart.getTime() + duration);
-    const bag = await prisma.bag.create({ data: { venueId: source.venueId, title: source.title, description: source.description, price: source.price, originalPrice: source.originalPrice, quantityTotal: source.quantityTotal, quantityLeft: source.quantityTotal, pickupStart, pickupEnd }, include: { venue: true } });
+    const bag = await prisma.$transaction(async (tx) => {
+      const created = await tx.bag.create({ data: { venueId: source.venueId, title: source.title, description: source.description, allergens: source.allergens, price: source.price, originalPrice: source.originalPrice, quantityTotal: source.quantityTotal, quantityLeft: source.quantityTotal, pickupStart, pickupEnd }, include: { venue: true } });
+      await recordProductEvent(tx, {
+        name: "partner_offer_created",
+        userId: user.id,
+        venueId: created.venueId,
+        bagId: created.id,
+        amount: created.price,
+        quantity: created.quantityTotal,
+        clientSource: clientSourceFromRequest(req),
+        dedupeKey: `partner_offer_created:${created.id}`,
+        metadata: { repeatedFromBagId: source.id },
+      });
+      return created;
+    });
     return json({ bag }, { status: 201 });
   });
 }
@@ -56,6 +71,7 @@ export async function PATCH(
       if (body.action !== "details") throw new ApiError(400, "NO_CHANGES", "Нечего изменять");
       const title = requiredString(body.title, "title", { max: 120 });
       const description = optionalString(body.description, "description", 1000);
+      const allergens = optionalString(body.allergens, "allergens", 300);
       const price = integer(body.price, "price", { min: 1, max: 10_000_000 });
       const originalPrice = integer(body.originalPrice, "originalPrice", { min: price, max: 10_000_000 });
       const pickupStart = dateValue(body.pickupStart, "pickupStart"); const pickupEnd = dateValue(body.pickupEnd, "pickupEnd");
@@ -79,7 +95,7 @@ export async function PATCH(
         }
         return tx.bag.update({
           where: { id },
-          data: { title, description, price, originalPrice, pickupStart, pickupEnd },
+          data: { title, description, allergens, price, originalPrice, pickupStart, pickupEnd },
           include: { venue: true },
         });
       });

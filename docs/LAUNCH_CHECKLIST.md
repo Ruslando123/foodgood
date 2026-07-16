@@ -15,7 +15,7 @@
   npm run worker:outbox
   ```
 
-- Mobizon Kazakhstan account, API key, and an approved sender name.
+- Telegram-бот FoodGood, публичный HTTPS webhook и отдельный webhook secret.
 - Freedom Pay Kazakhstan merchant account with test mode and manual clearing enabled.
 - Freedom Pay Merchant API with signed result callback, two-step hold/capture, cancel/refund, and daily reconciliation.
 
@@ -31,9 +31,11 @@ REDIS_URL=rediss://...
 SESSION_SECRET=<at least 32 random bytes>
 OTP_SECRET=<different random secret>
 ADMIN_PHONE=+7...
-MOBIZON_API_KEY=...
-MOBIZON_SENDER=FoodGood
 APP_BASE_URL=https://foodgood.example.kz
+TELEGRAM_OTP_ENABLED=true
+TELEGRAM_BOT_TOKEN=123456:...
+TELEGRAM_BOT_USERNAME=FoodGoodBot
+TELEGRAM_WEBHOOK_SECRET=<at least 32 random bytes>
 FREEDOM_PAY_MERCHANT_ID=...
 FREEDOM_PAY_SECRET_KEY=...
 FREEDOM_PAY_TEST_MODE=false
@@ -92,7 +94,7 @@ STAGING_DATABASE_URL=... RESTORE_DATABASE_URL=... RESTORE_CONFIRM_EMPTY=true npm
 
 The staging load profile is read-only so it cannot generate real Freedom Pay operations. Run the full mutating `load:k6` plus `load:check` only in a separate mock-provider load environment. The restore target must be an isolated empty PostgreSQL 16/PostGIS database. A staging gate is incomplete without the restore evidence.
 
-1. Request an SMS code and verify expiry, single use, and guaranteed lock after five parallel failures.
+1. Request a Telegram code, share the native contact, and verify phone matching, expiry, single use, and lock after five failures.
 2. Create an order and observe `PENDING_PAYMENT -> PAID` through the payments worker.
 3. Redeem it and observe `CAPTURE_PENDING -> COMPLETED`.
 4. Cancel another paid order and observe `REFUND_PENDING -> CANCELLED`.
@@ -110,11 +112,12 @@ The staging load profile is read-only so it cannot generate real Freedom Pay ope
 - Exercise timeout-after-success, declined payment, delayed callback, refund, and daily settlement reconciliation.
 - Confirm production rejects mock payments and that the configuration guard finds no enabled mock-payment bypass assignment.
 
-### SMS
+### Telegram OTP
 
-- Validate Mobizon sender approval, delivery receipts, Kazakhstan phone formatting, throughput, and account balance alerts.
+- Run `npm run telegram:webhook`, verify the registered HTTPS URL and the secret-token header.
+- Confirm that a manually forwarded or mismatched contact cannot produce an OTP.
 - Confirm OTP secrets differ from session secrets and that logs never contain OTP values.
-- Test provider timeout/failure without leaving an unusable active challenge.
+- Test Telegram timeout/failure without leaving an unusable active challenge.
 
 ### Redis
 

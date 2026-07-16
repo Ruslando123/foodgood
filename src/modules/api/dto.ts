@@ -27,6 +27,7 @@ export type PublicBagDto = {
   venueId: string;
   title: string;
   description: string;
+  allergens: string;
   price: number;
   originalPrice: number;
   quantityTotal: number;
@@ -78,6 +79,7 @@ const publicBagSelect = {
   venueId: true,
   title: true,
   description: true,
+  allergens: true,
   price: true,
   originalPrice: true,
   quantityTotal: true,
@@ -150,6 +152,7 @@ function toPublicBagDto(bag: CustomerOrderMappable["bag"]): PublicBagDto {
     venueId: bag.venueId,
     title: bag.title,
     description: bag.description,
+    allergens: bag.allergens,
     price: bag.price,
     originalPrice: bag.originalPrice,
     quantityTotal: bag.quantityTotal,

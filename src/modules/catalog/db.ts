@@ -7,6 +7,7 @@ type CatalogRow = {
   venueId: string;
   title: string;
   description: string;
+  allergens: string;
   price: number;
   originalPrice: number;
   quantityTotal: number;
@@ -114,7 +115,7 @@ export async function queryCatalog(input: {
 
   const rows = await prisma.$queryRaw<CatalogRow[]>(Prisma.sql`
     SELECT
-      bag.id, bag."venueId", bag.title, bag.description, bag.price, bag."originalPrice",
+      bag.id, bag."venueId", bag.title, bag.description, bag.allergens, bag.price, bag."originalPrice",
       bag."quantityTotal", bag."quantityLeft", bag."pickupStart", bag."pickupEnd", bag.status, bag."createdAt",
       venue.name AS "venueName", venue.description AS "venueDescription", venue.address AS "venueAddress",
       venue.lat AS "venueLat", venue.lng AS "venueLng", venue."cityId" AS "venueCityId",
@@ -137,6 +138,7 @@ export async function queryCatalog(input: {
       venueId: row.venueId,
       title: row.title,
       description: row.description,
+      allergens: row.allergens,
       price: row.price,
       originalPrice: row.originalPrice,
       quantityTotal: row.quantityTotal,

@@ -1,8 +1,10 @@
 import { prisma } from "@/lib/db";
 
 export async function resetDb() {
+  await prisma.productEvent.deleteMany();
   await prisma.systemState.deleteMany();
   await prisma.otpChallenge.deleteMany();
+  await prisma.telegramLoginRequest.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.batchJob.deleteMany();
   await prisma.outboxMessage.deleteMany();
@@ -53,6 +55,8 @@ export async function createFixtures(opts: FixtureOptions = {}) {
     data: {
       venueId: venue.id,
       title: "Тестовый пакет",
+      description: "Выпечка и сэндвичи с витрины",
+      allergens: "глютен, молоко, яйца",
       price: opts.price ?? 1500,
       originalPrice: 4500,
       quantityTotal: opts.quantity ?? 5,

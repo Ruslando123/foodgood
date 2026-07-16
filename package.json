@@ -20,6 +20,7 @@
     "load:check": "tsx scripts/check-load-invariants.ts",
     "ratings:reconcile": "tsx scripts/reconcile-ratings.ts",
     "jobs:backfill-reminders": "tsx scripts/backfill-reminders.ts",
+    "telegram:webhook": "node --env-file=.env scripts/setup-telegram-webhook.mjs",
     "staging:smoke": "node scripts/staging-smoke.mjs",
     "staging:restore": "node scripts/verify-backup-restore.mjs",
     "production:config": "node scripts/assert-production-config.mjs",

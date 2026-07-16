@@ -37,11 +37,20 @@ import {
 } from "@/lib/mock-payment-fault";
 import { PAYMENT_PROVIDER_TIMEOUT_MS } from "@/lib/payment-config";
 import { toCustomerOrderDto, toMerchantOrderDto, toPublicVenueDto } from "@/modules/api/dto";
+import { getProductAnalyticsSnapshot, recordProductEvent } from "@/lib/product-analytics";
+import { createOrderComplaint } from "@/lib/order-support";
+import {
+  attachTelegramAfterOtp,
+  createTelegramOtpRequest,
+  processTelegramWebhook,
+  verifyTelegramWebhookSecret,
+} from "@/lib/telegram-otp";
 
 beforeEach(resetDb);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -72,6 +81,171 @@ async function cancelBagWithRefunds(merchantId: string, bagId: string) {
   await reconcilePendingPayments();
   return bag;
 }
+
+describe("OTP через Telegram", () => {
+  it("проверяет системный контакт, отправляет код и привязывает Telegram к номеру", async () => {
+    vi.stubEnv("TELEGRAM_OTP_ENABLED", "true");
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "123456:test-token");
+    vi.stubEnv("TELEGRAM_BOT_USERNAME", "FoodGoodTestBot");
+    vi.stubEnv("TELEGRAM_WEBHOOK_SECRET", "telegram-webhook-secret-1234567890");
+    const telegramFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", telegramFetch);
+
+    const phone = "+77075550101";
+    const user = await prisma.user.create({ data: { phone, role: "CUSTOMER" } });
+    const handoff = await createTelegramOtpRequest(phone);
+    const start = new URL(handoff.telegramUrl).searchParams.get("start");
+    expect(start).toMatch(/^login_[A-Za-z0-9_-]+$/);
+    expect(verifyTelegramWebhookSecret("telegram-webhook-secret-1234567890")).toBe(true);
+
+    await processTelegramWebhook({
+      update_id: 1,
+      message: { text: `/start ${start}`, chat: { id: 4242, type: "private" }, from: { id: 4242 } },
+    });
+    await processTelegramWebhook({
+      update_id: 2,
+      message: {
+        chat: { id: 4242, type: "private" },
+        from: { id: 4242 },
+        contact: { phone_number: phone, user_id: 4242 },
+      },
+    });
+
+    const request = await prisma.telegramLoginRequest.findFirstOrThrow({ where: { phone } });
+    expect(request).toMatchObject({ telegramId: "4242", status: "CODE_SENT" });
+    const botPayloads = telegramFetch.mock.calls.map((call) => JSON.parse(String(call[1]?.body)) as Record<string, unknown>);
+    expect(botPayloads.some((payload) => JSON.stringify(payload).includes("request_contact"))).toBe(true);
+    expect(botPayloads.some((payload) => String(payload.text).includes("0000"))).toBe(true);
+
+    await consumeOtp(phone, "0000");
+    await attachTelegramAfterOtp(phone, user.id);
+    await expect(prisma.user.findUniqueOrThrow({ where: { id: user.id } })).resolves.toMatchObject({ telegramId: "4242" });
+    await expect(prisma.telegramLoginRequest.findUniqueOrThrow({ where: { id: request.id } })).resolves.toMatchObject({ status: "CONSUMED" });
+  });
+});
+
+describe("контроль качества", () => {
+  it("доставляет тестовую жалобу администратору и сохраняет связь с заказом", async () => {
+    const { customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    await createOrderComplaint({
+      userId: customer.id,
+      orderId: order.id,
+      category: "VENUE_CLOSED",
+      note: "На двери закрыто, внутри никого нет",
+    });
+
+    const adminQueue = await prisma.order.findMany({
+      where: { supportStatus: "OPEN" },
+      include: { bag: { include: { venue: true } }, user: true },
+      orderBy: { supportOpenedAt: "asc" },
+    });
+
+    expect(adminQueue).toHaveLength(1);
+    expect(adminQueue[0]).toMatchObject({
+      id: order.id,
+      bagId: bag.id,
+      userId: customer.id,
+      supportCategory: "VENUE_CLOSED",
+      supportNote: "На двери закрыто, внутри никого нет",
+      supportStatus: "OPEN",
+      supportOpenedAt: expect.any(Date),
+    });
+    await expect(prisma.productEvent.findFirst({
+      where: { name: "complaint_created", orderId: order.id },
+    })).resolves.toMatchObject({ bagId: bag.id, userId: customer.id });
+  });
+});
+
+describe("продуктовая аналитика", () => {
+  it("показывает тестовый заказ на всех этапах воронки и в бизнес-метриках", async () => {
+    const { merchant, customer, venue, bag } = await createFixtures({ price: 1500, quantity: 5 });
+    const source = "campaign:day-1-test";
+
+    await recordProductEvent(prisma, {
+      name: "partner_offer_created",
+      userId: merchant.id,
+      venueId: venue.id,
+      bagId: bag.id,
+      amount: bag.price,
+      quantity: bag.quantityTotal,
+      clientSource: source,
+      dedupeKey: `test:published:${bag.id}`,
+    });
+    await recordProductEvent(prisma, {
+      name: "offer_view",
+      userId: customer.id,
+      anonymousId: "test-session",
+      venueId: venue.id,
+      bagId: bag.id,
+      amount: bag.price,
+      clientSource: source,
+      dedupeKey: `test:view:${bag.id}`,
+    });
+    await recordProductEvent(prisma, {
+      name: "reserve_started",
+      userId: customer.id,
+      anonymousId: "test-session",
+      venueId: venue.id,
+      bagId: bag.id,
+      amount: bag.price * 2,
+      quantity: 2,
+      clientSource: source,
+      dedupeKey: `test:reserve:${bag.id}`,
+    });
+
+    const queued = await queueOrder(customer.id, bag.id, 2, undefined, undefined, source);
+    await reconcilePendingPayments();
+    const paid = await prisma.order.findUniqueOrThrow({ where: { id: queued.id } });
+    await recordProductEvent(prisma, {
+      name: "pickup_code_opened",
+      userId: customer.id,
+      anonymousId: "test-session",
+      venueId: venue.id,
+      bagId: bag.id,
+      orderId: paid.id,
+      amount: paid.totalPrice,
+      platformFee: paid.platformFee,
+      quantity: paid.quantity,
+      clientSource: source,
+      dedupeKey: `test:pickup:${paid.id}`,
+    });
+    await redeemOrder(merchant.id, paid.pickupCode);
+
+    const cancellableQueued = await queueOrder(customer.id, bag.id, 1, undefined, undefined, source);
+    await reconcilePendingPayments();
+    const cancellable = await prisma.order.findUniqueOrThrow({ where: { id: cancellableQueued.id }, include: { payment: true } });
+    await cancelOrder(customer.id, cancellable.id);
+
+    await recordProductEvent(prisma, {
+      name: "complaint_created",
+      userId: customer.id,
+      venueId: venue.id,
+      bagId: bag.id,
+      orderId: paid.id,
+      amount: paid.totalPrice,
+      platformFee: paid.platformFee,
+      quantity: paid.quantity,
+      clientSource: source,
+    });
+
+    const snapshot = await getProductAnalyticsSnapshot();
+    expect(snapshot.stages.partner_offer_created).toMatchObject({ uniqueCount: 1, quantity: 5 });
+    expect(snapshot.stages.offer_view.uniqueCount).toBe(1);
+    expect(snapshot.stages.reserve_started.uniqueCount).toBe(1);
+    expect(snapshot.stages.order_created).toMatchObject({ uniqueCount: 2, quantity: 3 });
+    expect(snapshot.stages.pickup_code_opened.uniqueCount).toBe(1);
+    expect(snapshot.stages.order_completed).toMatchObject({ uniqueCount: 1, quantity: 2, amount: 3000 });
+    expect(snapshot.stages.order_completed.platformFee).toBe(Math.round(3000 * PLATFORM_FEE_PCT));
+    expect(snapshot.stages.order_cancelled).toMatchObject({ uniqueCount: 1, quantity: 1 });
+    expect(snapshot.stages.complaint_created.events).toBe(1);
+    expect(snapshot.sources).toContainEqual(expect.objectContaining({ source, views: 1, orders: 2, completed: 1, gmv: 3000 }));
+  });
+});
 
 describe("каталог по городу", () => {
   it("не показывает пакет Астаны в каталоге Алматы", async () => {
@@ -754,6 +928,7 @@ describe("безопасные API DTO", () => {
     for (const field of [
       "providerRef", "sessionVersion", "telegramId", "ownerId",
       "idempotencyRecordId", "leaseOwner", "leaseExpiresAt", "supportNote",
+      "supportCategory", "supportOpenedAt", "supportResolvedAt", "supportResolution",
     ]) {
       expect(json).not.toContain(`\"${field}\"`);
     }

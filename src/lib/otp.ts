@@ -2,7 +2,6 @@ import { createHmac, randomInt, timingSafeEqual } from "crypto";
 import { prisma } from "./db";
 import { DEV_OTP_CODE, isDevOtpEnabled } from "./auth";
 import { otpSecretValue } from "./secrets";
-import { sendSmsCode } from "./sms";
 
 const OTP_TTL_MS = 5 * 60_000;
 const REQUEST_WINDOW_MS = 15 * 60_000;
@@ -32,7 +31,10 @@ function codeMatches(actualHash: string, phone: string, code: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-export async function issueOtp(phone: string): Promise<{ codeLength: number; devCode?: string }> {
+export async function issueOtp(
+  phone: string,
+  options: { deliver?: (code: string) => Promise<void> } = {}
+): Promise<{ codeLength: number; devCode?: string }> {
   const now = new Date();
   const windowStart = new Date(now.getTime() - REQUEST_WINDOW_MS);
   await prisma.otpChallenge.deleteMany({
@@ -75,13 +77,16 @@ export async function issueOtp(phone: string): Promise<{ codeLength: number; dev
     });
   });
 
-  if (!dev) {
+  if (options.deliver) {
     try {
-      await sendSmsCode(phone, code);
+      await options.deliver(code);
     } catch (error) {
       await prisma.otpChallenge.delete({ where: { id: challenge.id } }).catch(() => undefined);
       throw error;
     }
+  } else if (!dev) {
+    await prisma.otpChallenge.delete({ where: { id: challenge.id } }).catch(() => undefined);
+    throw new Error("OTP delivery channel is not configured");
   }
   return { codeLength: code.length, ...(dev ? { devCode: code } : {}) };
 }

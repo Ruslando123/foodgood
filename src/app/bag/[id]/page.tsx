@@ -3,7 +3,7 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { IconArrowLeft, IconClock, IconGift, IconMapPin, IconMinus, IconPackage, IconPlus, IconReceipt, IconShieldCheck } from "@tabler/icons-react";
+import { IconAlertTriangle, IconArrowLeft, IconClock, IconGift, IconMapPin, IconMinus, IconPackage, IconPlus, IconReceipt, IconShieldCheck } from "@tabler/icons-react";
 import BottomNav from "@/components/BottomNav";
 import BagCard from "@/components/BagCard";
 import VenuePhoto from "@/components/VenuePhoto";
@@ -19,6 +19,7 @@ import {
   discountPct,
 } from "@/lib/client/api";
 import { twoGisDirectionsUrl } from "@/lib/maps";
+import { trackProductEvent } from "@/lib/client/product-analytics";
 
 export default function BagPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -32,6 +33,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>("ONLINE");
   const checkoutKey = useRef<string | null>(null);
+  const viewedBagId = useRef<string | null>(null);
   const bagRequest = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 });
   const [similar, setSimilar] = useState<Bag[]>([]);
 
@@ -179,6 +181,12 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       .catch(() => setSimilar([]));
   }, [bag]);
 
+  useEffect(() => {
+    if (!bag || viewedBagId.current === bag.id) return;
+    viewedBagId.current = bag.id;
+    void trackProductEvent({ name: "offer_view", bagId: bag.id }).catch(() => undefined);
+  }, [bag]);
+
   async function startCheckout() {
     setProcessing(true);
     setError(null);
@@ -203,6 +211,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         setError("Остаток изменился. Проверьте количество и попробуйте снова.");
         return;
       }
+      void trackProductEvent({ name: "reserve_started", bagId: latest.id, quantity }).catch(() => undefined);
       checkoutKeyFor(user.id);
       setPaying(true);
     } catch (e) {
@@ -292,6 +301,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
             Заведение гарантирует: ценность содержимого минимум{" "}
             {formatPrice(bag.originalPrice)} — вы платите {formatPrice(bag.price)}.
           </p>
+          <p className="flex gap-2"><IconAlertTriangle size={19} className="shrink-0 text-amber-600" /><span><b>Возможные аллергены:</b> {bag.allergens || "состав меняется — уточните у заведения перед получением"}.</span></p>
           <p className="flex items-center gap-2"><IconClock size={19} className="text-primary" />Забрать: <b>{formatPickupWindow(bag.pickupStart, bag.pickupEnd)}</b></p>
           <p className="pl-7 text-[12px] text-muted">
             {pickupEnded ? "Окно выдачи завершено" : pickupStarted ? "Уже можно забирать" : "Выдача начнётся в указанное время"}
@@ -306,10 +316,18 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
 
         <div className="space-y-2.5 rounded-[17px] border border-black/[0.07] bg-[#fafbfa] p-4 text-[12px]">
           <h2 className="text-[14px] font-bold">Важно перед покупкой</h2>
-          <p className="flex gap-2"><IconGift size={17} className="shrink-0 text-primary" />Состав пакета заранее неизвестен и зависит от оставшейся свежей еды.</p>
+          <p className="flex gap-2"><IconGift size={17} className="shrink-0 text-primary" />Указан примерный состав. Фактический состав может отличаться и зависит от оставшейся свежей еды.</p>
           <p className="flex gap-2"><IconReceipt size={17} className="shrink-0 text-primary" />Покажите QR-код или шестизначный код сотруднику и оплатите заказ в заведении.</p>
           <p className="flex gap-2"><IconShieldCheck size={17} className="shrink-0 text-primary" />Бесплатная отмена доступна до начала окна выдачи.</p>
         </div>
+
+        <section className="space-y-2.5 rounded-[17px] border border-black/[0.07] bg-white p-4 text-[12px]">
+          <h2 className="text-[14px] font-bold">Правила отмены</h2>
+          <p><b>До начала выдачи:</b> отмените заказ бесплатно в разделе «Заказы».</p>
+          <p><b>Если заведение не может выдать заказ:</b> онлайн-оплата возвращается полностью; при оплате на месте списания нет.</p>
+          <p><b>После начала выдачи:</b> сообщите о проблеме из карточки заказа — администратор проверит ситуацию и свяжется с вами в течение двух часов.</p>
+          <Link href="/legal/refunds" className="inline-block font-semibold text-primary">Полные условия отмены и возврата →</Link>
+        </section>
 
         {available && (
           <div className="flex items-center justify-between rounded-[17px] border border-black/[0.07] bg-white p-4">

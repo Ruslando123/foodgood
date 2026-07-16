@@ -21,6 +21,7 @@ export type Bag = {
   venueId: string;
   title: string;
   description: string;
+  allergens: string;
   price: number;
   originalPrice: number;
   quantityTotal: number;
@@ -84,6 +85,10 @@ export class ApiError extends Error {
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (typeof window !== "undefined" && !headers.has("X-Client-Source")) {
+    const { currentClientSource } = await import("./product-analytics");
+    headers.set("X-Client-Source", currentClientSource());
+  }
   const res = await fetch(path, {
     ...init,
     headers,

@@ -11,6 +11,7 @@ import { PAYMENT_PROVIDER_TIMEOUT_MS } from "./payment-config";
 import { getPaymentMode } from "./payment-mode";
 import { transitionBagOrders, transitionOrder } from "@/modules/orders/state-machine";
 import type { FreedomPayFields } from "./freedompay";
+import { normalizeClientSource, recordProductEvent } from "./product-analytics";
 
 export class OrderError extends Error {}
 class OperationLeaseLostError extends Error {}
@@ -101,7 +102,8 @@ export async function createOrder(
   bagId: string,
   quantity: number,
   idempotencyRecordId?: string,
-  idempotencyOwnerToken?: string
+  idempotencyOwnerToken?: string,
+  clientSource = "direct"
 ) {
   const paymentMode = getPaymentMode();
   if (paymentMode === "ONLINE") assertPaymentProviderReady();
@@ -152,6 +154,7 @@ export async function createOrder(
       totalPrice,
       platformFee: paymentMode === "ONLINE" ? Math.round(totalPrice * PLATFORM_FEE_PCT) : 0,
       paymentMethod: paymentMode,
+      clientSource: normalizeClientSource(clientSource),
       status: paymentMode === "ONLINE" ? "PENDING_PAYMENT" : "RESERVED",
       idempotencyRecordId,
     });
@@ -163,6 +166,18 @@ export async function createOrder(
     } else {
       await ensurePickupReminder(tx, created.id, bag.pickupStart);
     }
+    await recordProductEvent(tx, {
+      name: "order_created",
+      userId,
+      venueId: bag.venueId,
+      bagId,
+      orderId: created.id,
+      amount: totalPrice,
+      platformFee: created.platformFee,
+      quantity,
+      clientSource,
+      dedupeKey: `order_created:${created.id}`,
+    });
     const result = await tx.order.findUniqueOrThrow({ where: { id: created.id }, include: orderInclude });
     return result;
   });
@@ -954,6 +969,7 @@ async function createOrderRowWithUniqueCode(tx: Prisma.TransactionClient, data: 
   totalPrice: number;
   platformFee: number;
   paymentMethod: "ONLINE" | "PAY_AT_PICKUP";
+  clientSource: string;
   status: "PENDING_PAYMENT" | "RESERVED";
   idempotencyRecordId?: string;
 }) {

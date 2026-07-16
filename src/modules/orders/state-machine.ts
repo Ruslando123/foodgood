@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { recordOrderLifecycleEvent } from "@/lib/product-analytics";
 
 export const ORDER_STATUSES = [
   "RESERVED",
@@ -54,6 +55,9 @@ export async function transitionOrder(
     where: { id, status: { in: [...source] } },
     data: { ...data, status: to },
   });
+  if (changed.count === 1 && (to === "COMPLETED" || to === "CANCELLED")) {
+    await recordOrderLifecycleEvent(tx, to === "COMPLETED" ? "order_completed" : "order_cancelled", id);
+  }
   return changed.count === 1;
 }
 
@@ -70,5 +74,13 @@ export async function transitionBagOrders(
     where: { ...where, bagId, status: { in: [...source] } },
     data: { status: to },
   });
+  if (changed.count && (to === "COMPLETED" || to === "CANCELLED")) {
+    const affected = await tx.order.findMany({ where: { ...where, bagId, status: to }, select: { id: true } });
+    await Promise.all(affected.map(({ id }) => recordOrderLifecycleEvent(
+      tx,
+      to === "COMPLETED" ? "order_completed" : "order_cancelled",
+      id
+    )));
+  }
   return changed.count;
 }

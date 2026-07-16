@@ -13,7 +13,7 @@ export async function GET(
     const bag = await prisma.bag.findUnique({
       where: { id },
       select: {
-        id: true, venueId: true, title: true, description: true, price: true,
+        id: true, venueId: true, title: true, description: true, allergens: true, price: true,
         originalPrice: true, quantityTotal: true, quantityLeft: true,
         pickupStart: true, pickupEnd: true, status: true,
         venue: {
@@ -38,6 +38,7 @@ export async function GET(
         venueId: bag.venueId,
         title: bag.title,
         description: bag.description,
+        allergens: bag.allergens,
         price: bag.price,
         originalPrice: bag.originalPrice,
         quantityTotal: bag.quantityTotal,

@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { IconActivity, IconBuildingStore, IconClipboardList, IconHistory, IconLayoutDashboard, IconLogout, IconMessageReport, IconStar, IconUserSearch, IconUsers } from "@tabler/icons-react";
+import { IconActivity, IconBuildingStore, IconChartBar, IconClipboardList, IconHistory, IconLayoutDashboard, IconLogout, IconMessageReport, IconStar, IconUserSearch, IconUsers } from "@tabler/icons-react";
 import { api } from "@/lib/client/api";
 
 const links = [
   { href: "/admin", label: "Обзор", icon: IconLayoutDashboard },
+  { href: "/admin/analytics", label: "Воронка", icon: IconChartBar },
   { href: "/admin/venues", label: "Заведения", icon: IconBuildingStore },
   { href: "/admin/owners", label: "Владельцы", icon: IconUsers },
   { href: "/admin/customers", label: "Покупатели", icon: IconUserSearch },
