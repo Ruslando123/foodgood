@@ -7,7 +7,7 @@ import sharp from "sharp";
 import { haversineKm, formatDistance } from "@/lib/geo";
 import { generatePickupCode } from "@/lib/qr";
 import { isDevOtpEnabled, normalizePhone } from "@/lib/auth";
-import { verifyTelegramInitData } from "@/lib/telegram";
+import { sendTelegramBotMessage, verifyTelegramInitData } from "@/lib/telegram";
 import { PLATFORM_FEE_PCT } from "@/lib/config";
 import { assertPaymentProviderReady, FreedomPayProvider, PaymentConfigurationError } from "@/lib/payments";
 import {
@@ -17,7 +17,6 @@ import {
   signFreedomPayFields,
   verifyFreedomPaySignature,
 } from "@/lib/freedompay";
-import { sendSmsCode } from "@/lib/sms";
 import { pluralRu } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
 import { integer, requiredString } from "@/shared/validation";
@@ -303,22 +302,25 @@ describe("Freedom Pay", () => {
   });
 });
 
-describe("Mobizon SMS adapter", () => {
-  it("отправляет OTP в формате Mobizon Kazakhstan", async () => {
-    vi.stubEnv("MOBIZON_API_KEY", "test-key");
-    vi.stubEnv("MOBIZON_SENDER", "FoodGood");
+describe("Telegram Bot adapter", () => {
+  it("отправляет OTP в приватный чат с безопасной клавиатурой", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "123456:test-token");
     const fetchMock = vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({ code: 0, data: { messageId: 123 } }),
+      JSON.stringify({ ok: true, result: { message_id: 123 } }),
       { status: 200, headers: { "Content-Type": "application/json" } }
     ));
     vi.stubGlobal("fetch", fetchMock);
     try {
-      await sendSmsCode("+7 701 000 00 01", "123456");
-      const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
-      expect(url.hostname).toBe("api.mobizon.kz");
-      expect(url.searchParams.get("apiKey")).toBe("test-key");
-      expect(String(init.body)).toContain("recipient=77010000001");
-      expect(String(init.body)).toContain("from=FoodGood");
+      await sendTelegramBotMessage("4242", "Ваш код FoodGood: 123456", {
+        replyMarkup: { remove_keyboard: true },
+      });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain("api.telegram.org/bot123456:test-token/sendMessage");
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        chat_id: "4242",
+        text: "Ваш код FoodGood: 123456",
+        reply_markup: { remove_keyboard: true },
+      });
     } finally {
       vi.unstubAllGlobals();
       vi.unstubAllEnvs();

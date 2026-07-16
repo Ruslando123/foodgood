@@ -4,6 +4,7 @@ import { createSession, normalizePhone } from "@/lib/auth";
 import { consumeOtp, OtpError } from "@/lib/otp";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit, requestIp } from "@/shared/server/rate-limit";
+import { attachTelegramAfterOtp } from "@/lib/telegram-otp";
 
 export async function POST(req: NextRequest) {
   return apiRoute(req, async () => {
@@ -36,6 +37,7 @@ export async function POST(req: NextRequest) {
     if (user.status === "BLOCKED") {
       throw new ApiError(403, "ACCOUNT_BLOCKED", "Аккаунт заблокирован администратором");
     }
+    await attachTelegramAfterOtp(normalized, user.id);
     await createSession(user.id);
     return json({
       ok: true,

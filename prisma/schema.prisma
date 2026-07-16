@@ -48,6 +48,24 @@ model OtpChallenge {
   @@index([expiresAt])
 }
 
+/// Short-lived handoff between the website and a private Telegram bot chat.
+/// The bot verifies ownership of the entered phone through request_contact
+/// before it is allowed to deliver an OTP.
+model TelegramLoginRequest {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique
+  phone      String
+  telegramId String?
+  status     String    @default("PENDING") // PENDING | WAITING_CONTACT | CODE_SENT | CONSUMED
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([phone, status, createdAt(sort: Desc)])
+  @@index([telegramId, status, createdAt(sort: Desc)])
+  @@index([expiresAt])
+}
+
 model RateLimitBucket {
   key       String   @id
   count     Int
@@ -70,6 +88,7 @@ model Venue {
   photo            String                                @default("🍽️") // emoji or image URL
   contactPhone     String                                @default("")
   openingHours     String                                @default("")
+  twoGisUrl        String                                @default("")
   status           String                                @default("ACTIVE") // ACTIVE | SUSPENDED
   suspensionReason String?
   ownerId          String
@@ -94,6 +113,7 @@ model Bag {
   venueId       String
   title         String
   description   String   @default("")
+  allergens     String   @default("") // possible allergens, free-text label shown to customers
   price         Int // sale price, KZT
   originalPrice Int // estimated original value, KZT
   quantityTotal Int
@@ -111,33 +131,66 @@ model Bag {
 }
 
 model Order {
-  id                 String    @id @default(cuid())
-  bagId              String
-  userId             String
-  quantity           Int       @default(1)
-  totalPrice         Int // KZT
-  platformFee        Int // KZT, snapshot at purchase time
-  status             String    @default("PENDING_PAYMENT") // PENDING_PAYMENT | PAID | CAPTURE_PENDING | COMPLETED | REFUND_PENDING | CANCELLED | EXPIRED
-  refundTargetStatus String? // CANCELLED | EXPIRED; сохраняется для повторного refund
-  pickupCode         String    @unique
-  createdAt          DateTime  @default(now())
-  completedAt        DateTime?
-  supportStatus      String    @default("NONE") // NONE | OPEN | RESOLVED
-  supportNote        String    @default("")
-  idempotencyRecordId String?  @unique
+  id                  String    @id @default(cuid())
+  bagId               String
+  userId              String
+  quantity            Int       @default(1)
+  totalPrice          Int // KZT
+  platformFee         Int // KZT, snapshot at purchase time
+  clientSource        String    @default("direct") // first-touch source captured at checkout
+  paymentMethod       String    @default("ONLINE") // ONLINE | PAY_AT_PICKUP
+  status              String    @default("PENDING_PAYMENT") // RESERVED | PENDING_PAYMENT | PAID | READY_FOR_PICKUP | CAPTURE_PENDING | COMPLETED | REFUND_PENDING | CANCELLED | EXPIRED
+  refundTargetStatus  String? // CANCELLED | EXPIRED; сохраняется для повторного refund
+  pickupCode          String    @unique
+  createdAt           DateTime  @default(now())
+  completedAt         DateTime?
+  supportStatus       String    @default("NONE") // NONE | OPEN | RESOLVED
+  supportCategory     String? // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | OTHER
+  supportNote         String    @default("")
+  supportOpenedAt     DateTime?
+  supportResolvedAt   DateTime?
+  supportResolution   String    @default("")
+  idempotencyRecordId String?   @unique
 
-  bag            Bag             @relation(fields: [bagId], references: [id])
-  user           User            @relation(fields: [userId], references: [id])
-  payment        Payment?
-  paymentEvents  PaymentEvent[]
-  outboxMessages OutboxMessage[]
-  review         Review?
+  bag               Bag                  @relation(fields: [bagId], references: [id])
+  user              User                 @relation(fields: [userId], references: [id])
+  payment           Payment?
+  paymentEvents     PaymentEvent[]
+  outboxMessages    OutboxMessage[]
+  review            Review?
   idempotencyRecord OrderIdempotencyKey? @relation(fields: [idempotencyRecordId], references: [id], onDelete: SetNull)
 
   @@index([userId, status])
   @@index([userId, status, createdAt(sort: Desc), id(sort: Desc)])
   @@index([bagId, status])
   @@index([createdAt])
+  @@index([supportStatus, supportOpenedAt])
+}
+
+/// Append-only product analytics used by the internal funnel dashboard.
+/// Entity ids are deliberately stored as scalar snapshots so historical
+/// events remain queryable if operational records are later archived.
+model ProductEvent {
+  id           String   @id @default(cuid())
+  name         String
+  userId       String?
+  anonymousId  String?
+  venueId      String
+  bagId        String
+  orderId      String?
+  amount       Int
+  platformFee  Int      @default(0)
+  quantity     Int      @default(1)
+  clientSource String   @default("direct")
+  dedupeKey    String?  @unique
+  metadataJson String   @default("{}")
+  createdAt    DateTime @default(now())
+
+  @@index([name, createdAt])
+  @@index([venueId, createdAt])
+  @@index([bagId, createdAt])
+  @@index([orderId, createdAt])
+  @@index([userId, createdAt])
 }
 
 model Payment {

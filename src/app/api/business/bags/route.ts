@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireMerchant } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
+import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
@@ -11,7 +12,7 @@ export async function GET(request: Request) {
       where: { venue: { ownerId: user.id } },
       include: {
         venue: true,
-        orders: { where: { status: { in: ["PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING", "COMPLETED"] } } },
+        orders: { where: { status: { in: ["RESERVED", "PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING", "COMPLETED"] } } },
       },
       orderBy: { createdAt: "desc" },
       take: 50,
@@ -28,6 +29,7 @@ export async function POST(req: NextRequest) {
     const venueId = requiredString(body.venueId, "venueId", { max: 64 });
     const title = requiredString(body.title, "title", { max: 120 });
     const description = optionalString(body.description, "description", 1000);
+    const allergens = optionalString(body.allergens, "allergens", 300);
     const priceNum = integer(body.price, "price", { min: 1, max: 10_000_000 });
     const originalNum = integer(body.originalPrice, "originalPrice", {
       min: priceNum,
@@ -52,6 +54,7 @@ export async function POST(req: NextRequest) {
           venueId: venue.id,
           title,
           description,
+          allergens,
           price: priceNum,
           originalPrice: originalNum,
           quantityTotal: qty,
@@ -69,6 +72,16 @@ export async function POST(req: NextRequest) {
           payloadJson: JSON.stringify({ bagId: created.id }),
           nextAttemptAt: new Date(0),
         },
+      });
+      await recordProductEvent(tx, {
+        name: "partner_offer_created",
+        userId: user.id,
+        venueId: created.venueId,
+        bagId: created.id,
+        amount: created.price,
+        quantity: created.quantityTotal,
+        clientSource: clientSourceFromRequest(req),
+        dedupeKey: `partner_offer_created:${created.id}`,
       });
       return created;
     });

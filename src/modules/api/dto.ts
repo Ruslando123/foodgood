@@ -8,6 +8,7 @@ export type PublicVenueDto = {
   lat: number;
   lng: number;
   cityId: string;
+  twoGisUrl: string;
   category: string;
   photo: string;
   contactPhone: string;
@@ -26,6 +27,7 @@ export type PublicBagDto = {
   venueId: string;
   title: string;
   description: string;
+  allergens: string;
   price: number;
   originalPrice: number;
   quantityTotal: number;
@@ -41,6 +43,7 @@ export type CustomerOrderDto = {
   quantity: number;
   totalPrice: number;
   platformFee: number;
+  paymentMethod: string;
   status: string;
   pickupCode: string;
   createdAt: string;
@@ -62,6 +65,7 @@ export const publicVenueSelect = {
   lat: true,
   lng: true,
   cityId: true,
+  twoGisUrl: true,
   category: true,
   photo: true,
   contactPhone: true,
@@ -75,6 +79,7 @@ const publicBagSelect = {
   venueId: true,
   title: true,
   description: true,
+  allergens: true,
   price: true,
   originalPrice: true,
   quantityTotal: true,
@@ -90,6 +95,7 @@ export const customerOrderSelect = {
   quantity: true,
   totalPrice: true,
   platformFee: true,
+  paymentMethod: true,
   status: true,
   pickupCode: true,
   createdAt: true,
@@ -130,6 +136,7 @@ export function toPublicVenueDto(
     lat: venue.lat,
     lng: venue.lng,
     cityId: venue.cityId,
+    twoGisUrl: venue.twoGisUrl,
     category: venue.category,
     photo: venue.photo,
     contactPhone: venue.contactPhone,
@@ -145,6 +152,7 @@ function toPublicBagDto(bag: CustomerOrderMappable["bag"]): PublicBagDto {
     venueId: bag.venueId,
     title: bag.title,
     description: bag.description,
+    allergens: bag.allergens,
     price: bag.price,
     originalPrice: bag.originalPrice,
     quantityTotal: bag.quantityTotal,
@@ -162,6 +170,7 @@ export function toCustomerOrderDto(order: CustomerOrderMappable): CustomerOrderD
     quantity: order.quantity,
     totalPrice: order.totalPrice,
     platformFee: order.platformFee,
+    paymentMethod: order.paymentMethod,
     status: order.status,
     pickupCode: order.pickupCode,
     createdAt: isoDate(order.createdAt),

@@ -11,6 +11,18 @@ export function telegramNotificationsEnabled(): boolean {
   return process.env.TELEGRAM_NOTIFICATIONS_ENABLED === "true" && Boolean(botToken());
 }
 
+export function telegramOtpEnabled(): boolean {
+  return process.env.TELEGRAM_OTP_ENABLED === "true"
+    && Boolean(botToken())
+    && Boolean(process.env.TELEGRAM_BOT_USERNAME)
+    && Boolean(process.env.TELEGRAM_WEBHOOK_SECRET);
+}
+
+export function telegramBotUsername(): string | null {
+  const username = process.env.TELEGRAM_BOT_USERNAME?.trim().replace(/^@/, "");
+  return username || null;
+}
+
 export type TelegramInitUser = {
   id: number;
   first_name?: string;
@@ -52,8 +64,11 @@ export function verifyTelegramInitData(initData: string): TelegramInitUser | nul
   }
 }
 
-/** Уведомление пользователю через бота; no-op, если токен не задан. */
-export async function sendTelegramMessage(telegramId: string, text: string): Promise<void> {
+export async function sendTelegramBotMessage(
+  telegramId: string,
+  text: string,
+  options: { replyMarkup?: Record<string, unknown> } = {}
+): Promise<void> {
   const token = botToken();
   if (!token) {
     if (process.env.NODE_ENV === "production") {
@@ -64,11 +79,20 @@ export async function sendTelegramMessage(telegramId: string, text: string): Pro
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: telegramId, text }),
+    body: JSON.stringify({
+      chat_id: telegramId,
+      text,
+      ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
+    }),
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     throw new Error(`Telegram sendMessage failed (${response.status})${body ? `: ${body.slice(0, 300)}` : ""}`);
   }
+}
+
+/** Уведомление пользователю через бота; no-op, если токен не задан. */
+export async function sendTelegramMessage(telegramId: string, text: string): Promise<void> {
+  return sendTelegramBotMessage(telegramId, text);
 }

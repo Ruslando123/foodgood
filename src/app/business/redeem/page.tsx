@@ -12,13 +12,14 @@ export default function RedeemPage() {
   const [busy, setBusy] = useState(false);
 
   async function redeem() {
+    if (!window.confirm("Подтвердите: оплата получена заведением и кассовый чек будет выдан покупателю.")) return;
     setBusy(true);
     setError(null);
     setResult(null);
     try {
       const { order } = await api<{ order: Order }>("/api/business/redeem", {
         method: "POST",
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, paymentConfirmed: true }),
       });
       setResult(order);
       setCode("");
@@ -38,7 +39,7 @@ export default function RedeemPage() {
 
       <main className="px-4 space-y-4 pt-4">
         <p className="text-sm text-muted">
-          Попросите покупателя показать QR-код или 6-значный код заказа и введите его:
+          Сначала примите оплату на кассе и подготовьте чек. Затем попросите покупателя показать QR-код или 6-значный код заказа:
         </p>
         <input
           value={code}
@@ -52,7 +53,7 @@ export default function RedeemPage() {
           disabled={busy || code.length < 6}
           className="w-full py-3.5 rounded-2xl bg-primary text-white font-bold disabled:opacity-50"
         >
-          {busy ? "Проверяем…" : "Выдать заказ"}
+          {busy ? "Проверяем…" : "Подтвердить оплату и выдать"}
         </button>
 
         {error && (
@@ -64,9 +65,9 @@ export default function RedeemPage() {
           <div className="rounded-2xl bg-primary/10 border border-primary/30 p-4 space-y-1">
             <p className="font-bold text-primary">✅ Заказ выдан!</p>
             <p className="text-sm">{result.bag.title} × {result.quantity}</p>
-            <p className="text-sm text-muted">
-              Оплата {formatPrice(result.totalPrice)} списана с холда — деньги зачислены заведению.
-            </p>
+            <p className="text-sm text-muted">{result.paymentMethod === "PAY_AT_PICKUP"
+              ? `Оплата ${formatPrice(result.totalPrice)} принята заведением.`
+              : `Оплата ${formatPrice(result.totalPrice)} списана с холда — деньги зачислены заведению.`}</p>
           </div>
         )}
       </main>

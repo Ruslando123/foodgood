@@ -6,13 +6,13 @@ import { sessionSecretValue } from "./secrets";
 const SESSION_COOKIE = "foodgood_session";
 const SESSION_TTL_DAYS = 30;
 
-// В MVP код подтверждения — заглушка. Реальный SMS-шлюз (Mobizon/SMSC)
-// подключается здесь же, не трогая остальной код.
+// Локальная заглушка. В production код доставляет Telegram-бот после
+// проверки системного контакта пользователя.
 export const DEV_OTP_CODE = "0000";
 
 /**
  * Заглушка допустима только локально или в тестовом окружении. В production
- * телефонный вход должен быть подключён к SMS-провайдеру: иначе любой, кто
+ * телефонный вход должен быть подключён к Telegram OTP: иначе любой, кто
  * знает номер, получает доступ к аккаунту.
  */
 export function isDevOtpEnabled(): boolean {

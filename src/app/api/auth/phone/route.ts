@@ -1,11 +1,11 @@
 import { NextRequest } from "next/server";
-import { normalizePhone } from "@/lib/auth";
+import { isDevOtpEnabled, normalizePhone } from "@/lib/auth";
 import { issueOtp, OtpError } from "@/lib/otp";
-import { SmsConfigurationError } from "@/lib/sms";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { consumeRateLimit, requestIp } from "@/shared/server/rate-limit";
+import { createTelegramOtpRequest } from "@/lib/telegram-otp";
 
-/** Issues a durable, one-time OTP and delegates production delivery to SMS. */
+/** Creates a Telegram handoff; local development keeps the guarded demo OTP. */
 export async function POST(req: NextRequest) {
   return apiRoute(req, async () => {
     const { phone } = await readJsonObject(req);
@@ -18,12 +18,14 @@ export async function POST(req: NextRequest) {
       windowMs: 15 * 60 * 1000,
     });
     try {
-      const issued = await issueOtp(normalized);
+      const issued = isDevOtpEnabled()
+        ? await issueOtp(normalized)
+        : await createTelegramOtpRequest(normalized);
       return json({ ok: true, phone: normalized, ...issued });
     } catch (error) {
       if (error instanceof OtpError) throw new ApiError(429, error.code, error.message);
-      if (error instanceof SmsConfigurationError) {
-        throw new ApiError(503, "PHONE_AUTH_NOT_CONFIGURED", "Вход по телефону временно недоступен");
+      if (error instanceof Error && error.message.includes("Telegram OTP")) {
+        throw new ApiError(503, "TELEGRAM_OTP_NOT_CONFIGURED", "Получение кода через Telegram временно недоступно");
       }
       throw error;
     }

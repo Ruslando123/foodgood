@@ -47,17 +47,21 @@ services:
         sync: false
       - key: APP_BASE_URL
         sync: false
+      - key: PAYMENT_MODE
+        value: PAY_AT_PICKUP
       - key: ADMIN_PHONE
-        sync: false
-      - key: MOBIZON_API_KEY
-        sync: false
-      - key: MOBIZON_SENDER
         sync: false
       - key: TELEGRAM_AUTH_ENABLED
         value: "false"
       - key: TELEGRAM_NOTIFICATIONS_ENABLED
         value: "false"
+      - key: TELEGRAM_OTP_ENABLED
+        value: "true"
       - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
       - key: ALLOW_MOCK_PAYMENTS_IN_PRODUCTION
         value: "false"
@@ -125,6 +129,8 @@ services:
         value: "false"
       - key: APP_BASE_URL
         sync: false
+      - key: PAYMENT_MODE
+        value: PAY_AT_PICKUP
 
   - type: worker
     name: foodgood-expiry-worker

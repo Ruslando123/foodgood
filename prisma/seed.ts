@@ -17,7 +17,9 @@ function pickupWindow(startH: number, startM: number, endH: number, endM: number
 }
 
 async function main() {
+  await prisma.productEvent.deleteMany();
   await prisma.otpChallenge.deleteMany();
+  await prisma.telegramLoginRequest.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.outboxMessage.deleteMany();
   await prisma.batchJob.deleteMany();
@@ -133,6 +135,7 @@ async function main() {
       venueId: venues[0].id,
       title: "Пакет-сюрприз: выпечка и сэндвичи",
       description: "Донаты, круассаны или сэндвичи — что осталось на витрине. Всегда свежее, всегда вкусно.",
+      allergens: "глютен, молоко, яйца; возможны орехи",
       price: 1500,
       originalPrice: 4500,
       quantityTotal: 5,
@@ -144,6 +147,7 @@ async function main() {
       venueId: venues[1].id,
       title: "Хлебный пакет-сюрприз",
       description: "Свежий хлеб, баурсаки и сладкая выпечка сегодняшнего дня.",
+      allergens: "глютен, молоко, яйца, кунжут",
       price: 990,
       originalPrice: 3000,
       quantityTotal: 8,
@@ -155,6 +159,7 @@ async function main() {
       venueId: venues[2].id,
       title: "Ужин-сюрприз из кулинарии",
       description: "Готовое горячее блюдо + салат + гарнир из кулинарии Magnum.",
+      allergens: "глютен, молоко, яйца, горчица",
       price: 1900,
       originalPrice: 5500,
       quantityTotal: 10,
@@ -166,6 +171,7 @@ async function main() {
       venueId: venues[3].id,
       title: "Лапша-сюрприз",
       description: "Порция фирменной лапши или риса с мясом — что осталось к закрытию.",
+      allergens: "глютен, соя, яйца, кунжут",
       price: 1700,
       originalPrice: 4800,
       quantityTotal: 4,
@@ -177,6 +183,7 @@ async function main() {
       venueId: venues[4].id,
       title: "Сладкий пакет-сюрприз",
       description: "Эклеры, пирожные или кусочки тортов — сюрприз от кондитера.",
+      allergens: "глютен, молоко, яйца; возможны орехи",
       price: 1400,
       originalPrice: 4200,
       quantityTotal: 6,
@@ -188,6 +195,7 @@ async function main() {
       venueId: venues[5].id,
       title: "Пакет-сюрприз Galmart",
       description: "Готовые блюда и салаты премиум-кулинарии со скидкой 65%.",
+      allergens: "состав меняется; уточните у сотрудника",
       price: 2100,
       originalPrice: 6000,
       quantityTotal: 7,

@@ -96,7 +96,7 @@ Seed создаёт production-подобный каталог, пул изол�
 - Есть рабочий покупательский сценарий: список и карта пакетов, геолокация, карточка пакета, демо-оплата, заказы, QR-код и отмена до начала окна выдачи.
 - Есть кабинет заведения: регистрация точки, публикация пакетов, статистика, список активных пакетов и выдача заказа по коду.
 - Есть серверная бизнес-логика: атомарный резерв остатков, статусы заказов, mock hold/capture/refund и независимо масштабируемые workers.
-- Есть базовая авторизация: вход по телефону с dev-кодом `0000`, Telegram WebApp `initData`, httpOnly JWT-cookie.
+- Есть авторизация: код по телефону через Telegram-бота, dev-код `0000`, Telegram WebApp `initData`, httpOnly JWT-cookie.
 - Есть демо-данные для Алматы, Prisma-схема и тесты для ключевых доменных правил.
 
 ## Что сделать дальше
@@ -105,7 +105,7 @@ Seed создаёт production-подобный каталог, пул изол�
 
 ### Перед пилотом
 
-- Выдать production credentials Mobizon и проверить approved sender, delivery receipts и баланс; OTP уже имеет TTL, rate limit, атомарный лимит попыток и production SMS adapter.
+- Создать FoodGood-бота через @BotFather, настроить HTTPS webhook и проверить получение OTP через системную кнопку контакта Telegram.
 - Добавить Freedom Pay adapter и подписанные webhooks поверх уже реализованных hold/capture/refund, идемпотентности, retries и журнала платёжных событий.
 - Провести и задокументировать восстановление PostgreSQL/S3 из backup в изолированное окружение.
 - Усилить роли и доступы: явная проверка `MERCHANT`, приглашения сотрудников заведения, разделение владельца и кассира.
@@ -134,7 +134,8 @@ Next.js 15 (App Router, TypeScript) · Prisma + PostgreSQL/PostGIS · Redis · S
 | `src/lib/orders.ts` | Жизненный цикл заказа: транзакционный резерв остатка, hold/capture/refund, выдача по коду |
 | `src/lib/payments.ts` | Интерфейс `PaymentProvider` + мок-реализация |
 | `src/lib/auth.ts` | Сессии, вход по телефону (dev-код `0000`), нормализация номеров КЗ |
-| `src/lib/telegram.ts` | Верификация `initData` Telegram WebApp + уведомления через бота |
+| `src/lib/telegram-otp.ts` | Deep link, проверка Telegram-контакта, webhook и доставка OTP |
+| `src/lib/telegram.ts` | Верификация `initData` Telegram WebApp + Bot API |
 | `src/lib/config.ts` | Комиссия платформы (22%), категории, центр карты |
 | `src/lib/jobs.ts` | Durable batch jobs для массовых уведомлений и возвратов |
 | `src/modules/catalog/db.ts` | SQL-каталог, PostGIS и cursor pagination |
@@ -143,8 +144,8 @@ Next.js 15 (App Router, TypeScript) · Prisma + PostgreSQL/PostGIS · Redis · S
 ## Как подключить продакшен-интеграции
 
 - **Платёжный шлюз**: для пилота выбран Freedom Pay с ручным клирингом; реализуйте `PaymentProvider` после получения test merchant credentials.
-- **SMS-код**: выбран Mobizon Kazakhstan; durable OTP уже хранится в PostgreSQL, для production нужны `MOBIZON_API_KEY` и зарегистрированное имя отправителя.
-- **Telegram WebApp**: создайте бота у @BotFather, пропишите `TELEGRAM_BOT_TOKEN` в `.env`, укажите URL приложения как WebApp — авторизация по `initData` и уведомления о выдаче заработают автоматически.
+- **Telegram-код**: создайте бота у @BotFather, задайте `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_WEBHOOK_SECRET`, включите `TELEGRAM_OTP_ENABLED=true`, затем выполните `npm run telegram:webhook`. Бот сверяет системный контакт и отправляет OTP бесплатно.
+- **Telegram WebApp**: для автоматического входа внутри Telegram дополнительно включите `TELEGRAM_AUTH_ENABLED=true` и укажите URL приложения как WebApp у @BotFather.
 - **Карта 2ГИС/Яндекс**: карта изолирована в `src/components/MapView.tsx` — замените Leaflet-слой на MapGL с API-ключом.
 - **PostgreSQL**: требуется PostgreSQL 16 с расширениями PostGIS и `pg_trgm`; применяйте миграции через `prisma migrate deploy`.
 

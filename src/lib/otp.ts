@@ -2,7 +2,6 @@ import { createHmac, randomInt, timingSafeEqual } from "crypto";
 import { prisma } from "./db";
 import { DEV_OTP_CODE, isDevOtpEnabled } from "./auth";
 import { otpSecretValue } from "./secrets";
-import { sendSmsCode } from "./sms";
 
 const OTP_TTL_MS = 5 * 60_000;
 const REQUEST_WINDOW_MS = 15 * 60_000;
@@ -32,7 +31,10 @@ function codeMatches(actualHash: string, phone: string, code: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-export async function issueOtp(phone: string): Promise<{ codeLength: number; devCode?: string }> {
+export async function issueOtp(
+  phone: string,
+  options: { deliver?: (code: string) => Promise<void> } = {}
+): Promise<{ codeLength: number; devCode?: string }> {
   const now = new Date();
   const windowStart = new Date(now.getTime() - REQUEST_WINDOW_MS);
   await prisma.otpChallenge.deleteMany({
@@ -40,6 +42,12 @@ export async function issueOtp(phone: string): Promise<{ codeLength: number; dev
   });
 
   const dev = isDevOtpEnabled();
+  // Playwright retries reuse the isolated local E2E database. Let a retry
+  // replace a consumed challenge immediately, while preserving production
+  // throttling unless the guarded local E2E mode is actually active.
+  const e2eDev = dev
+    && process.env.FOODGOOD_E2E_DEV_OTP === "true"
+    && /(?:localhost|127\.0\.0\.1):\d+/.test(process.env.DATABASE_URL ?? "");
   const code = dev ? DEV_OTP_CODE : String(randomInt(0, 1_000_000)).padStart(6, "0");
   const challenge = await prisma.$transaction(async (tx) => {
     // Serializes requests for one phone across all application instances.
@@ -48,10 +56,10 @@ export async function issueOtp(phone: string): Promise<{ codeLength: number; dev
       tx.otpChallenge.count({ where: { phone, createdAt: { gte: windowStart } } }),
       tx.otpChallenge.findFirst({ where: { phone }, orderBy: { createdAt: "desc" } }),
     ]);
-    if (recentCount >= MAX_REQUESTS_PER_WINDOW) {
+    if (!e2eDev && recentCount >= MAX_REQUESTS_PER_WINDOW) {
       throw new OtpError("OTP_RATE_LIMITED", "Слишком много запросов кода. Попробуйте позже");
     }
-    if (latest && now.getTime() - latest.createdAt.getTime() < REQUEST_COOLDOWN_MS) {
+    if (!e2eDev && latest && now.getTime() - latest.createdAt.getTime() < REQUEST_COOLDOWN_MS) {
       throw new OtpError("OTP_RATE_LIMITED", "Новый код можно запросить через минуту");
     }
     await tx.otpChallenge.updateMany({
@@ -69,13 +77,16 @@ export async function issueOtp(phone: string): Promise<{ codeLength: number; dev
     });
   });
 
-  if (!dev) {
+  if (options.deliver) {
     try {
-      await sendSmsCode(phone, code);
+      await options.deliver(code);
     } catch (error) {
       await prisma.otpChallenge.delete({ where: { id: challenge.id } }).catch(() => undefined);
       throw error;
     }
+  } else if (!dev) {
+    await prisma.otpChallenge.delete({ where: { id: challenge.id } }).catch(() => undefined);
+    throw new Error("OTP delivery channel is not configured");
   }
   return { codeLength: code.length, ...(dev ? { devCode: code } : {}) };
 }
