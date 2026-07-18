@@ -59,6 +59,34 @@ test("новый Telegram-покупатель также проходит invit
   expect(accepted.ok()).toBeTruthy();
 });
 
+test("согласие управляет CSV-базой и оставляет аудит", async ({ page, browser, request }) => {
+  const anonymousExport = await request.get("/api/admin/customers/export");
+  expect(anonymousExport.status()).toBe(401);
+
+  await login(page, "+7 707 000 00 05", /\/$/);
+  await page.goto("/settings");
+  const communications = page.getByRole("switch", { name: /Новости и специальные предложения/ });
+  await expect(communications).toHaveAttribute("aria-checked", "false");
+  await communications.click();
+  await expect(communications).toHaveAttribute("aria-checked", "true");
+
+  const adminContext = await browser.newContext();
+  const adminPage = await adminContext.newPage();
+  await login(adminPage, "+7 701 000 00 03", /\/admin\/venues/);
+  const included = await adminPage.request.get("/api/admin/customers/export");
+  expect(included.ok()).toBeTruthy();
+  expect(await included.text()).toContain("+77070000005");
+  await adminPage.goto("/admin/audit");
+  await expect(adminPage.getByText("Выгружена согласованная клиентская база", { exact: true })).toBeVisible();
+
+  await communications.click();
+  await expect(communications).toHaveAttribute("aria-checked", "false");
+  const excluded = await adminPage.request.get("/api/admin/customers/export");
+  expect(excluded.ok()).toBeTruthy();
+  expect(await excluded.text()).not.toContain("+77070000005");
+  await adminContext.close();
+});
+
 async function orderStatus(page: Page, orderId: string) {
   const response = await page.request.get(`/api/orders/${orderId}`);
   if (!response.ok()) return null;
@@ -68,9 +96,11 @@ async function orderStatus(page: Page, orderId: string) {
 test("клиент покупает, владелец выдаёт, клиент оставляет один отзыв", async ({ page, browser }) => {
   await page.addInitScript(() => localStorage.setItem("foodgood-location", JSON.stringify({ lat: 43.2389, lng: 76.8897, cityId: "almaty" })));
   await login(page, "+7 707 000 00 01", /\/$/);
-  const bagLinks = page.locator('a[href^="/bag/"]');
-  await expect(bagLinks.first()).toBeVisible();
-  await bagLinks.first().click();
+  // This offer belongs to the merchant used below. Selecting the first card
+  // made the redeem flow depend on database/catalog ordering.
+  const merchantBag = page.getByRole("link", { name: /Magnum Cash&Carry.*Ужин-сюрприз/ });
+  await expect(merchantBag).toBeVisible();
+  await merchantBag.click();
   await page.getByRole("button", { name: "Добавить в избранное" }).click();
   await page.getByRole("button", { name: /Забронировать за/ }).click();
   await page.getByRole("button", { name: "Подтвердить бронь" }).click();
@@ -130,6 +160,13 @@ test("клиент отправляет привязанную к заказу �
   await adminPage.goto("/admin/support");
   await expect(adminPage.getByText(orderId, { exact: false })).toBeVisible();
   await expect(adminPage.getByText("Нужна помощь с окном выдачи", { exact: true })).toBeVisible();
+  await adminPage.getByRole("button", { name: "Отметить первый контакт" }).click();
+  await expect(adminPage.getByText(/Первый контакт отмечен/)).toBeVisible();
+  await adminPage.getByLabel("Ответ заведения").fill("Заведение подтвердило новое окно выдачи");
+  await adminPage.getByLabel("Итог для клиента").fill("Клиент согласовал получение в новое время");
+  await adminPage.getByRole("radio", { name: "Да" }).check();
+  await adminPage.getByRole("button", { name: "Закрыть обращение" }).click();
+  await expect(adminPage.getByText(orderId, { exact: false })).toHaveCount(0);
   await adminContext.close();
 });
 

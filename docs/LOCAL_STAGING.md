@@ -14,6 +14,23 @@ docker compose --env-file .env.staging.local -f docker-compose.staging.yml confi
 docker compose --env-file .env.staging.local -f docker-compose.staging.yml up --build --wait
 ```
 
+Генератор создаёт игнорируемый Git файл `.env.staging.local` с правами `0600`.
+В нём лежат только локальные секреты, а также одноразовый код закрытого пилота
+и его SHA-256 digest. Контейнеры получают только digest. Для локальной
+клиентской репетиции скопируйте код (не добавляйте его в `.env` проекта и не
+отправляйте в чат):
+
+```bash
+sed -n 's/^STAGING_PILOT_INVITE_CODE=//p' .env.staging.local
+```
+
+В local-staging телефонный сценарий намеренно использует demo OTP `0000`.
+Он включён только при одновременных `FOODGOOD_E2E_DEV_OTP=true`,
+`FOODGOOD_LOCAL_REHEARSAL=true` и `APP_BASE_URL` на `localhost`/`127.0.0.1`;
+compose выставляет все три значения только для этого локального контура.
+Новый клиент вводит скопированный invite-код, принимает политику и затем
+вводит `0000`. Внешний staging и production эти флаги получать не должны.
+
 Проверка локального контура допускает только ожидаемую деградацию object storage, поскольку S3 здесь намеренно не запускается:
 
 ```bash
@@ -28,7 +45,7 @@ npm run staging:smoke
 
 Без `STAGING_ALLOW_DEGRADED_CHECKS` smoke остаётся строгим и требует полностью здоровый `/api/health/deep`.
 
-Файл `.env.staging.local` создаётся с правами `0600`, содержит четыре независимых случайных секрета и уже исключён правилом `.env*` из Git. Генератор никогда не перезаписывает существующий файл.
+Файл `.env.staging.local` создаётся с правами `0600`, содержит независимые случайные секреты и pilot invite, уже исключён правилом `.env*` из Git. Генератор никогда не перезаписывает существующие секреты. Если файл создан старой версией без invite-пары, повторный запуск безопасно допишет только недостающие `STAGING_PILOT_INVITE_CODE*`; полный или частично повреждённый файл останется без изменений.
 
 Compose сначала ждёт PostgreSQL, применяет все Prisma-миграции через прямое соединение, затем ждёт PgBouncer и Redis и только после этого поднимает оба web-инстанса и proxy.
 
@@ -58,7 +75,7 @@ node scripts/staging-failover-check.mjs
 
 ## Одноразовая фикстура для ramp/soak
 
-Профили `ramp` и `soak` изменяют данные. Перед каждым из них полностью сбросьте только local-staging volume, снова поднимите контур и создайте свежую фикстуру. Seed не запускается без точного подтверждения `foodgood-load-only`, подключается к внутреннему PostgreSQL напрямую и записывает `load/fixtures.local.json` обратно на хост:
+Профили `ramp` и `soak` изменяют данные. Перед каждым из них полностью сбросьте только local-staging volume, снова поднимите контур и создайте свежую фикстуру. Seed не запускается без точного подтверждения `foodgood-load-only`; дополнительно он принимает только PostgreSQL на `localhost`/`127.0.0.1` или внутреннем Docker host (`postgres`/`pgbouncer`) с именем БД, содержащим `test` либо `staging`. Он подключается к внутреннему PostgreSQL напрямую и записывает `load/fixtures.local.json` обратно на хост:
 
 ```bash
 docker compose --env-file .env.staging.local -f docker-compose.staging.yml down --volumes

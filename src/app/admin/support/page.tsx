@@ -14,7 +14,8 @@ function formatDate(date: Date) {
   });
 }
 
-function sla(openedAt: Date | null, now: Date) {
+function sla(openedAt: Date | null, firstContactAt: Date | null, now: Date) {
+  if (firstContactAt) return { label: `Контакт: ${formatDate(firstContactAt)}`, className: "bg-emerald-50 text-emerald-700" };
   const opened = openedAt ?? now;
   const deadline = new Date(opened.getTime() + 2 * 60 * 60 * 1000);
   const remaining = deadline.getTime() - now.getTime();
@@ -26,7 +27,7 @@ function sla(openedAt: Date | null, now: Date) {
 export default async function AdminSupportPage() {
   const orders = await prisma.order.findMany({
     where: { supportStatus: "OPEN" },
-    include: { user: true, bag: { include: { venue: true } } },
+    include: { user: true, supportOwner: true, bag: { include: { venue: true } } },
     orderBy: [{ supportOpenedAt: "asc" }, { createdAt: "asc" }],
     take: 100,
   });
@@ -55,7 +56,7 @@ export default async function AdminSupportPage() {
         ) : (
           <div className="divide-y">
             {orders.map((order) => {
-              const status = sla(order.supportOpenedAt, now);
+              const status = sla(order.supportOpenedAt, order.supportFirstContactAt, now);
               const category = order.supportCategory as ComplaintCategory | null;
               return (
                 <article key={order.id} className="space-y-3 p-4">
@@ -78,10 +79,11 @@ export default async function AdminSupportPage() {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="text-xs text-muted">
                       Получено: {formatDate(order.supportOpenedAt ?? order.createdAt)} · статус заказа: {order.status}
+                      {order.supportFirstContactAt ? <> · первый контакт: {formatDate(order.supportFirstContactAt)}{order.supportOwner ? ` (${order.supportOwner.name ?? order.supportOwner.phone ?? "администратор"})` : ""}</> : " · первый контакт ещё не отмечен"}
                     </div>
                     <div className="flex items-center gap-3">
                       <Link href={`/admin/orders?q=${order.id}`} className="text-xs font-semibold text-primary">Открыть заказ</Link>
-                      <AdminResolveSupportButton id={order.id} />
+                      <AdminResolveSupportButton id={order.id} firstContactAt={order.supportFirstContactAt?.toISOString() ?? null} ownerLabel={order.supportOwner?.name ?? order.supportOwner?.phone ?? null} />
                     </div>
                   </div>
                 </article>

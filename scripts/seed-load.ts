@@ -2,8 +2,10 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SignJWT } from "jose";
 import { prisma } from "../src/lib/db";
+import { assertDisposableLoadDatabase } from "../src/lib/load-safety";
 
 if (process.env.LOAD_SEED_CONFIRM !== "foodgood-load-only") throw new Error("Set LOAD_SEED_CONFIRM=foodgood-load-only and use only a disposable staging database");
+assertDisposableLoadDatabase(process.env.DATABASE_URL);
 const sessionSecret = process.env.SESSION_SECRET;
 if (!sessionSecret) throw new Error("SESSION_SECRET is required to create isolated load-test sessions");
 

@@ -27,12 +27,13 @@ model User {
   sessionVersion                 Int       @default(0)
   createdAt                      DateTime  @default(now())
 
-  venues        Venue[]
-  orders        Order[]
-  auditLogs     AuditLog[]
-  notifications Notification[]
-  favorites     Favorite[]
-  reviews       Review[]
+  venues             Venue[]
+  orders             Order[]
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+  favorites          Favorite[]
+  reviews            Review[]
+  supportAssignments Order[]        @relation("OrderSupportOwner")
 
   @@index([role, communicationsConsent])
 }
@@ -141,26 +142,31 @@ model Bag {
 }
 
 model Order {
-  id                  String    @id @default(cuid())
-  bagId               String
-  userId              String
-  quantity            Int       @default(1)
-  totalPrice          Int // KZT
-  clientSource        String    @default("direct") // first-touch source captured at checkout
-  status              String    @default("RESERVED") // RESERVED | READY_FOR_PICKUP | COMPLETED | CANCELLED | EXPIRED
-  pickupCode          String    @unique
-  createdAt           DateTime  @default(now())
-  completedAt         DateTime?
-  supportStatus       String    @default("NONE") // NONE | OPEN | RESOLVED
-  supportCategory     String? // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | OTHER
-  supportNote         String    @default("")
-  supportOpenedAt     DateTime?
-  supportResolvedAt   DateTime?
-  supportResolution   String    @default("")
-  idempotencyRecordId String?   @unique
+  id                       String    @id @default(cuid())
+  bagId                    String
+  userId                   String
+  quantity                 Int       @default(1)
+  totalPrice               Int // KZT
+  clientSource             String    @default("direct") // first-touch source captured at checkout
+  status                   String    @default("RESERVED") // RESERVED | READY_FOR_PICKUP | COMPLETED | CANCELLED | EXPIRED
+  pickupCode               String    @unique
+  createdAt                DateTime  @default(now())
+  completedAt              DateTime?
+  supportStatus            String    @default("NONE") // NONE | OPEN | RESOLVED
+  supportCategory          String? // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | OTHER
+  supportNote              String    @default("")
+  supportOpenedAt          DateTime?
+  supportOwnerId           String?
+  supportFirstContactAt    DateTime?
+  supportVenueResponse     String    @default("")
+  supportCustomerConfirmed Boolean?
+  supportResolvedAt        DateTime?
+  supportResolution        String    @default("")
+  idempotencyRecordId      String?   @unique
 
   bag               Bag                  @relation(fields: [bagId], references: [id])
   user              User                 @relation(fields: [userId], references: [id])
+  supportOwner      User?                @relation("OrderSupportOwner", fields: [supportOwnerId], references: [id], onDelete: SetNull)
   review            Review?
   idempotencyRecord OrderIdempotencyKey? @relation(fields: [idempotencyRecordId], references: [id], onDelete: SetNull)
 
@@ -169,6 +175,7 @@ model Order {
   @@index([bagId, status])
   @@index([createdAt])
   @@index([supportStatus, supportOpenedAt])
+  @@index([supportOwnerId, supportStatus])
 }
 
 /// Append-only product analytics used by the internal funnel dashboard.
@@ -267,7 +274,7 @@ model Favorite {
 }
 
 /// Durable batch work created by short HTTP transactions and consumed by
-/// independently scalable notification/refund workers.
+/// independently scalable notification workers.
 model BatchJob {
   id               String    @id @default(cuid())
   queue            String

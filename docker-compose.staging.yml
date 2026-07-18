@@ -13,7 +13,12 @@ x-app-environment: &app-environment
   OTP_SECRET: "${STAGING_OTP_SECRET:?run node ops/staging/create-env.mjs}"
   METRICS_SECRET: "${STAGING_METRICS_SECRET:?run node ops/staging/create-env.mjs}"
   APP_BASE_URL: "http://localhost:${STAGING_PORT:-3000}"
-  FOODGOOD_DISABLE_DEV_OTP: "true"
+  # The demo OTP is enabled only by the triple guard in src/lib/auth.ts:
+  # explicit demo flag, local-rehearsal marker, and a localhost app URL.
+  FOODGOOD_E2E_DEV_OTP: "true"
+  FOODGOOD_LOCAL_REHEARSAL: "true"
+  FOODGOOD_DISABLE_DEV_OTP: "false"
+  PILOT_INVITE_CODE_HASH: "${STAGING_PILOT_INVITE_CODE_HASH:?run node ops/staging/create-env.mjs}"
   TELEGRAM_AUTH_ENABLED: "false"
   TELEGRAM_NOTIFICATIONS_ENABLED: "false"
   TELEGRAM_OTP_ENABLED: "false"

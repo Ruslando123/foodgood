@@ -10,15 +10,35 @@ const SESSION_TTL_DAYS = 30;
 // проверки системного контакта пользователя.
 export const DEV_OTP_CODE = "0000";
 
+export function isLocalAppBaseUrl(value = process.env.APP_BASE_URL): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:")
+      && (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Production can expose the deterministic demo OTP only inside the isolated
+ * local rehearsal. Each switch is required so copying one staging variable to
+ * an externally reachable deployment cannot enable the fallback.
+ */
+export function isLocalRehearsalDevOtpEnabled(): boolean {
+  return process.env.FOODGOOD_E2E_DEV_OTP === "true"
+    && process.env.FOODGOOD_LOCAL_REHEARSAL === "true"
+    && isLocalAppBaseUrl();
+}
+
 /**
  * Заглушка допустима только локально или в тестовом окружении. В production
  * телефонный вход должен быть подключён к Telegram OTP: иначе любой, кто
  * знает номер, получает доступ к аккаунту.
  */
 export function isDevOtpEnabled(): boolean {
-  const localProductionE2e = process.env.FOODGOOD_E2E_DEV_OTP === "true"
-    && /(?:localhost|127\.0\.0\.1):\d+/.test(process.env.DATABASE_URL ?? "");
-  return (process.env.NODE_ENV !== "production" || localProductionE2e)
+  return (process.env.NODE_ENV !== "production" || isLocalRehearsalDevOtpEnabled())
     && process.env.FOODGOOD_DISABLE_DEV_OTP !== "true";
 }
 

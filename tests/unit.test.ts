@@ -6,7 +6,7 @@ import path from "path";
 import sharp from "sharp";
 import { haversineKm, formatDistance } from "@/lib/geo";
 import { generatePickupCode } from "@/lib/qr";
-import { isDevOtpEnabled, normalizePhone } from "@/lib/auth";
+import { isDevOtpEnabled, isLocalAppBaseUrl, normalizePhone } from "@/lib/auth";
 import { sendTelegramBotMessage, verifyTelegramInitData } from "@/lib/telegram";
 import { pluralRu } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
@@ -21,6 +21,7 @@ import { zonedDayBounds } from "@/lib/timezone";
 import { otpSecretValue, sessionSecretValue } from "@/lib/secrets";
 import { isPilotInviteRequired, isValidPilotInviteCode } from "@/lib/pilot-invite";
 import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
+import { assertDisposableLoadDatabase } from "@/lib/load-safety";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -82,13 +83,59 @@ describe("normalizePhone (номера Казахстана)", () => {
 });
 
 describe("dev OTP", () => {
-  it("никогда не включается в production", () => {
+  it("не включается в production без тройной защиты локальной репетиции", () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("FOODGOOD_E2E_DEV_OTP", "true");
+    vi.stubEnv("FOODGOOD_LOCAL_REHEARSAL", "true");
+    vi.stubEnv("APP_BASE_URL", "https://pilot.foodgood.example");
     try {
       expect(isDevOtpEnabled()).toBe(false);
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("включается в production только для явно отмеченной localhost-репетиции", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("FOODGOOD_E2E_DEV_OTP", "true");
+    vi.stubEnv("FOODGOOD_LOCAL_REHEARSAL", "true");
+    vi.stubEnv("APP_BASE_URL", "http://127.0.0.1:3000");
+    try {
+      expect(isLocalAppBaseUrl()).toBe(true);
+      expect(isDevOtpEnabled()).toBe(true);
+      vi.stubEnv("FOODGOOD_DISABLE_DEV_OTP", "true");
+      expect(isDevOtpEnabled()).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("сохраняет demo OTP для test-окружения", () => {
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("FOODGOOD_DISABLE_DEV_OTP", "false");
+    try {
+      expect(isDevOtpEnabled()).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("load seed safety", () => {
+  it.each([
+    "postgresql://foodgood:secret@localhost:55439/foodgood_test?schema=public",
+    "postgresql://foodgood:secret@127.0.0.1:5432/foodgood_staging?schema=public",
+    "postgresql://foodgood:secret@postgres:5432/foodgood_staging?schema=public",
+  ])("разрешает одноразовую БД %s", (databaseUrl) => {
+    expect(() => assertDisposableLoadDatabase(databaseUrl)).not.toThrow();
+  });
+
+  it.each([
+    "postgresql://foodgood:secret@db.example.com:5432/foodgood_staging",
+    "postgresql://foodgood:secret@localhost:5432/foodgood",
+    "mysql://foodgood:secret@localhost:3306/foodgood_test",
+  ])("отклоняет небезопасную БД %s", (databaseUrl) => {
+    expect(() => assertDisposableLoadDatabase(databaseUrl)).toThrow();
   });
 });
 

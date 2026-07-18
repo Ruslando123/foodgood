@@ -26,6 +26,8 @@ export default defineConfig({
         SESSION_SECRET: "e2e-session-secret-at-least-32-bytes-long",
         OTP_SECRET: "e2e-otp-secret-at-least-32-bytes-long",
         FOODGOOD_E2E_DEV_OTP: "true",
+        FOODGOOD_LOCAL_REHEARSAL: "true",
+        APP_BASE_URL: "http://localhost:3100",
         PILOT_INVITE_CODE_HASH: "052067a5a994e8cac137bc3b2d15283e55222fff49198be65d0eb3005c5c1f92",
         TELEGRAM_AUTH_ENABLED: "true",
         TELEGRAM_BOT_TOKEN: "12345:E2E_TEST_TOKEN",
