@@ -1,23 +1,19 @@
+import { createServer } from "node:http";
 import { prisma } from "../src/lib/db";
 import { runBatchJobs } from "../src/lib/jobs";
-import { dispatchOutbox } from "../src/lib/outbox";
-import { expireStale, reconcilePendingPayments, reconcileSettledPayments } from "../src/lib/orders";
+import { expireStale } from "../src/lib/orders";
 import { pruneExpiredOrderIdempotencyKeys } from "../src/modules/orders/idempotency";
 import { pruneExpiredRateLimits } from "../src/shared/server/rate-limit";
 import { logEvent } from "../src/lib/monitoring";
-import { workerRuns } from "../src/lib/metrics";
-import { metricsRegistry, workerBatchSize, workerDuration } from "../src/lib/metrics";
-import { createServer } from "node:http";
-import { flushMockPaymentFaultStats } from "../src/lib/mock-payment-fault";
+import { metricsRegistry, workerBatchSize, workerDuration, workerRuns } from "../src/lib/metrics";
 
-type WorkerName = "payments" | "expiry" | "notifications" | "outbox";
+type WorkerName = "expiry" | "notifications";
 const name = process.argv[2] as WorkerName;
-if (!["payments", "expiry", "notifications", "outbox"].includes(name)) {
-  throw new Error("Usage: tsx scripts/worker.ts payments|expiry|notifications|outbox");
+if (!["expiry", "notifications"].includes(name)) {
+  throw new Error("Usage: tsx scripts/worker.ts expiry|notifications");
 }
 
 let stopping = false;
-let lastSettlementReconciliationAt = 0;
 process.on("SIGTERM", () => { stopping = true; });
 process.on("SIGINT", () => { stopping = true; });
 
@@ -37,38 +33,23 @@ metricsServer?.listen(metricsPort!);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function tick() {
-  if (name === "payments") {
-    const refunds = await runBatchJobs("refunds");
-    const payments = await reconcilePendingPayments(100);
-    let reconciliationChecked = 0;
-    let reconciliationMismatches = 0;
-    if (Date.now() - lastSettlementReconciliationAt >= 15 * 60_000) {
-      const reconciliation = await reconcileSettledPayments(50);
-      reconciliationChecked = reconciliation.checked;
-      reconciliationMismatches = reconciliation.mismatches;
-      lastSettlementReconciliationAt = Date.now();
-    }
-    return { refunds, payments, reconciliationChecked, reconciliationMismatches };
-  }
   if (name === "expiry") {
     const expired = await expireStale(500);
     const idempotency = await pruneExpiredOrderIdempotencyKeys(500);
-    const rateLimits = process.env.REDIS_URL ? 0 : await pruneExpiredRateLimits().then(() => 1);
+    const rateLimits = process.env.REDIS_URL ? 0 : await pruneExpiredRateLimits();
     return { expired, idempotency, rateLimits };
   }
-  if (name === "notifications") {
-    const fanout = await runBatchJobs("notifications");
-    return { fanout };
-  }
-  return { dispatched: await dispatchOutbox(100) };
+  return { fanout: await runBatchJobs("notifications") };
 }
 
 async function main() {
   logEvent("info", "worker.started", { worker: name });
   do {
     const startedAt = performance.now();
+    let hadWork = false;
     try {
       const result = await tick();
+      hadWork = Object.values(result).some(Boolean);
       await prisma.systemState.upsert({
         where: { key: `worker:${name}` },
         update: { valueJson: JSON.stringify({ status: "ok", ...result, finishedAt: new Date().toISOString() }) },
@@ -76,30 +57,19 @@ async function main() {
       });
       workerRuns.inc({ worker: name, result: "ok" });
       workerDuration.observe({ worker: name, result: "ok" }, (performance.now() - startedAt) / 1000);
-      workerBatchSize.observe({ worker: name }, Object.values(result).reduce((sum, value) => sum + (typeof value === "number" ? value : 0), 0));
-      if (Object.values(result).some(Boolean)) logEvent("info", "worker.batch", { worker: name, ...result });
+      workerBatchSize.observe({ worker: name }, Object.values(result).reduce((sum, value) => sum + value, 0));
+      if (hadWork) logEvent("info", "worker.batch", { worker: name, ...result });
     } catch (error) {
       workerRuns.inc({ worker: name, result: "failed" });
       workerDuration.observe({ worker: name, result: "failed" }, (performance.now() - startedAt) / 1000);
       logEvent("error", "worker.failed", { worker: name }, error);
       await delay(5_000);
     }
-    if (name === "payments") {
-      try {
-        await flushMockPaymentFaultStats();
-      } catch (error) {
-        logEvent("error", "worker.fault_stats_flush_failed", { worker: name }, error);
-      }
-    }
-    if (!process.env.WORKER_ONCE && !stopping) await delay(1_000);
+    if (!process.env.WORKER_ONCE && !stopping && !hadWork) await delay(1_000);
   } while (!process.env.WORKER_ONCE && !stopping);
 }
 
 main().finally(async () => {
   metricsServer?.close();
-  try {
-    if (name === "payments") await flushMockPaymentFaultStats(true);
-  } finally {
-    await prisma.$disconnect();
-  }
+  await prisma.$disconnect();
 });

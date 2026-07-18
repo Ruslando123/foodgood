@@ -1,7 +1,7 @@
 import { ApiError } from "@/shared/server/api";
 import { prisma } from "@/lib/db";
 import { redisReady } from "@/lib/redis";
-import { rateLimitFallback } from "@/lib/metrics";
+import { rateLimitFallback, rateLimitFallbackByReason, redisAvailable } from "@/lib/metrics";
 
 const RATE_LIMIT_SCRIPT = `
 local count = redis.call('INCR', KEYS[1])
@@ -27,6 +27,7 @@ export async function consumeRateLimit(
       const result = await redis.eval(RATE_LIMIT_SCRIPT, 1, redisKey, options.windowMs) as [number, number];
       const count = Number(result[0]);
       const ttl = Number(result[1]);
+      redisAvailable.set(1);
       if (count > options.limit) {
         throw new ApiError(429, "RATE_LIMITED", "Слишком много попыток. Попробуйте позже", {
           retryAfterSeconds: Math.max(1, Math.ceil(ttl / 1000)),
@@ -35,8 +36,13 @@ export async function consumeRateLimit(
       return;
     } catch (error) {
       if (error instanceof ApiError) throw error;
+      redisAvailable.set(0);
+      rateLimitFallbackByReason.inc({ reason: "command_error" });
       // PostgreSQL is the safe fallback during a Redis outage.
     }
+  } else {
+    rateLimitFallbackByReason.inc({ reason: process.env.REDIS_URL ? "unavailable" : "not_configured" });
+    if (process.env.REDIS_URL) redisAvailable.set(0);
   }
   rateLimitFallback.inc();
   const now = new Date();
@@ -64,8 +70,9 @@ export async function consumeRateLimit(
   }
 }
 
-export async function pruneExpiredRateLimits(): Promise<void> {
-  await prisma.rateLimitBucket.deleteMany({
+export async function pruneExpiredRateLimits(): Promise<number> {
+  const result = await prisma.rateLimitBucket.deleteMany({
     where: { resetAt: { lt: new Date(Date.now() - 24 * 60 * 60_000) } },
   });
+  return result.count;
 }

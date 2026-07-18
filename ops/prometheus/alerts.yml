@@ -7,51 +7,76 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: FoodGood web is unreachable
-          runbook: docs/PRODUCTION_RUNBOOK.md#web-or-database-down
+          runbook: docs/PRODUCTION_RUNBOOK.md#web-instance-or-database-down
 
+      - alert: FoodGoodWebReplicaMissing
+        expr: count(up{job="foodgood-web"} == 1) < 2
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Fewer than two FoodGood web replicas are being scraped
+          runbook: docs/PRODUCTION_RUNBOOK.md#one-web-instance-down
+
+      - alert: FoodGoodReadinessFailed
+        expr: probe_success{job="foodgood-ready"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Load-balanced readiness probe is failing
+          runbook: docs/PRODUCTION_RUNBOOK.md#web-instance-or-database-down
+
+      - alert: FoodGoodHighServerErrorRate
+        expr: >-
+          sum(rate(foodgood_http_request_duration_seconds_count{status=~"5.."}[5m]))
+          / sum(rate(foodgood_http_request_duration_seconds_count[5m])) > 0.02
+          and sum(rate(foodgood_http_request_duration_seconds_count[5m])) > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: FoodGood HTTP 5xx rate is above 2%
+          runbook: docs/PRODUCTION_RUNBOOK.md#web-instance-or-database-down
+
+  - name: foodgood-latency
+    rules:
+      - alert: FoodGoodApiP95High
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le, route, method) (rate(foodgood_http_request_duration_seconds_bucket[5m]))) > 0.75
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "FoodGood API p95 exceeds 750ms for {{ $labels.method }} {{ $labels.route }}"
+          runbook: docs/PRODUCTION_RUNBOOK.md#latency-or-capacity-regression
+
+      - alert: FoodGoodApiP99High
+        expr: >-
+          histogram_quantile(0.99,
+            sum by (le, route, method) (rate(foodgood_http_request_duration_seconds_bucket[5m]))) > 1.5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "FoodGood API p99 exceeds 1.5s for {{ $labels.method }} {{ $labels.route }}"
+          runbook: docs/PRODUCTION_RUNBOOK.md#latency-or-capacity-regression
+
+      - alert: FoodGoodDatabaseQueryP95High
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le, operation) (rate(foodgood_prisma_query_duration_seconds_bucket[5m]))) > 0.3
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "PostgreSQL query p95 exceeds 300ms for {{ $labels.operation }}"
+          runbook: docs/PRODUCTION_RUNBOOK.md#latency-or-capacity-regression
+
+  - name: foodgood-workers
+    rules:
       - alert: FoodGoodWorkerHeartbeatMissing
         expr: time() - foodgood_worker_last_heartbeat_seconds > 120
         for: 2m
         labels: { severity: critical }
         annotations:
           summary: "FoodGood worker {{ $labels.worker }} heartbeat is stale"
-          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-missing
-
-      - alert: FoodGoodHighServerErrorRate
-        expr: >-
-          sum(rate(foodgood_http_request_duration_seconds_count{status=~"5.."}[5m]))
-          / clamp_min(sum(rate(foodgood_http_request_duration_seconds_count[5m])), 1) > 0.02
-        for: 5m
-        labels: { severity: critical }
-        annotations:
-          summary: FoodGood HTTP 5xx rate is above 2%
-          runbook: docs/PRODUCTION_RUNBOOK.md#web-or-database-down
-
-  - name: foodgood-payments
-    rules:
-      - alert: FoodGoodPaymentNeedsReview
-        expr: foodgood_payment_needs_review > 0
-        for: 1m
-        labels: { severity: critical }
-        annotations:
-          summary: A payment operation requires manual review
-          runbook: docs/PRODUCTION_RUNBOOK.md#payment-needs-review
-
-      - alert: FoodGoodPaymentReconciliationMismatch
-        expr: foodgood_payment_reconciliation_mismatches > 0
-        for: 1m
-        labels: { severity: critical }
-        annotations:
-          summary: Freedom Pay and the FoodGood ledger disagree
-          runbook: docs/PRODUCTION_RUNBOOK.md#reconciliation-mismatch
-
-      - alert: FoodGoodPaymentFailures
-        expr: foodgood_payment_failures_recent > 0
-        for: 5m
-        labels: { severity: warning }
-        annotations:
-          summary: Payment operations are failing repeatedly
-          runbook: docs/PRODUCTION_RUNBOOK.md#payment-needs-review
+          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-or-queue-failure
 
       - alert: FoodGoodQueueLag
         expr: foodgood_queue_lag_seconds > 300
@@ -59,7 +84,15 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "FoodGood queue {{ $labels.queue }} is more than 5 minutes behind"
-          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-missing
+          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-or-queue-failure
+
+      - alert: FoodGoodQueueFailedJobs
+        expr: foodgood_queue_failed_jobs > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "FoodGood queue {{ $labels.queue }} has terminally failed jobs"
+          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-or-queue-failure
 
       - alert: FoodGoodExpiredWorkerLease
         expr: foodgood_queue_expired_leases > 0
@@ -67,17 +100,14 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "FoodGood queue {{ $labels.queue }} has expired leases"
-          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-missing
+          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-or-queue-failure
 
-      - alert: FoodGoodIntermediateOrderStuck
-        expr: >-
-          foodgood_order_status_oldest_age_seconds{status="PENDING_PAYMENT"} > 900
-          or foodgood_order_status_oldest_age_seconds{status=~"CAPTURE_PENDING|REFUND_PENDING"} > 300
-        for: 5m
+      - alert: FoodGoodWorkerFailureBurst
+        expr: increase(foodgood_worker_failure_total[10m]) > 5
         labels: { severity: warning }
         annotations:
-          summary: "An order is stuck in {{ $labels.status }}"
-          runbook: docs/PRODUCTION_RUNBOOK.md#payment-needs-review
+          summary: "FoodGood worker {{ $labels.worker }} is retrying or failing repeatedly"
+          runbook: docs/PRODUCTION_RUNBOOK.md#worker-heartbeat-or-queue-failure
 
   - name: foodgood-capacity
     rules:
@@ -87,4 +117,44 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: PostgreSQL connections are above 80%
-          runbook: docs/PRODUCTION_RUNBOOK.md#web-or-database-down
+          runbook: docs/PRODUCTION_RUNBOOK.md#latency-or-capacity-regression
+
+      - alert: FoodGoodPgBouncerClientsWaiting
+        expr: pgbouncer_pools_client_waiting_connections{job="pgbouncer"} > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: PgBouncer has clients waiting for a server connection
+          runbook: docs/PRODUCTION_RUNBOOK.md#latency-or-capacity-regression
+
+      - alert: FoodGoodRedisUnavailable
+        expr: foodgood_redis_configured == 1 and foodgood_redis_available == 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: Redis is unavailable; rate limiting is using PostgreSQL
+          runbook: docs/PRODUCTION_RUNBOOK.md#redis-unavailable
+
+      - alert: FoodGoodRedisNotConfigured
+        expr: foodgood_redis_configured == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Redis is not configured on a FoodGood production process
+          runbook: docs/PRODUCTION_RUNBOOK.md#redis-unavailable
+
+      - alert: FoodGoodRedisFallback
+        expr: increase(foodgood_rate_limit_fallback_reason_total{reason=~"not_configured|unavailable|command_error"}[5m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: Redis rate limiting fell back to PostgreSQL
+          runbook: docs/PRODUCTION_RUNBOOK.md#redis-unavailable
+
+  - name: foodgood-staging-load
+    rules:
+      - alert: FoodGoodK6DroppedIterations
+        expr: increase(k6_dropped_iterations_total[5m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: The staging load generator dropped iterations
+          runbook: docs/PRODUCTION_RUNBOOK.md#staging-release-gates

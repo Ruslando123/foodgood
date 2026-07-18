@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { checkVenuePhotoStorage } from "@/lib/venue-photos";
 import { json } from "@/shared/server/api";
-import { getPaymentMode } from "@/lib/payment-mode";
+import { checkRedisHealth } from "@/lib/redis";
 
 type DeepPayload = Record<string, unknown>;
 const globalHealth = globalThis as unknown as { deepHealth?: { expiresAt: number; payload: DeepPayload } };
@@ -13,40 +13,29 @@ export async function GET() {
   const checkedAt = new Date();
   try {
     await prisma.$queryRaw`SELECT 1`;
-    const [workers, paymentNeedsReview, overduePayments, failedOutbox, overdueOutbox, failedJobs, overdueJobs, storage] = await Promise.all([
-      prisma.systemState.findMany({ where: { key: { in: ["worker:payments", "worker:expiry", "worker:notifications", "worker:outbox"] } } }),
-      prisma.paymentOperation.count({ where: { status: "NEEDS_REVIEW" } }),
-      prisma.paymentOperation.count({ where: { status: { in: ["PENDING", "RETRY", "PROCESSING", "WAITING_PROVIDER"] }, nextAttemptAt: { lt: new Date(checkedAt.getTime() - 5 * 60_000) } } }),
-      prisma.outboxMessage.count({ where: { status: "FAILED" } }),
-      prisma.outboxMessage.count({ where: { status: { in: ["PENDING", "RETRY", "PROCESSING"] }, nextAttemptAt: { lt: new Date(checkedAt.getTime() - 5 * 60_000) } } }),
+    const [workers, failedJobs, overdueJobs, storage, redis] = await Promise.all([
+      prisma.systemState.findMany({ where: { key: { in: ["worker:expiry", "worker:notifications"] } } }),
       prisma.batchJob.count({ where: { status: "FAILED" } }),
       prisma.batchJob.count({ where: { status: { in: ["PENDING", "RETRY", "PROCESSING"] }, nextAttemptAt: { lt: new Date(checkedAt.getTime() - 5 * 60_000) } } }),
       checkVenuePhotoStorage(),
+      checkRedisHealth(),
     ]);
     const requiredWorkers = process.env.NODE_ENV === "production";
-    const requiredWorkerNames = getPaymentMode() === "PAY_AT_PICKUP"
-      ? ["expiry", "notifications", "outbox"]
-      : ["payments", "expiry", "notifications", "outbox"];
-    const workerHealth = Object.fromEntries(["payments", "expiry", "notifications", "outbox"].map((name) => {
+    const requiredWorkerNames = ["expiry", "notifications"];
+    const workerHealth = Object.fromEntries(requiredWorkerNames.map((name) => {
       const heartbeat = workers.find((item) => item.key === `worker:${name}`);
       const payload = heartbeat ? safeJson(heartbeat.valueJson) : null;
       const fresh = Boolean(heartbeat && checkedAt.getTime() - heartbeat.updatedAt.getTime() < 2 * 60_000 && payload?.status === "ok");
-      const required = requiredWorkers && requiredWorkerNames.includes(name);
-      return [name, fresh ? "ok" : required ? "stale" : "not-required"];
+      return [name, fresh ? "ok" : requiredWorkers ? "stale" : "not-required"];
     }));
     const workersFresh = requiredWorkerNames.every((name) => workerHealth[name] === "ok");
-    const degraded = !storage || (requiredWorkers && !workersFresh) || paymentNeedsReview > 0 || overduePayments > 0 || failedOutbox > 0 || overdueOutbox > 0 || failedJobs > 0 || overdueJobs > 0;
+    const redisRequired = process.env.NODE_ENV === "production" || process.env.REDIS_REQUIRED === "true";
+    const redisDegraded = redis === "unavailable" || (redisRequired && redis !== "ok");
+    const degraded = !storage || redisDegraded || (requiredWorkers && !workersFresh) || failedJobs > 0 || overdueJobs > 0;
     const payload: DeepPayload = {
       status: degraded ? "degraded" : "ok",
       checkedAt: checkedAt.toISOString(),
-      checks: {
-        database: "ok",
-        storage: storage ? "ok" : "degraded",
-        workers: workerHealth,
-        payments: { needsReview: paymentNeedsReview, overdue: overduePayments },
-        outbox: { failed: failedOutbox, overdue: overdueOutbox },
-        batchJobs: { failed: failedJobs, overdue: overdueJobs },
-      },
+      checks: { database: "ok", redis, storage: storage ? "ok" : "degraded", workers: workerHealth, batchJobs: { failed: failedJobs, overdue: overdueJobs } },
     };
     globalHealth.deepHealth = { expiresAt: Date.now() + 20_000, payload };
     return json(payload, { headers: { "X-Health-Cache": "MISS" } });

@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireMerchant } from "@/modules/auth/server";
-import { cancelBagWithRefunds, throwOrderApiError } from "@/modules/orders";
+import { cancelBag, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 /**
- * Уменьшение остатка или снятие пакета с продажи (с возвратом денег покупателям).
+ * Уменьшение остатка или снятие пакета с продажи с отменой активных броней.
  * Увеличение не разрешено: иначе можно повторно выставить уже зарезервированные
  * позиции и продать больше, чем было опубликовано.
  */
@@ -60,7 +60,7 @@ export async function PATCH(
 
     if (body.status === "CANCELLED") {
       try {
-        const bag = await cancelBagWithRefunds(user.id, id);
+      const bag = await cancelBag(user.id, id);
         return json({ bag });
       } catch (error) {
         throwOrderApiError(error);
@@ -88,7 +88,7 @@ export async function PATCH(
           throw new ApiError(409, "BAG_NOT_EDITABLE", "Закрытый пакет нельзя редактировать");
         }
         const reserved = await tx.order.count({
-          where: { bagId: id, status: { in: ["RESERVED", "PENDING_PAYMENT", "PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING", "COMPLETED"] } },
+          where: { bagId: id, status: { in: ["RESERVED", "READY_FOR_PICKUP", "COMPLETED"] } },
         });
         if (reserved && (price !== bag.price || pickupStart.getTime() !== bag.pickupStart.getTime() || pickupEnd.getTime() !== bag.pickupEnd.getTime())) {
           throw new ApiError(409, "BAG_HAS_ORDERS", "После первого заказа цену и время выдачи менять нельзя");

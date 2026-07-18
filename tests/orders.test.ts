@@ -1,1461 +1,426 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
-import { MockPaymentProvider, PaymentProviderError, paymentProvider } from "@/lib/payments";
 import {
-  createOrder as queueOrder,
-  cancelOrder as queueCancelOrder,
-  redeemOrder as queueRedeemOrder,
-  expireStale,
+  cancelBag,
+  cancelOrder,
+  createOrder,
   customerOrderScopeWhere,
-  cancelBagWithRefunds as queueCancelBagWithRefunds,
-  reconcilePendingPayments,
-  applyFreedomPayResult,
+  expireStale,
   markOrderReady,
   OrderError,
+  redeemOrder,
 } from "@/modules/orders";
-import { providerCall } from "@/lib/orders";
-import { PLATFORM_FEE_PCT } from "@/lib/config";
-import { dispatchOutbox } from "@/lib/outbox";
-import { consumeOtp, issueOtp } from "@/lib/otp";
-import { consumeRateLimit } from "@/shared/server/rate-limit";
-import { resetDb, createFixtures, inMinutes } from "./helpers";
-import { NextRequest } from "next/server";
-import { GET as getBags } from "@/app/api/bags/route";
-import { POST as verifyPhone } from "@/app/api/auth/verify/route";
-import { scheduleMissingPickupReminders } from "@/lib/notifications";
-import { runBatchJobs } from "@/lib/jobs";
-import { moderateReview, reconcileVenueRatings } from "@/lib/reviews";
+import {
+  customerOrderSelect,
+  merchantOrderSelect,
+  toCustomerOrderDto,
+  toMerchantOrderDto,
+} from "@/modules/api/dto";
 import { idempotentOrderRequest } from "@/modules/orders/idempotency";
-import { POST as configureMockFault, GET as getMockFault } from "@/app/api/internal/mock-payment-fault/route";
-import {
-  applyMockPaymentFault,
-  flushMockPaymentFaultStats,
-  getMockPaymentFaultStats,
-  incrementMockPaymentFaultStats,
-  mockPaymentFaultStatsAreValid,
-  setMockPaymentFault,
-} from "@/lib/mock-payment-fault";
-import { PAYMENT_PROVIDER_TIMEOUT_MS } from "@/lib/payment-config";
-import { toCustomerOrderDto, toMerchantOrderDto, toPublicVenueDto } from "@/modules/api/dto";
-import { getProductAnalyticsSnapshot, recordProductEvent } from "@/lib/product-analytics";
-import { createOrderComplaint } from "@/lib/order-support";
-import {
-  attachTelegramAfterOtp,
-  createTelegramOtpRequest,
-  processTelegramWebhook,
-  verifyTelegramWebhookSecret,
-} from "@/lib/telegram-otp";
+import { enqueueBatchJob, runBatchJobs } from "@/lib/jobs";
+import { PRIVACY_POLICY_VERSION } from "@/lib/privacy";
+import { createFixtures, inMinutes, resetDb } from "./helpers";
 
-beforeEach(resetDb);
+const qrMock = vi.hoisted(() => ({ pickupCodes: [] as string[] }));
+vi.mock("@/lib/qr", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/qr")>();
+  return {
+    ...original,
+    generatePickupCode: () => qrMock.pickupCodes.shift() ?? original.generatePickupCode(),
+  };
+});
+
+beforeEach(() => resetDb());
+
 afterEach(() => {
+  qrMock.pickupCodes.length = 0;
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
-// Most lifecycle assertions below concern the settled business result. The
-// public functions now intentionally return intermediate states, so settle
-// them through the same reconcile entrypoint a cron invocation uses.
-async function createOrder(userId: string, bagId: string, quantity: number) {
-  const order = await queueOrder(userId, bagId, quantity);
-  await reconcilePendingPayments();
-  return prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { payment: true } });
-}
+describe("бесплатная бронь", () => {
+  it("резервирует остаток без платёжных сущностей и ставит напоминание", async () => {
+    const { customer, bag } = await createFixtures({ price: 1800, quantity: 3 });
 
-async function redeemOrder(merchantId: string, pickupCode: string) {
-  const order = await queueRedeemOrder(merchantId, pickupCode);
-  await reconcilePendingPayments();
-  return prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { payment: true } });
-}
-
-async function cancelOrder(userId: string, orderId: string) {
-  const order = await queueCancelOrder(userId, orderId);
-  await reconcilePendingPayments();
-  return prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { payment: true } });
-}
-
-async function cancelBagWithRefunds(merchantId: string, bagId: string) {
-  const bag = await queueCancelBagWithRefunds(merchantId, bagId);
-  await runBatchJobs("refunds");
-  await reconcilePendingPayments();
-  return bag;
-}
-
-describe("OTP через Telegram", () => {
-  it("проверяет системный контакт, отправляет код и привязывает Telegram к номеру", async () => {
-    vi.stubEnv("TELEGRAM_OTP_ENABLED", "true");
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "123456:test-token");
-    vi.stubEnv("TELEGRAM_BOT_USERNAME", "FoodGoodTestBot");
-    vi.stubEnv("TELEGRAM_WEBHOOK_SECRET", "telegram-webhook-secret-1234567890");
-    const telegramFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }));
-    vi.stubGlobal("fetch", telegramFetch);
-
-    const phone = "+77075550101";
-    const user = await prisma.user.create({ data: { phone, role: "CUSTOMER" } });
-    const handoff = await createTelegramOtpRequest(phone);
-    const start = new URL(handoff.telegramUrl).searchParams.get("start");
-    expect(start).toMatch(/^login_[A-Za-z0-9_-]+$/);
-    expect(verifyTelegramWebhookSecret("telegram-webhook-secret-1234567890")).toBe(true);
-
-    await processTelegramWebhook({
-      update_id: 1,
-      message: { text: `/start ${start}`, chat: { id: 4242, type: "private" }, from: { id: 4242 } },
-    });
-    await processTelegramWebhook({
-      update_id: 2,
-      message: {
-        chat: { id: 4242, type: "private" },
-        from: { id: 4242 },
-        contact: { phone_number: phone, user_id: 4242 },
-      },
-    });
-
-    const request = await prisma.telegramLoginRequest.findFirstOrThrow({ where: { phone } });
-    expect(request).toMatchObject({ telegramId: "4242", status: "CODE_SENT" });
-    const botPayloads = telegramFetch.mock.calls.map((call) => JSON.parse(String(call[1]?.body)) as Record<string, unknown>);
-    expect(botPayloads.some((payload) => JSON.stringify(payload).includes("request_contact"))).toBe(true);
-    expect(botPayloads.some((payload) => String(payload.text).includes("0000"))).toBe(true);
-
-    await consumeOtp(phone, "0000");
-    await attachTelegramAfterOtp(phone, user.id);
-    await expect(prisma.user.findUniqueOrThrow({ where: { id: user.id } })).resolves.toMatchObject({ telegramId: "4242" });
-    await expect(prisma.telegramLoginRequest.findUniqueOrThrow({ where: { id: request.id } })).resolves.toMatchObject({ status: "CONSUMED" });
-  });
-});
-
-describe("контроль качества", () => {
-  it("доставляет тестовую жалобу администратору и сохраняет связь с заказом", async () => {
-    const { customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-
-    await createOrderComplaint({
-      userId: customer.id,
-      orderId: order.id,
-      category: "VENUE_CLOSED",
-      note: "На двери закрыто, внутри никого нет",
-    });
-
-    const adminQueue = await prisma.order.findMany({
-      where: { supportStatus: "OPEN" },
-      include: { bag: { include: { venue: true } }, user: true },
-      orderBy: { supportOpenedAt: "asc" },
-    });
-
-    expect(adminQueue).toHaveLength(1);
-    expect(adminQueue[0]).toMatchObject({
-      id: order.id,
-      bagId: bag.id,
-      userId: customer.id,
-      supportCategory: "VENUE_CLOSED",
-      supportNote: "На двери закрыто, внутри никого нет",
-      supportStatus: "OPEN",
-      supportOpenedAt: expect.any(Date),
-    });
-    await expect(prisma.productEvent.findFirst({
-      where: { name: "complaint_created", orderId: order.id },
-    })).resolves.toMatchObject({ bagId: bag.id, userId: customer.id });
-  });
-});
-
-describe("продуктовая аналитика", () => {
-  it("показывает тестовый заказ на всех этапах воронки и в бизнес-метриках", async () => {
-    const { merchant, customer, venue, bag } = await createFixtures({ price: 1500, quantity: 5 });
-    const source = "campaign:day-1-test";
-
-    await recordProductEvent(prisma, {
-      name: "partner_offer_created",
-      userId: merchant.id,
-      venueId: venue.id,
-      bagId: bag.id,
-      amount: bag.price,
-      quantity: bag.quantityTotal,
-      clientSource: source,
-      dedupeKey: `test:published:${bag.id}`,
-    });
-    await recordProductEvent(prisma, {
-      name: "offer_view",
-      userId: customer.id,
-      anonymousId: "test-session",
-      venueId: venue.id,
-      bagId: bag.id,
-      amount: bag.price,
-      clientSource: source,
-      dedupeKey: `test:view:${bag.id}`,
-    });
-    await recordProductEvent(prisma, {
-      name: "reserve_started",
-      userId: customer.id,
-      anonymousId: "test-session",
-      venueId: venue.id,
-      bagId: bag.id,
-      amount: bag.price * 2,
-      quantity: 2,
-      clientSource: source,
-      dedupeKey: `test:reserve:${bag.id}`,
-    });
-
-    const queued = await queueOrder(customer.id, bag.id, 2, undefined, undefined, source);
-    await reconcilePendingPayments();
-    const paid = await prisma.order.findUniqueOrThrow({ where: { id: queued.id } });
-    await recordProductEvent(prisma, {
-      name: "pickup_code_opened",
-      userId: customer.id,
-      anonymousId: "test-session",
-      venueId: venue.id,
-      bagId: bag.id,
-      orderId: paid.id,
-      amount: paid.totalPrice,
-      platformFee: paid.platformFee,
-      quantity: paid.quantity,
-      clientSource: source,
-      dedupeKey: `test:pickup:${paid.id}`,
-    });
-    await redeemOrder(merchant.id, paid.pickupCode);
-
-    const cancellableQueued = await queueOrder(customer.id, bag.id, 1, undefined, undefined, source);
-    await reconcilePendingPayments();
-    const cancellable = await prisma.order.findUniqueOrThrow({ where: { id: cancellableQueued.id }, include: { payment: true } });
-    await cancelOrder(customer.id, cancellable.id);
-
-    await recordProductEvent(prisma, {
-      name: "complaint_created",
-      userId: customer.id,
-      venueId: venue.id,
-      bagId: bag.id,
-      orderId: paid.id,
-      amount: paid.totalPrice,
-      platformFee: paid.platformFee,
-      quantity: paid.quantity,
-      clientSource: source,
-    });
-
-    const snapshot = await getProductAnalyticsSnapshot();
-    expect(snapshot.stages.partner_offer_created).toMatchObject({ uniqueCount: 1, quantity: 5 });
-    expect(snapshot.stages.offer_view.uniqueCount).toBe(1);
-    expect(snapshot.stages.reserve_started.uniqueCount).toBe(1);
-    expect(snapshot.stages.order_created).toMatchObject({ uniqueCount: 2, quantity: 3 });
-    expect(snapshot.stages.pickup_code_opened.uniqueCount).toBe(1);
-    expect(snapshot.stages.order_completed).toMatchObject({ uniqueCount: 1, quantity: 2, amount: 3000 });
-    expect(snapshot.stages.order_completed.platformFee).toBe(Math.round(3000 * PLATFORM_FEE_PCT));
-    expect(snapshot.stages.order_cancelled).toMatchObject({ uniqueCount: 1, quantity: 1 });
-    expect(snapshot.stages.complaint_created.events).toBe(1);
-    expect(snapshot.sources).toContainEqual(expect.objectContaining({ source, views: 1, orders: 2, completed: 1, gmv: 3000 }));
-  });
-});
-
-describe("каталог по городу", () => {
-  it("не показывает пакет Астаны в каталоге Алматы", async () => {
-    const { merchant, bag: almatyBag } = await createFixtures();
-    const astanaVenue = await prisma.venue.create({
-      data: { name: "Пекарня Астаны", address: "Астана", lat: 51.1694, lng: 71.4491, cityId: "astana", ownerId: merchant.id },
-    });
-    const astanaBag = await prisma.bag.create({
-      data: { venueId: astanaVenue.id, title: "Пакет Астаны", price: 1000, originalPrice: 3000, quantityTotal: 2, quantityLeft: 2, pickupStart: inMinutes(30), pickupEnd: inMinutes(120) },
-    });
-
-    const almatyResponse = await getBags(new NextRequest("http://localhost/api/bags?city=almaty"));
-    const almatyData = await almatyResponse.json();
-    expect(almatyData.bags.map((bag: { id: string }) => bag.id)).toEqual([almatyBag.id]);
-
-    const astanaResponse = await getBags(new NextRequest("http://localhost/api/bags?city=astana"));
-    const astanaData = await astanaResponse.json();
-    expect(astanaData.bags.map((bag: { id: string }) => bag.id)).toEqual([astanaBag.id]);
-  });
-
-  it("листает каталог стабильным cursor без дублей", async () => {
-    const { venue, bag } = await createFixtures();
-    await prisma.bag.createMany({
-      data: Array.from({ length: 14 }, (_, index) => ({
-        venueId: venue.id,
-        title: `Cursor ${index}`,
-        price: 1000,
-        originalPrice: 3000,
-        quantityTotal: 1,
-        quantityLeft: 1,
-        pickupStart: inMinutes(30),
-        pickupEnd: inMinutes(120),
-      })),
-    });
-    const firstResponse = await getBags(new NextRequest("http://localhost/api/bags?city=almaty&sort=price&limit=10"));
-    const first = await firstResponse.json();
-    const secondResponse = await getBags(new NextRequest(`http://localhost/api/bags?city=almaty&sort=price&limit=10&cursor=${encodeURIComponent(first.nextCursor)}`));
-    const second = await secondResponse.json();
-    const ids = [...first.bags, ...second.bags].map((item: { id: string }) => item.id);
-    expect(first.bags).toHaveLength(10);
-    expect(new Set(ids).size).toBe(15);
-    expect(ids).toContain(bag.id);
-  });
-});
-
-describe("внутренние уведомления", () => {
-  it("делает fan-out подписчикам отдельной batch job", async () => {
-    const { customer, venue, bag } = await createFixtures();
-    await prisma.favorite.create({ data: { userId: customer.id, venueId: venue.id } });
-    await prisma.batchJob.create({
-      data: { queue: "notifications", type: "FANOUT_NEW_BAG", payloadJson: JSON.stringify({ bagId: bag.id }), dedupeKey: `test-fanout:${bag.id}`, nextAttemptAt: new Date(0) },
-    });
-    await expect(runBatchJobs("notifications")).resolves.toBe(1);
-    await expect(prisma.notification.findMany({ where: { userId: customer.id, type: "NEW_FAVORITE_VENUE_BAG" } })).resolves.toHaveLength(1);
-  });
-
-  it("считает успешные страницы отдельно от failure attempts", async () => {
-    const { venue, bag } = await createFixtures();
-    const followers = await Promise.all(Array.from({ length: 3 }, (_, index) => prisma.user.create({ data: { telegramId: `batch-follower-${index}` } })));
-    await prisma.favorite.createMany({ data: followers.map((user) => ({ userId: user.id, venueId: venue.id })) });
-    const job = await prisma.batchJob.create({
-      data: { queue: "notifications", type: "FANOUT_NEW_BAG", payloadJson: JSON.stringify({ bagId: bag.id }), dedupeKey: `paged-fanout:${bag.id}`, nextAttemptAt: new Date(0) },
-    });
-    for (let page = 0; page < 4; page += 1) await runBatchJobs("notifications", 1, 1);
-    await expect(prisma.batchJob.findUniqueOrThrow({ where: { id: job.id } })).resolves.toMatchObject({
-      status: "SUCCEEDED",
-      failureAttempts: 0,
-      batchesProcessed: 4,
-    });
-  });
-
-  it("создаёт одно напоминание перед выдачей и не дублирует его", async () => {
-    const { customer, bag } = await createFixtures({ pickupStart: inMinutes(30), pickupEnd: inMinutes(90) });
-    const order = await createOrder(customer.id, bag.id, 1);
-    expect(order.status).toBe("PAID");
-    await expect(runBatchJobs("notifications")).resolves.toBe(1);
-    await expect(runBatchJobs("notifications")).resolves.toBe(0);
-    await expect(prisma.notification.findMany({ where: { userId: customer.id, type: "PICKUP_REMINDER" } })).resolves.toHaveLength(1);
-  });
-
-  it("учитывает отключённые напоминания", async () => {
-    const { customer, bag } = await createFixtures({ pickupStart: inMinutes(30), pickupEnd: inMinutes(90) });
-    await prisma.user.update({ where: { id: customer.id }, data: { notificationReminders: false } });
-    await createOrder(customer.id, bag.id, 1);
-    await expect(runBatchJobs("notifications")).resolves.toBe(1);
-    await expect(prisma.notification.count({ where: { type: "PICKUP_REMINDER" } })).resolves.toBe(0);
-  });
-
-  it("обрабатывает больше одного пакета по 500 заказов", async () => {
-    const { customer, bag } = await createFixtures({ pickupStart: inMinutes(30), pickupEnd: inMinutes(90) });
-    await prisma.order.createMany({
-      data: Array.from({ length: 501 }, (_, index) => ({
-        bagId: bag.id,
-        userId: customer.id,
-        totalPrice: bag.price,
-        platformFee: 0,
-        status: "PAID",
-        pickupCode: `R${String(index).padStart(5, "0")}`,
-      })),
-    });
-    await expect(scheduleMissingPickupReminders()).resolves.toBe(500);
-    await expect(runBatchJobs("notifications", 500)).resolves.toBe(500);
-    await expect(scheduleMissingPickupReminders()).resolves.toBe(1);
-    await expect(runBatchJobs("notifications", 10)).resolves.toBe(1);
-    await expect(prisma.notification.count({ where: { type: "PICKUP_REMINDER" } })).resolves.toBe(501);
-  });
-});
-
-describe("createOrder", () => {
-  it("возвращает PENDING_PAYMENT до запуска worker", async () => {
-    const { customer, bag } = await createFixtures();
-    const order = await queueOrder(customer.id, bag.id, 1);
-    expect(order.status).toBe("PENDING_PAYMENT");
-    await expect(prisma.paymentOperation.findFirstOrThrow({ where: { payment: { orderId: order.id } } }))
-      .resolves.toMatchObject({ type: "HOLD", status: "PENDING" });
-  });
-  it("резервирует остаток, холдирует оплату и фиксирует комиссию", async () => {
-    const { customer, bag } = await createFixtures({ price: 1500, quantity: 5 });
-
-    const order = await createOrder(customer.id, bag.id, 2);
-
-    expect(order.status).toBe("PAID");
-    expect(order.totalPrice).toBe(3000);
-    expect(order.platformFee).toBe(Math.round(3000 * PLATFORM_FEE_PCT));
-    expect(order.pickupCode).toMatch(/^[A-Z2-9]{6}$/);
-    expect(order.payment?.status).toBe("HELD");
-    expect(order.payment?.amount).toBe(3000);
-
-    const updatedBag = await prisma.bag.findUniqueOrThrow({ where: { id: bag.id } });
-    expect(updatedBag.quantityLeft).toBe(3);
-    expect(updatedBag.status).toBe("ACTIVE");
-  });
-
-  it("помечает пакет SOLD_OUT при выкупе последнего", async () => {
-    const { customer, bag } = await createFixtures({ quantity: 2 });
-
-    await createOrder(customer.id, bag.id, 2);
-
-    const updatedBag = await prisma.bag.findUniqueOrThrow({ where: { id: bag.id } });
-    expect(updatedBag.quantityLeft).toBe(0);
-    expect(updatedBag.status).toBe("SOLD_OUT");
-  });
-
-  it("не даёт купить больше остатка (и не портит остаток)", async () => {
-    const { customer, bag } = await createFixtures({ quantity: 3 });
-
-    await expect(createOrder(customer.id, bag.id, 4)).rejects.toThrow(OrderError);
-
-    const updatedBag = await prisma.bag.findUniqueOrThrow({ where: { id: bag.id } });
-    expect(updatedBag.quantityLeft).toBe(3);
-  });
-
-  it("параллельные покупки не уводят остаток в минус", async () => {
-    const { customer, bag } = await createFixtures({ quantity: 3 });
-
-    const results = await Promise.all(
-      Array.from({ length: 5 }, () =>
-        queueOrder(customer.id, bag.id, 1).then(
-          () => "ok",
-          () => "rejected"
-        )
-      )
-    );
-
-    expect(results.filter((r) => r === "ok")).toHaveLength(3);
-    const updatedBag = await prisma.bag.findUniqueOrThrow({ where: { id: bag.id } });
-    expect(updatedBag.quantityLeft).toBe(0);
-    expect(updatedBag.status).toBe("SOLD_OUT");
-  });
-
-  it("отклоняет просроченный пакет и некорректное количество", async () => {
-    const { customer, bag } = await createFixtures({
-      pickupStart: inMinutes(-120),
-      pickupEnd: inMinutes(-60),
-    });
-
-    await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("Окно выдачи");
-    await expect(createOrder(customer.id, bag.id, 0)).rejects.toThrow("количество");
-    await expect(createOrder(customer.id, bag.id, 1.5)).rejects.toThrow("количество");
-    await expect(createOrder(customer.id, bag.id, 11)).rejects.toThrow("количество");
-  });
-
-  it("отклоняет неактивный пакет", async () => {
-    const { customer, bag } = await createFixtures({ bagStatus: "CANCELLED" });
-    await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("недоступен");
-  });
-});
-
-describe("оплата при получении", () => {
-  it("создаёт бронь без платёжной операции и комиссии платформы", async () => {
-    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
-    const { customer, bag } = await createFixtures({ price: 1500, quantity: 3 });
-
-    const order = await queueOrder(customer.id, bag.id, 2);
+    const order = await createOrder(customer.id, bag.id, 2, undefined, undefined, "telegram");
 
     expect(order).toMatchObject({
       status: "RESERVED",
-      paymentMethod: "PAY_AT_PICKUP",
-      totalPrice: 3000,
-      platformFee: 0,
-      payment: null,
+      quantity: 2,
+      totalPrice: 3600,
+      clientSource: "telegram",
     });
-    await expect(prisma.payment.count({ where: { orderId: order.id } })).resolves.toBe(0);
-    await expect(prisma.paymentOperation.count()).resolves.toBe(0);
-    await expect(prisma.batchJob.count({ where: { dedupeKey: `pickup-reminder:${order.id}` } })).resolves.toBe(1);
-    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 1 });
-  });
-
-  it("отменяет бронь без refund и один раз возвращает остаток", async () => {
-    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
-    const { customer, bag } = await createFixtures({ quantity: 1 });
-    const order = await queueOrder(customer.id, bag.id, 1);
-
-    const cancelled = await queueCancelOrder(customer.id, order.id);
-    expect(cancelled).toMatchObject({ status: "CANCELLED", paymentMethod: "PAY_AT_PICKUP", payment: null });
+    expect(order.pickupCode).toMatch(/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/);
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({
-      status: "ACTIVE",
       quantityLeft: 1,
+      status: "ACTIVE",
     });
-    await expect(queueCancelOrder(customer.id, order.id)).rejects.toThrow("нельзя отменить");
-    await expect(prisma.paymentOperation.count()).resolves.toBe(0);
+    await expect(prisma.batchJob.findUnique({
+      where: { dedupeKey: `pickup-reminder:${order.id}` },
+    })).resolves.toMatchObject({ queue: "notifications", type: "PICKUP_REMINDER" });
+    await expect(prisma.productEvent.findUnique({
+      where: { dedupeKey: `order_created:${order.id}` },
+    })).resolves.toMatchObject({ amount: 3600, quantity: 2 });
   });
 
-  it("требует подтверждение кассовой оплаты перед выдачей", async () => {
-    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await queueOrder(customer.id, bag.id, 1);
+  it("не позволяет продать последний пакет двум клиентам", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 1 });
+    const secondCustomer = await prisma.user.create({
+      data: { phone: "+77070008888", role: "CUSTOMER" },
+    });
 
-    await expect(queueRedeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("Подтвердите получение оплаты");
-    const completed = await queueRedeemOrder(merchant.id, order.pickupCode, true);
-    expect(completed).toMatchObject({ status: "COMPLETED", paymentMethod: "PAY_AT_PICKUP", payment: null });
-    expect(completed.completedAt).not.toBeNull();
+    const results = await Promise.allSettled([
+      createOrder(customer.id, bag.id, 1),
+      createOrder(secondCustomer.id, bag.id, 1),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    await expect(prisma.order.count()).resolves.toBe(1);
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({
+      quantityLeft: 0,
+      status: "SOLD_OUT",
+    });
   });
 
-  it("разрешает отметить бронь готовой и затем выдать", async () => {
-    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await queueOrder(customer.id, bag.id, 1);
-
-    await expect(markOrderReady(merchant.id, order.id)).resolves.toMatchObject({ status: "READY_FOR_PICKUP" });
-    await expect(queueRedeemOrder(merchant.id, order.pickupCode, true)).resolves.toMatchObject({ status: "COMPLETED" });
-  });
-
-  it("помечает невыкупленную бронь истёкшей без возврата", async () => {
-    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
-    const { customer, bag } = await createFixtures();
-    const order = await queueOrder(customer.id, bag.id, 1);
+  it("не резервирует пакет, если окно закончилось в очереди за блокировкой", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 1 });
     await prisma.bag.update({
       where: { id: bag.id },
-      data: { pickupStart: inMinutes(-120), pickupEnd: inMinutes(-60) },
+      data: { pickupStart: new Date(Date.now() - 1_000), pickupEnd: new Date(Date.now() + 1_000) },
+    });
+    let releaseLock!: () => void;
+    let reportLocked!: () => void;
+    const locked = new Promise<void>((resolve) => { reportLocked = resolve; });
+    const release = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const blocker = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Bag" WHERE id = ${bag.id} FOR UPDATE`;
+      reportLocked();
+      await release;
     });
 
-    await expireStale();
+    await locked;
+    const reservation = createOrder(customer.id, bag.id, 1);
+    const rejected = expect(reservation).rejects.toThrow("выдачи уже закончилось");
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    releaseLock();
+    await blocker;
 
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "EXPIRED" });
-    await expect(prisma.payment.count({ where: { orderId: order.id } })).resolves.toBe(0);
-  });
-
-  it("отмена пакета закрывает брони без refund job", async () => {
-    vi.stubEnv("PAYMENT_MODE", "PAY_AT_PICKUP");
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await queueOrder(customer.id, bag.id, 1);
-
-    await queueCancelBagWithRefunds(merchant.id, bag.id);
-
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "CANCELLED" });
-    await expect(prisma.paymentOperation.count()).resolves.toBe(0);
-  });
-});
-
-describe("Freedom Pay webhook", () => {
-  it("worker паркует незавершённую оплату и reconciliation завершает её позже", async () => {
-    const { customer, bag } = await createFixtures();
-    const order = await queueOrder(customer.id, bag.id, 1);
-    const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
-    vi.spyOn(paymentProvider, "findHoldByIdempotencyKey")
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ providerRef: "fp-pending", status: "HELD" });
-    vi.spyOn(paymentProvider, "hold").mockResolvedValueOnce({ providerRef: "fp-pending", status: "PENDING" });
-
-    await reconcilePendingPayments();
-    const waiting = await prisma.paymentOperation.findUniqueOrThrow({
-      where: { paymentId_type: { paymentId: payment.id, type: "HOLD" } },
-    });
-    expect(waiting).toMatchObject({ status: "WAITING_PROVIDER" });
-    await expect(prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).resolves.toMatchObject({ providerRef: "fp-pending", status: "PENDING_HOLD" });
-
-    await prisma.paymentOperation.update({ where: { id: waiting.id }, data: { nextAttemptAt: new Date(0) } });
-    await reconcilePendingPayments();
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "PAID" });
-  });
-
-  it("идемпотентно подтверждает hold и создаёт одно напоминание", async () => {
-    const { customer, bag } = await createFixtures({ quantity: 2 });
-    const order = await queueOrder(customer.id, bag.id, 1);
-    const payment = await prisma.payment.update({
-      where: { orderId: order.id },
-      data: { provider: "freedompay", providerRef: "fp-webhook-1" },
-    });
-    const operation = await prisma.paymentOperation.findUniqueOrThrow({
-      where: { paymentId_type: { paymentId: payment.id, type: "HOLD" } },
-    });
-    const fields = {
-      pg_order_id: operation.idempotencyKey,
-      pg_payment_id: "fp-webhook-1",
-      pg_amount: String(payment.amount),
-      pg_currency: "KZT",
-      pg_result: "1",
-      pg_captured: "0",
-      pg_can_reject: "1",
-    };
-
-    await expect(applyFreedomPayResult(fields)).resolves.toMatchObject({ status: "ok" });
-    await expect(applyFreedomPayResult(fields)).resolves.toMatchObject({ status: "ok" });
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "PAID" });
-    await expect(prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).resolves.toMatchObject({ status: "HELD" });
-    await expect(prisma.paymentOperation.findUniqueOrThrow({ where: { id: operation.id } })).resolves.toMatchObject({ status: "SUCCEEDED" });
-    await expect(prisma.paymentEvent.count({ where: { operationId: operation.id } })).resolves.toBe(1);
-    await expect(prisma.batchJob.count({ where: { dedupeKey: `pickup-reminder:${order.id}` } })).resolves.toBe(1);
-  });
-
-  it("на отказе отменяет заказ и один раз возвращает остаток", async () => {
-    const { customer, bag } = await createFixtures({ quantity: 2 });
-    const order = await queueOrder(customer.id, bag.id, 1);
-    const payment = await prisma.payment.update({
-      where: { orderId: order.id },
-      data: { provider: "freedompay", providerRef: "fp-webhook-failed" },
-    });
-    const operation = await prisma.paymentOperation.findUniqueOrThrow({
-      where: { paymentId_type: { paymentId: payment.id, type: "HOLD" } },
-    });
-    const fields = {
-      pg_order_id: operation.idempotencyKey,
-      pg_payment_id: "fp-webhook-failed",
-      pg_amount: String(payment.amount),
-      pg_currency: "KZT",
-      pg_result: "0",
-      pg_captured: "0",
-      pg_can_reject: "1",
-    };
-
-    await applyFreedomPayResult(fields);
-    await applyFreedomPayResult(fields);
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "CANCELLED" });
-    await expect(prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).resolves.toMatchObject({ status: "FAILED" });
-    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 2 });
-  });
-
-  it("отклоняет подмену суммы и валюты", async () => {
-    const { customer, bag } = await createFixtures();
-    const order = await queueOrder(customer.id, bag.id, 1);
-    const payment = await prisma.payment.update({ where: { orderId: order.id }, data: { provider: "freedompay" } });
-    const operation = await prisma.paymentOperation.findUniqueOrThrow({ where: { paymentId_type: { paymentId: payment.id, type: "HOLD" } } });
-    const base = { pg_order_id: operation.idempotencyKey, pg_payment_id: "fp-tampered", pg_result: "1", pg_captured: "0" };
-    await expect(applyFreedomPayResult({ ...base, pg_amount: String(payment.amount + 1), pg_currency: "KZT" })).resolves.toMatchObject({ status: "rejected" });
-    await expect(applyFreedomPayResult({ ...base, pg_amount: String(payment.amount), pg_currency: "USD" })).resolves.toMatchObject({ status: "rejected" });
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "PENDING_PAYMENT" });
-  });
-});
-
-describe("redeemOrder (выдача по коду)", () => {
-  it("capture холда и завершение заказа", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-
-    const redeemed = await redeemOrder(merchant.id, order.pickupCode);
-
-    expect(redeemed.status).toBe("COMPLETED");
-    expect(redeemed.completedAt).not.toBeNull();
-    expect(redeemed.payment?.status).toBe("CAPTURED");
-  });
-
-  it("принимает код в нижнем регистре и с пробелами", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-
-    const redeemed = await redeemOrder(merchant.id, `  ${order.pickupCode.toLowerCase()} `);
-    expect(redeemed.status).toBe("COMPLETED");
-  });
-
-  it("не выдаёт заказ дважды", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-
-    await redeemOrder(merchant.id, order.pickupCode);
-    await expect(redeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("уже выдан");
-  });
-
-  it("повторный worker не дублирует PaymentEvent и capture outbox", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    await prisma.user.update({ where: { id: customer.id }, data: { telegramId: "42" } });
-    const order = await createOrder(customer.id, bag.id, 1);
-    const previousToken = process.env.TELEGRAM_BOT_TOKEN;
-    const previousEnabled = process.env.TELEGRAM_NOTIFICATIONS_ENABLED;
-    process.env.TELEGRAM_BOT_TOKEN = "test-token";
-    process.env.TELEGRAM_NOTIFICATIONS_ENABLED = "true";
-    await queueRedeemOrder(merchant.id, order.pickupCode);
-
-    await reconcilePendingPayments();
-    await reconcilePendingPayments();
-
-    const capture = await prisma.paymentOperation.findUniqueOrThrow({
-      where: { paymentId_type: { paymentId: order.payment!.id, type: "CAPTURE" } },
-    });
-    await expect(prisma.paymentEvent.count({ where: { operationId: capture.id } })).resolves.toBe(1);
-    await expect(prisma.outboxMessage.count({ where: { operationId: capture.id, type: "TELEGRAM_CAPTURED" } })).resolves.toBe(1);
-
-    process.env.TELEGRAM_NOTIFICATIONS_ENABLED = "false";
-    delete process.env.TELEGRAM_BOT_TOKEN;
-    try {
-      await expect(dispatchOutbox()).resolves.toBe(0);
-    } finally {
-      if (previousToken) process.env.TELEGRAM_BOT_TOKEN = previousToken;
-      else delete process.env.TELEGRAM_BOT_TOKEN;
-      if (previousEnabled) process.env.TELEGRAM_NOTIFICATIONS_ENABLED = previousEnabled;
-      else delete process.env.TELEGRAM_NOTIFICATIONS_ENABLED;
-    }
-    await expect(prisma.outboxMessage.findFirstOrThrow({ where: { operationId: capture.id } }))
-      .resolves.toMatchObject({ status: "SKIPPED" });
-  });
-
-  it("reconciliation восстанавливает capture после сбоя БД и два worker не дублируют claim", async () => {
-    const { customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
-    expect(payment.providerRef).not.toBeNull();
-    await paymentProvider.capture(payment.providerRef!, "provider-succeeded-before-db-failure");
-    await prisma.order.update({ where: { id: order.id }, data: { status: "CAPTURE_PENDING" } });
-    const operation = await prisma.paymentOperation.create({
-      data: { paymentId: payment.id, type: "CAPTURE", idempotencyKey: crypto.randomUUID(), status: "RETRY" },
-    });
-
-    await Promise.all([
-      reconcilePendingPayments(10, "worker-a"),
-      reconcilePendingPayments(10, "worker-b"),
-    ]);
-
-    await expect(prisma.paymentOperation.findUniqueOrThrow({ where: { id: operation.id } }))
-      .resolves.toMatchObject({ status: "SUCCEEDED", attempts: 0 });
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
-      .resolves.toMatchObject({ status: "COMPLETED" });
-  });
-
-  it("выдаёт разным coroutine одного процесса разные lease token", async () => {
-    const { customer, venue, bag } = await createFixtures();
-    const secondBag = await prisma.bag.create({
-      data: { venueId: venue.id, title: "Второй пакет", price: 900, originalPrice: 2700, quantityTotal: 2, quantityLeft: 2, pickupStart: inMinutes(60), pickupEnd: inMinutes(120) },
-    });
-    await queueOrder(customer.id, bag.id, 1);
-    await queueOrder(customer.id, secondBag.id, 1);
-
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    const originalHold = paymentProvider.hold.bind(paymentProvider);
-    vi.spyOn(paymentProvider, "hold").mockImplementation(async (amount, orderId, key) => {
-      await gate;
-      return originalHold(amount, orderId, key);
-    });
-
-    const processing = reconcilePendingPayments(10, "same-process");
-    let claimed: Array<{ leaseOwner: string | null }> = [];
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      claimed = await prisma.paymentOperation.findMany({ where: { status: "PROCESSING" }, select: { leaseOwner: true } });
-      if (claimed.length === 2) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(claimed).toHaveLength(2);
-    expect(new Set(claimed.map((item) => item.leaseOwner)).size).toBe(2);
-    expect(claimed.every((item) => item.leaseOwner?.startsWith("same-process:"))).toBe(true);
-    release();
-    await processing;
-  });
-
-  it("не помечает заказ выданным, если capture не подтверждён", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    vi.spyOn(paymentProvider, "capture").mockRejectedValueOnce(new Error("provider timeout"));
-
-    const queued = await redeemOrder(merchant.id, order.pickupCode);
-    expect(queued.status).toBe("CAPTURE_PENDING");
-
-    const pending = await prisma.order.findUniqueOrThrow({
-      where: { id: order.id },
-      include: { payment: true },
-    });
-    expect(pending.status).toBe("CAPTURE_PENDING");
-    expect(pending.payment?.status).toBe("HELD");
-    await prisma.paymentOperation.updateMany({
-      where: { paymentId: pending.payment!.id, type: "CAPTURE" },
-      data: { nextAttemptAt: new Date(0) },
-    });
-    await reconcilePendingPayments();
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
-      .resolves.toMatchObject({ status: "COMPLETED" });
-  });
-
-  it("чужой мерчант не может выдать заказ", async () => {
-    const { customer, bag } = await createFixtures();
-    const stranger = await prisma.user.create({
-      data: { phone: "+77010008888", role: "MERCHANT" },
-    });
-    const order = await createOrder(customer.id, bag.id, 1);
-
-    await expect(redeemOrder(stranger.id, order.pickupCode)).rejects.toThrow(
-      "другого заведения"
-    );
-  });
-
-  it("несуществующий код отклоняется", async () => {
-    const { merchant } = await createFixtures();
-    await expect(redeemOrder(merchant.id, "AAAAAA")).rejects.toThrow("не найден");
-  });
-});
-
-describe("phone OTP", () => {
-  it("выдаёт одноразовый dev-код и запрещает повторное использование", async () => {
-    const phone = "+77010001234";
-    const issued = await issueOtp(phone);
-    expect(issued).toMatchObject({ codeLength: 4, devCode: "0000" });
-    await expect(consumeOtp(phone, "0000")).resolves.toBeUndefined();
-    await expect(consumeOtp(phone, "0000")).rejects.toThrow("Неверный код");
-  });
-
-  it("считает неверные попытки", async () => {
-    const phone = "+77010005678";
-    await issueOtp(phone);
-    await expect(consumeOtp(phone, "1111")).rejects.toThrow("Неверный код");
-    await expect(prisma.otpChallenge.findFirstOrThrow({ where: { phone } }))
-      .resolves.toMatchObject({ attempts: 1, consumedAt: null });
-  });
-
-  it("учитывает максимум пять из десяти параллельных неверных попыток", async () => {
-    const phone = "+77010005679";
-    await issueOtp(phone);
-
-    const results = await Promise.allSettled(
-      Array.from({ length: 10 }, () => consumeOtp(phone, "1111"))
-    );
-
-    expect(results.every((result) => result.status === "rejected")).toBe(true);
-    await expect(prisma.otpChallenge.findFirstOrThrow({ where: { phone } })).resolves.toMatchObject({
-      attempts: 5,
-      activeKey: null,
-      consumedAt: expect.any(Date),
-    });
-  });
-
-  it("сериализует параллельные правильный и неправильный коды", async () => {
-    const phone = "+77010005680";
-    const issued = await issueOtp(phone);
-
-    const [correct, wrong] = await Promise.allSettled([
-      consumeOtp(phone, issued.devCode ?? "0000"),
-      consumeOtp(phone, "1111"),
-    ]);
-
-    expect(correct.status).toBe("fulfilled");
-    expect(wrong.status).toBe("rejected");
-    const challenge = await prisma.otpChallenge.findFirstOrThrow({ where: { phone } });
-    expect(challenge).toMatchObject({ activeKey: null, consumedAt: expect.any(Date) });
-    expect(challenge.attempts).toBeLessThanOrEqual(1);
-  });
-
-  it("сериализует параллельные запросы одного кода", async () => {
-    const phone = "+77010007890";
-    const results = await Promise.allSettled([issueOtp(phone), issueOtp(phone)]);
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    await expect(prisma.otpChallenge.count({ where: { phone, activeKey: phone } })).resolves.toBe(1);
-  });
-
-  it("разрешает немедленный повтор кода только в изолированном E2E-режиме", async () => {
-    vi.stubEnv("FOODGOOD_E2E_DEV_OTP", "true");
-    vi.stubEnv("DATABASE_URL", "postgresql://foodgood:foodgood@localhost:55439/foodgood_test?schema=public");
-    const phone = "+77010007891";
-
-    await issueOtp(phone);
-    const repeated = await issueOtp(phone);
-
-    expect(repeated).toMatchObject({ codeLength: 4, devCode: "0000" });
-    await expect(prisma.otpChallenge.count({ where: { phone, activeKey: phone } })).resolves.toBe(1);
-    await expect(consumeOtp(phone, "0000")).resolves.toBeUndefined();
-  });
-
-  it("не создаёт сессию для заблокированного аккаунта", async () => {
-    const phone = "+77015550199";
-    await prisma.user.create({ data: { phone, status: "BLOCKED" } });
-    const issued = await issueOtp(phone);
-    const response = await verifyPhone(new NextRequest("http://localhost/api/auth/verify", {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: "http://localhost" },
-      body: JSON.stringify({ phone, code: issued.devCode }),
-    }));
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({ error: { code: "ACCOUNT_BLOCKED" } });
-  });
-});
-
-describe("distributed rate limit", () => {
-  it("атомарно ограничивает параллельные запросы", async () => {
-    const key = `test:${crypto.randomUUID()}`;
-    const results = await Promise.allSettled(
-      Array.from({ length: 5 }, () => consumeRateLimit(key, { limit: 3, windowMs: 60_000 }))
-    );
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(3);
-    expect(results.filter((result) => result.status === "rejected")).toHaveLength(2);
-  });
-});
-
-describe("idempotency fencing заказа", () => {
-  it("повтор после потери успешного ответа возвращает тот же единственный заказ", async () => {
-    const { customer, bag } = await createFixtures({ quantity: 2 });
-    const key = `${customer.id}:lost-response-${crypto.randomUUID()}`;
-    const fingerprint = `${bag.id}:1`;
-
-    const created = await idempotentOrderRequest(key, fingerprint, (recordId, ownerToken) =>
-      queueOrder(customer.id, bag.id, 1, recordId, ownerToken)
-    );
-    // Клиент не получил created и повторяет тот же запрос с тем же ключом.
-    const retried = await idempotentOrderRequest(key, fingerprint, (recordId, ownerToken) =>
-      queueOrder(customer.id, bag.id, 1, recordId, ownerToken)
-    );
-
-    expect(retried.id).toBe(created.id);
-    expect(toCustomerOrderDto(retried)).toMatchObject({
-      id: created.id,
-      createdAt: expect.any(String),
-      bag: { pickupStart: expect.any(String), pickupEnd: expect.any(String) },
-    });
-    await expect(prisma.order.count({ where: { bagId: bag.id, userId: customer.id } })).resolves.toBe(1);
+    await rejected;
+    await expect(prisma.order.count()).resolves.toBe(0);
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 1 });
   });
 
-  it("старый владелец после reclaim не создаёт второй заказ", async () => {
+  it("откатывает остаток при коллизии pickup-кода и повторяет бронь", async () => {
     const { customer, bag } = await createFixtures({ quantity: 2 });
-    const key = `${customer.id}:stale-owner-${crypto.randomUUID()}`;
-    let signalStarted!: () => void;
-    let releaseOld!: () => void;
-    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
-    const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
-
-    const oldRequest = idempotentOrderRequest(key, `${bag.id}:1`, async (recordId, ownerToken) => {
-      signalStarted();
-      await oldGate;
-      return queueOrder(customer.id, bag.id, 1, recordId, ownerToken);
-    });
-    await started;
-    await prisma.orderIdempotencyKey.update({ where: { key }, data: { expiresAt: new Date(0) } });
-
-    const winner = await idempotentOrderRequest(key, `${bag.id}:1`, (recordId, ownerToken) =>
-      queueOrder(customer.id, bag.id, 1, recordId, ownerToken)
-    );
-    releaseOld();
-
-    await expect(oldRequest).rejects.toThrow("потеряно");
-    await expect(prisma.order.count({ where: { idempotencyRecordId: { not: null } } })).resolves.toBe(1);
-    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 1 });
-    await expect(prisma.orderIdempotencyKey.findUniqueOrThrow({ where: { key } })).resolves.toMatchObject({ status: "SUCCEEDED", resultJson: expect.stringContaining(winner.id) });
-  });
-});
-
-describe("безопасные API DTO", () => {
-  it("не сериализует внутренние поля заказа, платежа, пользователя и заведения", async () => {
-    const { customer, bag } = await createFixtures();
-    await prisma.user.update({
-      where: { id: customer.id },
-      data: { telegramId: "dto-secret-telegram", sessionVersion: 7 },
-    });
-    const order = await createOrder(customer.id, bag.id, 1);
-    const raw = await prisma.order.findUniqueOrThrow({
-      where: { id: order.id },
-      include: { user: true, payment: true, review: true, bag: { include: { venue: true } } },
-    });
-
-    const json = JSON.stringify({
-      customer: toCustomerOrderDto(raw),
-      merchant: toMerchantOrderDto(raw),
-      venue: toPublicVenueDto(raw.bag.venue),
-    });
-
-    for (const field of [
-      "providerRef", "sessionVersion", "telegramId", "ownerId",
-      "idempotencyRecordId", "leaseOwner", "leaseExpiresAt", "supportNote",
-      "supportCategory", "supportOpenedAt", "supportResolvedAt", "supportResolution",
-    ]) {
-      expect(json).not.toContain(`\"${field}\"`);
-    }
-    expect(JSON.parse(json)).toMatchObject({
-      customer: { payment: { status: "HELD" } },
-      merchant: { user: { phone: customer.phone } },
-    });
-  });
-});
-
-describe("staging mock payment fault control", () => {
-  const secret = "load-control-secret";
-  const validBody = {
-    runId: "run-test-1234",
-    delayMs: 0,
-    errorRate: 0,
-    timeoutRate: 0,
-    timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
-    enabledSeconds: 60,
-  };
-
-  function request(body: Record<string, unknown>, token = secret) {
-    return new NextRequest("http://localhost/api/internal/mock-payment-fault", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
-    });
-  }
-
-  it("без LOAD_TEST_MODE скрывает endpoint через 404", async () => {
-    vi.stubEnv("LOAD_TEST_MODE", "false");
-    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
-    const response = await configureMockFault(request(validBody));
-    expect(response.status).toBe(404);
-  });
-
-  it("с неправильным secret возвращает 404", async () => {
-    vi.stubEnv("LOAD_TEST_MODE", "true");
-    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
-    const response = await configureMockFault(request(validBody, "wrong-secret"));
-    expect(response.status).toBe(404);
-  });
-
-  it("отклоняет некорректный runId", async () => {
-    vi.stubEnv("LOAD_TEST_MODE", "true");
-    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
-    const response = await configureMockFault(request({ ...validBody, runId: "!" }));
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ error: { code: "INVALID_RUN_ID" } });
-  });
-
-  it("требует timeoutDelayMs больше внутреннего provider timeout", async () => {
-    vi.stubEnv("LOAD_TEST_MODE", "true");
-    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
-    const response = await configureMockFault(request({ ...validBody, timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS }));
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ error: { code: "INVALID_TIMEOUT_DELAY" } });
-  });
-
-  it("публикует acknowledgement только после фактического mock provider вызова", async () => {
-    vi.stubEnv("LOAD_TEST_MODE", "true");
-    vi.stubEnv("LOAD_TEST_CONTROL_SECRET", secret);
-    const configured = await configureMockFault(request(validBody));
-    expect(configured.status).toBe(200);
-    await expect(configured.json()).resolves.toMatchObject({ enabled: true, runId: validBody.runId });
-
-    await applyMockPaymentFault();
-    await flushMockPaymentFaultStats(true);
-    const response = await getMockFault(new NextRequest(
-      `http://localhost/api/internal/mock-payment-fault?runId=${validBody.runId}`,
-      { headers: { authorization: `Bearer ${secret}` } }
-    ));
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      configured: true,
-      applied: true,
-      statistics: { appliedCount: 1, delayedCount: 1 },
-    });
-    await setMockPaymentFault(null);
-  });
-
-  it("атомарно суммирует snapshots нескольких payment workers", async () => {
-    const now = new Date().toISOString();
-    const configuration = {
-      runId: "run-atomic-workers",
-      delayMs: 250,
-      errorRate: 0.1,
-      timeoutRate: 0.05,
-      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
-      enabledUntil: new Date(Date.now() + 60_000).toISOString(),
-    };
-    await setMockPaymentFault(configuration);
-    const snapshot = {
-      ...configuration,
-      appliedCount: 1,
-      delayedCount: 1,
-      errorCount: 1,
-      timeoutCount: 1,
-      firstAppliedAt: now,
-      lastAppliedAt: now,
-    };
-
-    await Promise.all([
-      incrementMockPaymentFaultStats(snapshot),
-      incrementMockPaymentFaultStats(snapshot),
-    ]);
-
-    await expect(getMockPaymentFaultStats(configuration.runId)).resolves.toMatchObject({
-      appliedCount: 2,
-      delayedCount: 2,
-      errorCount: 2,
-      timeoutCount: 2,
-    });
-    await setMockPaymentFault(null);
-  });
-
-  it("errorRate=1 переводит HOLD operation в RETRY", async () => {
-    vi.stubEnv("LOAD_TEST_MODE", "true");
-    const { customer, bag } = await createFixtures();
-    const runId = "run-error-retry";
-    await setMockPaymentFault({
-      runId,
-      delayMs: 0,
-      errorRate: 1,
-      timeoutRate: 0,
-      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
-      enabledUntil: new Date(Date.now() + 60_000).toISOString(),
-    });
-    const order = await queueOrder(customer.id, bag.id, 1);
-
-    await reconcilePendingPayments();
-
-    await expect(prisma.paymentOperation.findFirstOrThrow({ where: { payment: { orderId: order.id } } }))
-      .resolves.toMatchObject({ status: "RETRY", attempts: 1, lastError: "Controlled mock provider error" });
-    await flushMockPaymentFaultStats(true);
-    await setMockPaymentFault(null);
-  });
-
-  it("timeout завершается на 10 секундах, а поздний HOLD восстанавливается по idempotency key", async () => {
-    vi.stubEnv("LOAD_TEST_MODE", "true");
-    const runId = "run-real-timeout";
-    await setMockPaymentFault({
-      runId,
-      delayMs: 0,
-      errorRate: 0,
-      timeoutRate: 1,
-      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
-      enabledUntil: new Date(Date.now() + 60_000).toISOString(),
-    });
-    const provider = new MockPaymentProvider();
-    vi.useFakeTimers();
-    const underlying = provider.hold(1_000, "timeout-order", "timeout-key");
-    const guarded = providerCall("hold", underlying).catch((error: unknown) => error);
-
-    await vi.advanceTimersByTimeAsync(PAYMENT_PROVIDER_TIMEOUT_MS - 1);
-    let settled = false;
-    void guarded.then(() => { settled = true; });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    const timeout = await guarded;
-    expect(timeout).toBeInstanceOf(PaymentProviderError);
-    expect((timeout as PaymentProviderError).code).toBe("TIMEOUT");
-
-    await vi.advanceTimersByTimeAsync(1);
-    const lateHold = await underlying;
-    vi.useRealTimers();
-    await flushMockPaymentFaultStats(true);
-    await setMockPaymentFault(null);
-    const repeated = await provider.hold(1_000, "timeout-order", "timeout-key");
-    expect(repeated.providerRef).toBe(lateHold.providerRef);
-  });
-
-  it("load:check отклоняет отсутствие acknowledgement", () => {
-    expect(mockPaymentFaultStatsAreValid(null)).toBe(false);
-    expect(mockPaymentFaultStatsAreValid({
-      runId: "run-no-ack",
-      delayMs: 0,
-      errorRate: 0,
-      timeoutRate: 0,
-      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
-      appliedCount: 0,
-      delayedCount: 0,
-      errorCount: 0,
-      timeoutCount: 0,
-      firstAppliedAt: null,
-      lastAppliedAt: null,
-    })).toBe(false);
-  });
-
-  it("load:check отклоняет настроенный, но не зафиксированный timeout", () => {
-    expect(mockPaymentFaultStatsAreValid({
-      runId: "run-no-timeout",
-      delayMs: 0,
-      errorRate: 0,
-      timeoutRate: 1,
-      timeoutDelayMs: PAYMENT_PROVIDER_TIMEOUT_MS + 1,
-      appliedCount: 1,
-      delayedCount: 0,
-      errorCount: 0,
-      timeoutCount: 0,
-      firstAppliedAt: new Date().toISOString(),
-      lastAppliedAt: new Date().toISOString(),
-    })).toBe(false);
-  });
-});
-
-describe("cancelOrder (отмена покупателем)", () => {
-  it("возвращает деньги и остаток, снимает SOLD_OUT", async () => {
-    const { customer, bag } = await createFixtures({ quantity: 1 });
-    const order = await createOrder(customer.id, bag.id, 1);
-
-    const soldOut = await prisma.bag.findUniqueOrThrow({ where: { id: bag.id } });
-    expect(soldOut.status).toBe("SOLD_OUT");
-
-    const cancelled = await cancelOrder(customer.id, order.id);
-
-    expect(cancelled.status).toBe("CANCELLED");
-    expect(cancelled.payment?.status).toBe("REFUNDED");
-    const restored = await prisma.bag.findUniqueOrThrow({ where: { id: bag.id } });
-    expect(restored.quantityLeft).toBe(1);
-    expect(restored.status).toBe("ACTIVE");
-  });
-
-  it("нельзя отменить после начала окна выдачи", async () => {
-    const { customer, bag } = await createFixtures({
-      pickupStart: inMinutes(-10),
-      pickupEnd: inMinutes(50),
-    });
-    const order = await createOrder(customer.id, bag.id, 1);
-
-    await expect(cancelOrder(customer.id, order.id)).rejects.toThrow("уже началось");
-  });
-
-  it("чужой заказ отменить нельзя", async () => {
-    const { customer, bag } = await createFixtures();
-    const stranger = await prisma.user.create({ data: { phone: "+77070008888" } });
-    const order = await createOrder(customer.id, bag.id, 1);
-
-    await expect(cancelOrder(stranger.id, order.id)).rejects.toThrow("не найден");
-  });
-
-  it("выданный заказ отменить нельзя", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    await redeemOrder(merchant.id, order.pickupCode);
-
-    await expect(cancelOrder(customer.id, order.id)).rejects.toThrow("нельзя отменить");
-  });
-
-  it("оставляет возврат в обработке при ошибке провайдера", async () => {
-    const { customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    vi.spyOn(paymentProvider, "refund").mockRejectedValueOnce(new Error("provider timeout"));
-
-    const queued = await cancelOrder(customer.id, order.id);
-    expect(queued.status).toBe("REFUND_PENDING");
-
-    const pending = await prisma.order.findUniqueOrThrow({
-      where: { id: order.id },
-      include: { payment: true },
-    });
-    expect(pending.status).toBe("REFUND_PENDING");
-    expect(pending.refundTargetStatus).toBe("CANCELLED");
-    expect(pending.payment?.status).toBe("HELD");
-    await prisma.paymentOperation.updateMany({
-      where: { paymentId: pending.payment!.id, type: "REFUND" },
-      data: { nextAttemptAt: new Date(0) },
-    });
-    await reconcilePendingPayments();
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } }))
-      .resolves.toMatchObject({ status: "CANCELLED" });
-  });
-});
-
-describe("cancelBagWithRefunds (мерчант снимает пакет)", () => {
-  it("возвращает деньги всем оплаченным заказам", async () => {
-    const { merchant, customer, bag } = await createFixtures({ quantity: 5 });
-    const order1 = await createOrder(customer.id, bag.id, 1);
-    const order2 = await createOrder(customer.id, bag.id, 2);
-
-    const cancelledBag = await cancelBagWithRefunds(merchant.id, bag.id);
-    expect(cancelledBag.status).toBe("CANCELLED");
-
-    for (const id of [order1.id, order2.id]) {
-      const order = await prisma.order.findUniqueOrThrow({
-        where: { id },
-        include: { payment: true },
-      });
-      expect(order.status).toBe("CANCELLED");
-      expect(order.payment?.status).toBe("REFUNDED");
-    }
-  });
-
-  it("выданные заказы не трогает", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    await redeemOrder(merchant.id, order.pickupCode);
-
-    await cancelBagWithRefunds(merchant.id, bag.id);
-
-    const completed = await prisma.order.findUniqueOrThrow({
-      where: { id: order.id },
-      include: { payment: true },
-    });
-    expect(completed.status).toBe("COMPLETED");
-    expect(completed.payment?.status).toBe("CAPTURED");
-  });
-
-  it("чужой мерчант не может снять пакет", async () => {
-    const { bag } = await createFixtures();
-    const stranger = await prisma.user.create({
-      data: { phone: "+77010007777", role: "MERCHANT" },
-    });
-    await expect(cancelBagWithRefunds(stranger.id, bag.id)).rejects.toThrow("не найден");
-  });
-
-  it("после снятия пакет купить нельзя", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    await cancelBagWithRefunds(merchant.id, bag.id);
-    await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("недоступен");
-  });
-
-  it("отменяет заказ, ожидающий фиксации оплаты", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const pending = await prisma.order.create({
+    await prisma.order.create({
       data: {
         bagId: bag.id,
         userId: customer.id,
         quantity: 1,
         totalPrice: bag.price,
-        platformFee: Math.round(bag.price * PLATFORM_FEE_PCT),
-        pickupCode: "PENDING",
-        status: "PENDING_PAYMENT",
+        pickupCode: "COLLIDE",
+      },
+    });
+    qrMock.pickupCodes.push("COLLIDE", "UNIQUE");
+
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    expect(order.pickupCode).toBe("UNIQUE");
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 1 });
+    await expect(prisma.batchJob.count({ where: { type: "PICKUP_REMINDER" } })).resolves.toBe(1);
+    await expect(prisma.productEvent.count({ where: { bagId: bag.id, name: "order_created" } })).resolves.toBe(1);
+  });
+
+  it("атомарно создаёт брони, напоминания и события при высокой конкуренции", async () => {
+    const reservationCount = 20;
+    const { bag } = await createFixtures({ quantity: reservationCount });
+    const customers = await Promise.all(
+      Array.from({ length: reservationCount }, (_, index) =>
+        prisma.user.create({ data: { phone: `+7707111${String(index).padStart(4, "0")}`, role: "CUSTOMER" } })
+      )
+    );
+
+    const orders = await Promise.all(customers.map((customer) => createOrder(customer.id, bag.id, 1)));
+
+    expect(new Set(orders.map(({ pickupCode }) => pickupCode)).size).toBe(reservationCount);
+    await expect(prisma.order.count({ where: { bagId: bag.id, status: "RESERVED" } })).resolves.toBe(reservationCount);
+    await expect(prisma.batchJob.count({ where: { type: "PICKUP_REMINDER" } })).resolves.toBe(reservationCount);
+    await expect(prisma.productEvent.count({ where: { bagId: bag.id, name: "order_created" } })).resolves.toBe(
+      reservationCount
+    );
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({
+      quantityLeft: 0,
+      status: "SOLD_OUT",
+    });
+  });
+
+  it("не держит блокировку пакета между запросами к базе", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 2 });
+    const statements: string[] = [];
+    let capture = true;
+    prisma.$on("query", (event) => {
+      if (capture) statements.push(event.query);
+    });
+
+    await createOrder(customer.id, bag.id, 1);
+    capture = false;
+
+    const reservationStatements = statements.filter((query) => query.includes('UPDATE "Bag" bag'));
+    expect(reservationStatements).toHaveLength(1);
+    expect(reservationStatements[0]).toContain('INSERT INTO "Order"');
+    expect(reservationStatements[0]).toContain('INSERT INTO "BatchJob"');
+    expect(reservationStatements[0]).toContain('INSERT INTO "ProductEvent"');
+    expect(reservationStatements[0]).toMatch(/locked_bag[\s\S]+FOR\s+UPDATE OF candidate/i);
+    const reservationIndex = statements.indexOf(reservationStatements[0]);
+    const commitIndex = statements.findIndex((query) => query.trim().toUpperCase() === "COMMIT");
+    expect(commitIndex).toBeGreaterThan(reservationIndex);
+    expect(statements.slice(commitIndex + 1).some((query) => query.includes('FROM "public"."Order"'))).toBe(true);
+  });
+
+  it("возвращает остаток при отмене до начала выдачи", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 1 });
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    const cancelled = await cancelOrder(customer.id, order.id);
+
+    expect(cancelled.status).toBe("CANCELLED");
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({
+      quantityLeft: 1,
+      status: "ACTIVE",
+    });
+  });
+
+  it("не создаёт новую бронь у приостановленного заведения", async () => {
+    const { customer, venue, bag } = await createFixtures({ quantity: 2 });
+    await prisma.venue.update({ where: { id: venue.id }, data: { status: "SUSPENDED" } });
+
+    await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("временно недоступно");
+    await expect(prisma.order.count()).resolves.toBe(0);
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 2 });
+  });
+
+  it("проверяет начало выдачи внутри транзакции отмены", async () => {
+    const { customer, bag } = await createFixtures({ pickupStart: inMinutes(-1), pickupEnd: inMinutes(60) });
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    await expect(cancelOrder(customer.id, order.id)).rejects.toThrow("выдачи уже началось");
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "RESERVED" });
+  });
+});
+
+describe("выдача в заведении", () => {
+  it("требует подтверждение оплаты на кассе и завершает бронь", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    await expect(redeemOrder(merchant.id, order.pickupCode)).rejects.toThrow(
+      "Подтвердите получение оплаты"
+    );
+    const completed = await redeemOrder(merchant.id, order.pickupCode, true);
+
+    expect(completed.status).toBe("COMPLETED");
+    expect(completed.completedAt).toBeInstanceOf(Date);
+    await expect(redeemOrder(merchant.id, order.pickupCode, true)).rejects.toThrow("уже выдан");
+  });
+
+  it("переводит бронь в готовую и создаёт уведомление", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    const ready = await markOrderReady(merchant.id, order.id);
+
+    expect(ready.status).toBe("READY_FOR_PICKUP");
+    await expect(prisma.notification.findUnique({
+      where: { dedupeKey: `order-ready:${order.id}` },
+    })).resolves.toMatchObject({ type: "ORDER_READY", status: "SENT" });
+  });
+
+  it("отменяет все активные брони вместе с предложением", async () => {
+    const { merchant, customer, bag } = await createFixtures({ quantity: 3 });
+    const secondCustomer = await prisma.user.create({
+      data: { phone: "+77070007777", role: "CUSTOMER" },
+    });
+    await createOrder(customer.id, bag.id, 1);
+    await createOrder(secondCustomer.id, bag.id, 1);
+
+    const cancelledBag = await cancelBag(merchant.id, bag.id);
+
+    expect(cancelledBag.status).toBe("CANCELLED");
+    await expect(prisma.order.count({ where: { bagId: bag.id, status: "CANCELLED" } })).resolves.toBe(2);
+  });
+
+  it("сохраняет корректное состояние при одновременной отмене брони и предложения", async () => {
+    const { merchant, customer, bag } = await createFixtures({ quantity: 2 });
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    const results = await Promise.allSettled([
+      cancelOrder(customer.id, order.id),
+      cancelBag(merchant.id, bag.id),
+    ]);
+
+    for (const result of results) {
+      if (result.status === "rejected") expect(result.reason).toBeInstanceOf(OrderError);
+    }
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ status: "CANCELLED" });
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "CANCELLED" });
+  });
+
+  it("отменяет 1000 броней и записывает аналитику пакетно", async () => {
+    const { merchant, customer, bag } = await createFixtures({ quantity: 1_000 });
+    await prisma.order.createMany({
+      data: Array.from({ length: 1_000 }, (_, index) => ({
+        bagId: bag.id,
+        userId: customer.id,
+        quantity: 1,
+        totalPrice: bag.price,
+        status: "RESERVED",
+        pickupCode: `BULK${String(index).padStart(6, "0")}`,
+      })),
+    });
+
+    await cancelBag(merchant.id, bag.id);
+
+    await expect(prisma.order.count({ where: { bagId: bag.id, status: "CANCELLED" } })).resolves.toBe(1_000);
+    await expect(prisma.productEvent.count({ where: { bagId: bag.id, name: "order_cancelled" } })).resolves.toBe(1_000);
+  });
+});
+
+describe("пакетные уведомления", () => {
+  it("продолжает fanout, если последний favorite предыдущей страницы удалён", async () => {
+    const { venue, bag } = await createFixtures();
+    const followers = await Promise.all(Array.from({ length: 4 }, async (_, index) => {
+      const user = await prisma.user.create({ data: {
+        telegramId: `fanout-${index}`,
+        role: "CUSTOMER",
+        communicationsConsent: true,
+        privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+        privacyAcceptedAt: new Date(),
+      } });
+      const favorite = await prisma.favorite.create({ data: { userId: user.id, venueId: venue.id } });
+      return { user, favorite };
+    }));
+    const outdated = await prisma.user.create({ data: {
+      telegramId: "fanout-outdated-policy",
+      role: "CUSTOMER",
+      communicationsConsent: true,
+      privacyPolicyVersion: "outdated",
+      privacyAcceptedAt: new Date(),
+    } });
+    await prisma.favorite.create({ data: { userId: outdated.id, venueId: venue.id } });
+    await enqueueBatchJob({
+      queue: "notifications",
+      type: "FANOUT_NEW_BAG",
+      payload: { bagId: bag.id },
+      dedupeKey: `fanout-test:${bag.id}`,
+    });
+
+    await runBatchJobs("notifications", 1, 2);
+    const pending = await prisma.batchJob.findUniqueOrThrow({ where: { dedupeKey: `fanout-test:${bag.id}` } });
+    const cursor = (JSON.parse(pending.payloadJson) as { cursor: string }).cursor;
+    await prisma.favorite.delete({ where: { id: cursor } });
+    await runBatchJobs("notifications", 2, 2);
+
+    await expect(prisma.notification.count({ where: { type: "NEW_FAVORITE_VENUE_BAG" } })).resolves.toBe(4);
+    expect(followers.some(({ favorite }) => favorite.id === cursor)).toBe(true);
+  });
+});
+
+describe("жизненный цикл броней", () => {
+  it("разделяет активные и исторические брони клиента", async () => {
+    const { customer, bag } = await createFixtures();
+    const active = await createOrder(customer.id, bag.id, 1);
+    await prisma.order.create({
+      data: {
+        bagId: bag.id,
+        userId: customer.id,
+        quantity: 1,
+        totalPrice: bag.price,
+        status: "CANCELLED",
+        pickupCode: "HISTORY",
       },
     });
 
-    await cancelBagWithRefunds(merchant.id, bag.id);
+    const activeOrders = await prisma.order.findMany({
+      where: customerOrderScopeWhere(customer.id, "active"),
+    });
+    const history = await prisma.order.findMany({
+      where: customerOrderScopeWhere(customer.id, "history"),
+    });
 
-    await expect(
-      prisma.order.findUniqueOrThrow({ where: { id: pending.id } })
-    ).resolves.toMatchObject({ status: "CANCELLED" });
+    expect(activeOrders.map(({ id }) => id)).toEqual([active.id]);
+    expect(history).toHaveLength(1);
+    expect(history[0].status).toBe("CANCELLED");
+  });
+
+  it("истекает закончившиеся предложения и активные брони", async () => {
+    const { customer, bag } = await createFixtures({
+      pickupStart: inMinutes(-120),
+      pickupEnd: inMinutes(-60),
+      bagStatus: "ACTIVE",
+    });
+    await prisma.order.create({
+      data: {
+        bagId: bag.id,
+        userId: customer.id,
+        quantity: 1,
+        totalPrice: bag.price,
+        status: "RESERVED",
+        pickupCode: "EXPIRE",
+      },
+    });
+
+    expect(await expireStale()).toBe(2);
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ status: "EXPIRED" });
+    await expect(prisma.order.findUniqueOrThrow({ where: { pickupCode: "EXPIRE" } })).resolves.toMatchObject({ status: "EXPIRED" });
   });
 });
 
-describe("expireStale (ленивое истечение)", () => {
-  it("сразу убирает заказ с завершённым окном из активных и показывает в истории", async () => {
-    const { customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    await prisma.bag.update({
-      where: { id: bag.id },
-      data: { pickupStart: inMinutes(-120), pickupEnd: inMinutes(-1) },
-    });
+describe("идемпотентность и безопасные DTO", () => {
+  it("возвращает одну бронь для повторов с одним ключом", async () => {
+    const pickupEnd = inMinutes(48 * 60);
+    const { customer, bag } = await createFixtures({ quantity: 2, pickupEnd });
+    const key = `${customer.id}:reservation-test`;
+    const create = () => idempotentOrderRequest(key, `${bag.id}:1`, (recordId, ownerToken) =>
+      createOrder(customer.id, bag.id, 1, recordId, ownerToken)
+    );
 
-    const [active, history] = await Promise.all([
-      prisma.order.findMany({ where: customerOrderScopeWhere(customer.id, "active") }),
-      prisma.order.findMany({ where: customerOrderScopeWhere(customer.id, "history") }),
-    ]);
+    const concurrent = await Promise.all([create(), create(), create(), create()]);
+    const first = concurrent[0];
+    const second = await create();
 
-    expect(active).toHaveLength(0);
-    expect(history.map((item) => item.id)).toContain(order.id);
+    expect(second.id).toBe(first.id);
+    expect(new Set(concurrent.map(({ id }) => id))).toEqual(new Set([first.id]));
+    await expect(prisma.order.count()).resolves.toBe(1);
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 1 });
+    const entry = await prisma.orderIdempotencyKey.findUniqueOrThrow({ where: { key } });
+    expect(entry.expiresAt.getTime()).toBeGreaterThan(pickupEnd.getTime());
   });
 
-  it("не разрешает выдать заказ после окончания окна", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    await prisma.bag.update({
-      where: { id: bag.id },
-      data: { pickupStart: inMinutes(-120), pickupEnd: inMinutes(-1) },
-    });
-
-    await expect(queueRedeemOrder(merchant.id, order.pickupCode)).rejects.toThrow("Окно выдачи закончилось");
-    await expireStale();
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "REFUND_PENDING" });
-  });
-
-  it("просроченный пакет → EXPIRED, невыданный заказ → refund", async () => {
+  it("не раскрывает внутренние поля пользователя и брони", async () => {
     const { customer, bag } = await createFixtures();
+    await prisma.user.update({ where: { id: customer.id }, data: { telegramId: "secret", sessionVersion: 7 } });
     const order = await createOrder(customer.id, bag.id, 1);
-
-    // Окно выдачи прошло, заказ не забрали
-    await prisma.bag.update({
-      where: { id: bag.id },
-      data: { pickupStart: inMinutes(-120), pickupEnd: inMinutes(-60) },
-    });
-
-    await expireStale();
-    await reconcilePendingPayments();
-
-    const expiredBag = await prisma.bag.findUniqueOrThrow({ where: { id: bag.id } });
-    expect(expiredBag.status).toBe("EXPIRED");
-
-    const expiredOrder = await prisma.order.findUniqueOrThrow({
+    const customerView = await prisma.order.findUniqueOrThrow({
       where: { id: order.id },
-      include: { payment: true },
+      select: customerOrderSelect,
     });
-    expect(expiredOrder.status).toBe("EXPIRED");
-    expect(expiredOrder.payment?.status).toBe("REFUNDED");
-  });
-
-  it("возвращает деньги и по заказам отменённых пакетов с прошедшим окном", async () => {
-    const { customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    // Пакет отменён напрямую в БД (минуя cancelBagWithRefunds) — страховка
-    await prisma.bag.update({
-      where: { id: bag.id },
-      data: { status: "CANCELLED", pickupStart: inMinutes(-120), pickupEnd: inMinutes(-60) },
-    });
-
-    await expireStale();
-    await reconcilePendingPayments();
-
-    const expiredOrder = await prisma.order.findUniqueOrThrow({
+    const merchantView = await prisma.order.findUniqueOrThrow({
       where: { id: order.id },
-      include: { payment: true },
-    });
-    expect(expiredOrder.status).toBe("EXPIRED");
-    expect(expiredOrder.payment?.status).toBe("REFUNDED");
-  });
-
-  it("выданные и активные заказы не трогает", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const completedOrder = await createOrder(customer.id, bag.id, 1);
-    await redeemOrder(merchant.id, completedOrder.pickupCode);
-    const activeOrder = await createOrder(customer.id, bag.id, 1);
-
-    await expireStale();
-
-    const completed = await prisma.order.findUniqueOrThrow({ where: { id: completedOrder.id } });
-    const active = await prisma.order.findUniqueOrThrow({ where: { id: activeOrder.id } });
-    expect(completed.status).toBe("COMPLETED");
-    expect(active.status).toBe("PAID");
-  });
-
-  it("идемпотентен", async () => {
-    const { customer, bag } = await createFixtures();
-    await createOrder(customer.id, bag.id, 1);
-    await prisma.bag.update({
-      where: { id: bag.id },
-      data: { pickupStart: inMinutes(-120), pickupEnd: inMinutes(-60) },
+      select: merchantOrderSelect,
     });
 
-    await expireStale();
-    await reconcilePendingPayments();
-    await expireStale(); // повторный вызов не должен ломаться и дублировать refund
-    await reconcilePendingPayments();
-
-    const payments = await prisma.payment.findMany();
-    expect(payments).toHaveLength(1);
-    expect(payments[0].status).toBe("REFUNDED");
-  });
-});
-
-describe("расширенные продуктовые сценарии", () => {
-  it("атомарно разрешает ready одновременно с redeem", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-
-    const [ready, redeem] = await Promise.allSettled([
-      markOrderReady(merchant.id, order.id),
-      queueRedeemOrder(merchant.id, order.pickupCode),
-    ]);
-
-    expect(redeem.status).toBe("fulfilled");
-    if (ready.status === "rejected") expect(ready.reason).toBeInstanceOf(OrderError);
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "CAPTURE_PENDING" });
-    await expect(prisma.paymentOperation.count({
-      where: { payment: { orderId: order.id }, type: "CAPTURE" },
-    })).resolves.toBe(1);
-
-    await reconcilePendingPayments();
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "COMPLETED" });
-  });
-
-  it("выдаёт заказ после отметки READY_FOR_PICKUP", async () => {
-    const { merchant, customer, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    await markOrderReady(merchant.id, order.id);
-    const completed = await redeemOrder(merchant.id, order.pickupCode);
-    expect(completed.status).toBe("COMPLETED");
-  });
-
-  it("не позволяет добавить одно заведение в избранное дважды", async () => {
-    const { customer, venue } = await createFixtures();
-    await prisma.favorite.create({ data: { userId: customer.id, venueId: venue.id } });
-    await expect(prisma.favorite.create({ data: { userId: customer.id, venueId: venue.id } })).rejects.toThrow();
-  });
-
-  it("связывает отзыв с выданным заказом и заведением", async () => {
-    const { merchant, customer, venue, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    await redeemOrder(merchant.id, order.pickupCode);
-    const review = await prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 5, comment: "Отлично" } });
-    expect(review).toMatchObject({ rating: 5, moderationStatus: "PUBLISHED" });
-    await expect(prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 4 } })).rejects.toThrow();
-  });
-
-  it("применяет delta рейтинга один раз при конкурентной модерации и умеет сверяться", async () => {
-    const { merchant, customer, venue, bag } = await createFixtures();
-    const order = await createOrder(customer.id, bag.id, 1);
-    await redeemOrder(merchant.id, order.pickupCode);
-    const review = await prisma.review.create({ data: { orderId: order.id, userId: customer.id, venueId: venue.id, rating: 5 } });
-    await prisma.venue.update({ where: { id: venue.id }, data: { ratingSum: 5, ratingCount: 1, ratingAverage: 5 } });
-
-    await Promise.all([moderateReview(review.id, "HIDDEN"), moderateReview(review.id, "HIDDEN")]);
-    await expect(prisma.venue.findUniqueOrThrow({ where: { id: venue.id } })).resolves.toMatchObject({ ratingSum: 0, ratingCount: 0, ratingAverage: 0 });
-
-    await prisma.venue.update({ where: { id: venue.id }, data: { ratingSum: 99, ratingCount: 9, ratingAverage: 11 } });
-    await reconcileVenueRatings();
-    await expect(prisma.venue.findUniqueOrThrow({ where: { id: venue.id } })).resolves.toMatchObject({ ratingSum: 0, ratingCount: 0, ratingAverage: 0 });
-  });
-});
-
-describe("mock payment provider после перезапуска", () => {
-  it("восстанавливает неизвестный mock reference и выполняет capture", async () => {
-    const provider = new MockPaymentProvider();
-    const reference = "mock_order_after_restart";
-    expect(await provider.getStatus(reference)).toBe("HELD");
-    await provider.capture(reference, "capture-key");
-    expect(await provider.getStatus(reference)).toBe("CAPTURED");
-  });
-
-  it("восстанавливает неизвестный mock reference и выполняет refund", async () => {
-    const provider = new MockPaymentProvider();
-    const reference = "mock_order_after_restart";
-    await provider.refund(reference, "refund-key");
-    expect(await provider.getStatus(reference)).toBe("REFUNDED");
+    const json = JSON.stringify({
+      customer: toCustomerOrderDto(customerView),
+      merchant: toMerchantOrderDto(merchantView),
+    });
+    expect(json).not.toContain("telegramId");
+    expect(json).not.toContain("sessionVersion");
+    expect(json).not.toContain("idempotencyRecordId");
+    expect(json).not.toContain("payment");
+    expect(JSON.parse(json)).toMatchObject({
+      customer: { status: "RESERVED", totalPrice: bag.price },
+      merchant: { user: { phone: customer.phone } },
+    });
   });
 });

@@ -8,23 +8,34 @@ datasource db {
 }
 
 model User {
-  id                    String   @id @default(cuid())
-  phone                 String?  @unique
-  telegramId            String?  @unique
-  name                  String?
-  role                  String   @default("CUSTOMER") // CUSTOMER | MERCHANT
-  status                String   @default("ACTIVE") // ACTIVE | BLOCKED
-  notificationReminders Boolean  @default(true)
-  notificationOffers    Boolean  @default(true)
-  sessionVersion        Int      @default(0)
-  createdAt             DateTime @default(now())
+  id                             String    @id @default(cuid())
+  phone                          String?   @unique
+  telegramId                     String?   @unique
+  name                           String?
+  role                           String    @default("CUSTOMER") // CUSTOMER | MERCHANT | ADMIN
+  status                         String    @default("ACTIVE") // ACTIVE | BLOCKED
+  notificationReminders          Boolean   @default(true)
+  notificationOffers             Boolean   @default(true)
+  /// Versioned acceptance of the privacy policy. Both fields are retained so
+  /// the pilot can demonstrate exactly which text a customer accepted and when.
+  privacyPolicyVersion           String?
+  privacyAcceptedAt              DateTime?
+  /// Optional marketing/communications permission. The offers preference is
+  /// kept in sync with it; delivery also requires the current privacy version.
+  communicationsConsent          Boolean   @default(false)
+  communicationsConsentUpdatedAt DateTime?
+  sessionVersion                 Int       @default(0)
+  createdAt                      DateTime  @default(now())
 
-  venues        Venue[]
-  orders        Order[]
-  auditLogs     AuditLog[]
-  notifications Notification[]
-  favorites     Favorite[]
-  reviews       Review[]
+  venues             Venue[]
+  orders             Order[]
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+  favorites          Favorite[]
+  reviews            Review[]
+  supportAssignments Order[]        @relation("OrderSupportOwner")
+
+  @@index([role, communicationsConsent])
 }
 
 model SystemState {
@@ -131,32 +142,31 @@ model Bag {
 }
 
 model Order {
-  id                  String    @id @default(cuid())
-  bagId               String
-  userId              String
-  quantity            Int       @default(1)
-  totalPrice          Int // KZT
-  platformFee         Int // KZT, snapshot at purchase time
-  clientSource        String    @default("direct") // first-touch source captured at checkout
-  paymentMethod       String    @default("ONLINE") // ONLINE | PAY_AT_PICKUP
-  status              String    @default("PENDING_PAYMENT") // RESERVED | PENDING_PAYMENT | PAID | READY_FOR_PICKUP | CAPTURE_PENDING | COMPLETED | REFUND_PENDING | CANCELLED | EXPIRED
-  refundTargetStatus  String? // CANCELLED | EXPIRED; сохраняется для повторного refund
-  pickupCode          String    @unique
-  createdAt           DateTime  @default(now())
-  completedAt         DateTime?
-  supportStatus       String    @default("NONE") // NONE | OPEN | RESOLVED
-  supportCategory     String? // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | OTHER
-  supportNote         String    @default("")
-  supportOpenedAt     DateTime?
-  supportResolvedAt   DateTime?
-  supportResolution   String    @default("")
-  idempotencyRecordId String?   @unique
+  id                       String    @id @default(cuid())
+  bagId                    String
+  userId                   String
+  quantity                 Int       @default(1)
+  totalPrice               Int // KZT
+  clientSource             String    @default("direct") // first-touch source captured at checkout
+  status                   String    @default("RESERVED") // RESERVED | READY_FOR_PICKUP | COMPLETED | CANCELLED | EXPIRED
+  pickupCode               String    @unique
+  createdAt                DateTime  @default(now())
+  completedAt              DateTime?
+  supportStatus            String    @default("NONE") // NONE | OPEN | RESOLVED
+  supportCategory          String? // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | OTHER
+  supportNote              String    @default("")
+  supportOpenedAt          DateTime?
+  supportOwnerId           String?
+  supportFirstContactAt    DateTime?
+  supportVenueResponse     String    @default("")
+  supportCustomerConfirmed Boolean?
+  supportResolvedAt        DateTime?
+  supportResolution        String    @default("")
+  idempotencyRecordId      String?   @unique
 
   bag               Bag                  @relation(fields: [bagId], references: [id])
   user              User                 @relation(fields: [userId], references: [id])
-  payment           Payment?
-  paymentEvents     PaymentEvent[]
-  outboxMessages    OutboxMessage[]
+  supportOwner      User?                @relation("OrderSupportOwner", fields: [supportOwnerId], references: [id], onDelete: SetNull)
   review            Review?
   idempotencyRecord OrderIdempotencyKey? @relation(fields: [idempotencyRecordId], references: [id], onDelete: SetNull)
 
@@ -165,6 +175,7 @@ model Order {
   @@index([bagId, status])
   @@index([createdAt])
   @@index([supportStatus, supportOpenedAt])
+  @@index([supportOwnerId, supportStatus])
 }
 
 /// Append-only product analytics used by the internal funnel dashboard.
@@ -179,7 +190,6 @@ model ProductEvent {
   bagId        String
   orderId      String?
   amount       Int
-  platformFee  Int      @default(0)
   quantity     Int      @default(1)
   clientSource String   @default("direct")
   dedupeKey    String?  @unique
@@ -191,44 +201,6 @@ model ProductEvent {
   @@index([bagId, createdAt])
   @@index([orderId, createdAt])
   @@index([userId, createdAt])
-}
-
-model Payment {
-  id          String   @id @default(cuid())
-  orderId     String   @unique
-  provider    String   @default("mock")
-  providerRef String?
-  amount      Int // KZT
-  status      String   @default("PENDING_HOLD") // PENDING_HOLD | HELD | CAPTURED | REFUNDED | FAILED
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  order      Order              @relation(fields: [orderId], references: [id])
-  events     PaymentEvent[]
-  operations PaymentOperation[]
-}
-
-model PaymentOperation {
-  id             String    @id @default(cuid())
-  paymentId      String
-  type           String // HOLD | CAPTURE | REFUND
-  idempotencyKey String    @unique
-  status         String    @default("PENDING") // PENDING | PROCESSING | WAITING_PROVIDER | RETRY | SUCCEEDED | NEEDS_REVIEW
-  attempts       Int       @default(0)
-  nextAttemptAt  DateTime  @default(now())
-  leaseOwner     String?
-  leaseExpiresAt DateTime?
-  lastError      String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-
-  payment        Payment         @relation(fields: [paymentId], references: [id])
-  events         PaymentEvent[]
-  outboxMessages OutboxMessage[]
-
-  @@unique([paymentId, type])
-  @@index([status, nextAttemptAt])
-  @@index([leaseExpiresAt])
 }
 
 model AuditLog {
@@ -245,51 +217,6 @@ model AuditLog {
   @@index([actorId, createdAt])
   @@index([entityType, entityId])
   @@index([action, createdAt])
-}
-
-model PaymentEvent {
-  id           String   @id @default(cuid())
-  paymentId    String?
-  operationId  String?  @unique
-  orderId      String?
-  provider     String
-  providerRef  String?
-  type         String // HOLD | CAPTURE | REFUND | WEBHOOK | RECONCILIATION
-  status       String // SUCCEEDED | FAILED | PENDING
-  amount       Int?
-  metadataJson String   @default("{}")
-  createdAt    DateTime @default(now())
-
-  payment   Payment?          @relation(fields: [paymentId], references: [id])
-  operation PaymentOperation? @relation(fields: [operationId], references: [id])
-  order     Order?            @relation(fields: [orderId], references: [id])
-
-  @@index([paymentId, createdAt])
-  @@index([orderId, createdAt])
-  @@index([provider, providerRef])
-  @@index([type, status, createdAt])
-}
-
-model OutboxMessage {
-  id             String    @id @default(cuid())
-  operationId    String
-  orderId        String?
-  type           String
-  payloadJson    String
-  status         String    @default("PENDING")
-  attempts       Int       @default(0)
-  nextAttemptAt  DateTime  @default(now())
-  leaseOwner     String?
-  leaseExpiresAt DateTime?
-  sentAt         DateTime?
-  lastError      String?
-  createdAt      DateTime  @default(now())
-
-  operation PaymentOperation @relation(fields: [operationId], references: [id])
-  order     Order?           @relation(fields: [orderId], references: [id])
-
-  @@unique([operationId, type])
-  @@index([status, nextAttemptAt])
 }
 
 /// Durable idempotency boundary for POST /api/orders.  `key` includes the user
@@ -314,7 +241,7 @@ model OrderIdempotencyKey {
 model Notification {
   id          String    @id @default(cuid())
   userId      String?
-  channel     String // SMS | TELEGRAM | PUSH | EMAIL
+  channel     String // IN_APP | SMS | TELEGRAM | PUSH | EMAIL
   recipient   String
   type        String
   status      String    @default("PENDING") // PENDING | SENT | FAILED | SKIPPED
@@ -347,7 +274,7 @@ model Favorite {
 }
 
 /// Durable batch work created by short HTTP transactions and consumed by
-/// independently scalable notification/refund workers.
+/// independently scalable notification workers.
 model BatchJob {
   id               String    @id @default(cuid())
   queue            String

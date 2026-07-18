@@ -6,17 +6,8 @@ import path from "path";
 import sharp from "sharp";
 import { haversineKm, formatDistance } from "@/lib/geo";
 import { generatePickupCode } from "@/lib/qr";
-import { isDevOtpEnabled, normalizePhone } from "@/lib/auth";
+import { isDevOtpEnabled, isLocalAppBaseUrl, normalizePhone } from "@/lib/auth";
 import { sendTelegramBotMessage, verifyTelegramInitData } from "@/lib/telegram";
-import { PLATFORM_FEE_PCT } from "@/lib/config";
-import { assertPaymentProviderReady, FreedomPayProvider, PaymentConfigurationError } from "@/lib/payments";
-import {
-  FreedomPayConfig,
-  freedomPaySignature,
-  parseFreedomPayXml,
-  signFreedomPayFields,
-  verifyFreedomPaySignature,
-} from "@/lib/freedompay";
 import { pluralRu } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
 import { integer, requiredString } from "@/shared/validation";
@@ -28,7 +19,9 @@ import { readVenuePhoto, removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-ph
 import { csvCell, parseFinanceDateRange } from "@/lib/csv";
 import { zonedDayBounds } from "@/lib/timezone";
 import { otpSecretValue, sessionSecretValue } from "@/lib/secrets";
-import { POST as freedomPayResult } from "@/app/api/payments/freedompay/result/route";
+import { isPilotInviteRequired, isValidPilotInviteCode } from "@/lib/pilot-invite";
+import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
+import { assertDisposableLoadDatabase } from "@/lib/load-safety";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -90,13 +83,59 @@ describe("normalizePhone (номера Казахстана)", () => {
 });
 
 describe("dev OTP", () => {
-  it("никогда не включается в production", () => {
+  it("не включается в production без тройной защиты локальной репетиции", () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("FOODGOOD_E2E_DEV_OTP", "true");
+    vi.stubEnv("FOODGOOD_LOCAL_REHEARSAL", "true");
+    vi.stubEnv("APP_BASE_URL", "https://pilot.foodgood.example");
     try {
       expect(isDevOtpEnabled()).toBe(false);
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("включается в production только для явно отмеченной localhost-репетиции", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("FOODGOOD_E2E_DEV_OTP", "true");
+    vi.stubEnv("FOODGOOD_LOCAL_REHEARSAL", "true");
+    vi.stubEnv("APP_BASE_URL", "http://127.0.0.1:3000");
+    try {
+      expect(isLocalAppBaseUrl()).toBe(true);
+      expect(isDevOtpEnabled()).toBe(true);
+      vi.stubEnv("FOODGOOD_DISABLE_DEV_OTP", "true");
+      expect(isDevOtpEnabled()).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("сохраняет demo OTP для test-окружения", () => {
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("FOODGOOD_DISABLE_DEV_OTP", "false");
+    try {
+      expect(isDevOtpEnabled()).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("load seed safety", () => {
+  it.each([
+    "postgresql://foodgood:secret@localhost:55439/foodgood_test?schema=public",
+    "postgresql://foodgood:secret@127.0.0.1:5432/foodgood_staging?schema=public",
+    "postgresql://foodgood:secret@postgres:5432/foodgood_staging?schema=public",
+  ])("разрешает одноразовую БД %s", (databaseUrl) => {
+    expect(() => assertDisposableLoadDatabase(databaseUrl)).not.toThrow();
+  });
+
+  it.each([
+    "postgresql://foodgood:secret@db.example.com:5432/foodgood_staging",
+    "postgresql://foodgood:secret@localhost:5432/foodgood",
+    "mysql://foodgood:secret@localhost:3306/foodgood_test",
+  ])("отклоняет небезопасную БД %s", (databaseUrl) => {
+    expect(() => assertDisposableLoadDatabase(databaseUrl)).toThrow();
   });
 });
 
@@ -154,6 +193,7 @@ describe("venue photos", () => {
 describe("finance CSV", () => {
   it("нейтрализует формулы Excel", () => {
     expect(csvCell("=HYPERLINK(\"https://evil.example\")")).toBe("\"'=HYPERLINK(\"\"https://evil.example\"\")\"");
+    expect(csvCell("  =1+1")).toBe("\"'  =1+1\"");
     expect(csvCell("Обычное название")).toBe("\"Обычное название\"");
   });
 
@@ -164,141 +204,29 @@ describe("finance CSV", () => {
   });
 });
 
-describe("production payment safety", () => {
-  it("не позволяет случайно использовать mock-платежи", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("ALLOW_MOCK_PAYMENTS_IN_PRODUCTION", "false");
-    try {
-      expect(() => assertPaymentProviderReady()).toThrow(PaymentConfigurationError);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("запрещает флаг обхода mock-защиты", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("ALLOW_MOCK_PAYMENTS_IN_PRODUCTION", "true");
-    try {
-      expect(() => assertPaymentProviderReady()).toThrow(PaymentConfigurationError);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+describe("customer consent", () => {
+  it("считает согласие действительным только для текущей версии с датой", () => {
+    expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: new Date() })).toBe(true);
+    expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: null })).toBe(false);
+    expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: "old-version", privacyAcceptedAt: new Date() })).toBe(false);
   });
 });
 
-describe("Freedom Pay", () => {
-  const config: FreedomPayConfig = {
-    merchantId: "123",
-    secretKey: "secret",
-    apiUrl: "https://api.freedompay.test",
-    appBaseUrl: "https://staging.foodgood.kz",
-    testingMode: true,
-  };
-
-  function signedXml(script: string, fields: Record<string, string>): string {
-    const signed = signFreedomPayFields(script, fields, config.secretKey);
-    return `<response>${Object.entries(signed).map(([key, value]) => `<${key}>${value}</${key}>`).join("")}</response>`;
-  }
-
-  it("считает подпись по официальному порядку полей и отклоняет подделку", () => {
-    const fields = { pg_order_id: "order-1", pg_merchant_id: "123", pg_amount: "1000", pg_currency: "KZT", pg_salt: "salt" };
-    expect(freedomPaySignature("init_payment.php", fields, "secret")).toBe("67a08b3b0a82ffd19ad3b00a2b78258d");
-    const signed = signFreedomPayFields("init_payment.php", fields, "secret");
-    expect(verifyFreedomPaySignature("init_payment.php", signed, "secret")).toBe(true);
-    expect(verifyFreedomPaySignature("init_payment.php", { ...signed, pg_amount: "1001" }, "secret")).toBe(false);
-  });
-
-  it("стабильно подписывает вложенные и повторяющиеся XML-поля", () => {
-    const nested = {
-      pg_z: "z",
-      pg_items: { pg_item: [{ b: "B", a: "A" }, { a: "C" }] },
-      pg_a: "a",
-    };
-    expect(freedomPaySignature("script", nested, "secret")).toBe("6d12c7da6102500d7b6f9c2f28a70e55");
-  });
-
-  it("не разбирает XML с DTD/ENTITY", () => {
-    expect(() => parseFreedomPayXml('<!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><response><pg_status>&e;</pg_status></response>')).toThrow("Unsafe XML");
-  });
-
-  it("принимает только документированный unsigned not-found для status2", async () => {
-    const notFoundFetch = vi.fn().mockResolvedValue(new Response(
-      "<response><pg_status>error</pg_status><pg_error_code>340</pg_error_code><pg_error_description>Transaction not found</pg_error_description></response>",
-      { status: 200 }
-    ));
-    const provider = new FreedomPayProvider(config, notFoundFetch as typeof fetch);
-    await expect(provider.findHoldByIdempotencyKey("missing")).resolves.toBeNull();
-
-    const unknownMerchantFetch = vi.fn().mockResolvedValue(new Response(
-      "<response><pg_status>error</pg_status><pg_error_code>101</pg_error_code><pg_error_description>Unknown merchant</pg_error_description></response>",
-      { status: 200 }
-    ));
-    const rejected = new FreedomPayProvider(config, unknownMerchantFetch as typeof fetch);
-    await expect(rejected.findHoldByIdempotencyKey("missing")).rejects.toThrow("Invalid Freedom Pay response signature");
-  });
-
-  it("разбирает multipart callback и отклоняет неверную подпись до обращения к БД", async () => {
-    vi.stubEnv("FREEDOM_PAY_MERCHANT_ID", config.merchantId);
-    vi.stubEnv("FREEDOM_PAY_SECRET_KEY", config.secretKey);
-    vi.stubEnv("APP_BASE_URL", config.appBaseUrl);
-    try {
-      const form = new FormData();
-      form.set("pg_order_id", "order-1");
-      form.set("pg_payment_id", "42");
-      form.set("pg_amount", "1500");
-      form.set("pg_currency", "KZT");
-      form.set("pg_result", "1");
-      form.set("pg_sig", "00000000000000000000000000000000");
-      const response = await freedomPayResult(new Request("https://staging.foodgood.kz/api/payments/freedompay/result", { method: "POST", body: form }));
-      expect(response.status).toBe(400);
-      expect(await response.text()).toContain("Invalid signature");
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("инициализирует ручной hold и подписывает запрос", async () => {
-    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const params = new URLSearchParams(String(init?.body));
-      expect(params.get("pg_auto_clearing")).toBe("0");
-      expect(params.get("pg_order_id")).toBe("idem-1");
-      expect(params.get("pg_result_url")).toBe("https://staging.foodgood.kz/api/payments/freedompay/result");
-      expect(verifyFreedomPaySignature("init_payment.php", Object.fromEntries(params), config.secretKey)).toBe(true);
-      return new Response(signedXml("init_payment.php", {
-        pg_status: "ok",
-        pg_payment_id: "fp-42",
-        pg_redirect_url: "https://pay.example/fp-42",
-        pg_salt: "response-salt",
-      }), { status: 200 });
-    });
-    const provider = new FreedomPayProvider(config, fetchMock as typeof fetch);
-    await expect(provider.hold(1500, "order-42", "idem-1")).resolves.toEqual({ providerRef: "fp-42", status: "PENDING" });
-  });
-
-  it("reconciliation различает hold/capture и вызывает capture/refund endpoints", async () => {
-    let captured = false;
-    let refunded = false;
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const script = new URL(String(input)).pathname.split("/").at(-1)!;
-      if (script === "do_capture.php") captured = true;
-      if (script === "revoke") refunded = true;
-      if (script === "get_status3.php") {
-        return new Response(signedXml(script, {
-          pg_status: "ok",
-          pg_payment_status: "ok",
-          pg_captured: captured ? "1" : "0",
-          pg_amount: "1500",
-          pg_salt: "status-salt",
-        }), { status: 200 });
-      }
-      return new Response(signedXml(script, { pg_status: "ok", pg_salt: `${script}-salt` }), { status: 200 });
-    });
-    const provider = new FreedomPayProvider(config, fetchMock as typeof fetch);
-    await expect(provider.getStatus("fp-42")).resolves.toBe("HELD");
-    await provider.capture("fp-42");
-    await expect(provider.getStatus("fp-42")).resolves.toBe("CAPTURED");
-    await provider.refund("fp-42");
-    expect(refunded).toBe(true);
+describe("pilot invite gate", () => {
+  it("сравнивает только SHA-256 digest и в production закрывается без env", () => {
+    vi.stubEnv("PILOT_INVITE_CODE_HASH", "");
+    expect(isPilotInviteRequired()).toBe(false);
+    expect(isValidPilotInviteCode("anything")).toBe(true);
+    vi.stubEnv("NODE_ENV", "production");
+    expect(isPilotInviteRequired()).toBe(true);
+    expect(isValidPilotInviteCode("anything")).toBe(false);
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("PILOT_INVITE_CODE_HASH", "f2610957d5a52085e4a47d7431d9dc3cb92607d8e2b1310ce9ad6d55a1e62b4d"); // sha256("pilot-only")
+    expect(isPilotInviteRequired()).toBe(true);
+    expect(isValidPilotInviteCode("pilot-only")).toBe(true);
+    expect(isValidPilotInviteCode("wrong-code")).toBe(false);
+    expect(isValidPilotInviteCode("x".repeat(257))).toBe(false);
+    vi.unstubAllEnvs();
   });
 });
 
@@ -369,13 +297,6 @@ describe("verifyTelegramInitData", () => {
   it("возвращает null без настроенного бота", () => {
     delete process.env.TELEGRAM_BOT_TOKEN;
     expect(verifyTelegramInitData(signedInitData({ id: 42 }))).toBeNull();
-  });
-});
-
-describe("бизнес-константы", () => {
-  it("комиссия платформы в диапазоне 20–25%", () => {
-    expect(PLATFORM_FEE_PCT).toBeGreaterThanOrEqual(0.2);
-    expect(PLATFORM_FEE_PCT).toBeLessThanOrEqual(0.25);
   });
 });
 

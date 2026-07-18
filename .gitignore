@@ -27,6 +27,7 @@
 # misc
 .DS_Store
 *.pem
+/.ua/
 
 # debug
 npm-debug.log*
@@ -51,3 +52,4 @@ prisma/dev.db-journal
 prisma/test.db
 prisma/test.db-journal
 /load/fixtures.local.json
+/load/*-summary.json

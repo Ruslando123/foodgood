@@ -17,11 +17,6 @@ export type PublicVenueDto = {
   reviewCount?: number;
 };
 
-export type PublicPaymentDto = {
-  status: string;
-  checkoutUrl?: string;
-};
-
 export type PublicBagDto = {
   id: string;
   venueId: string;
@@ -42,14 +37,11 @@ export type CustomerOrderDto = {
   id: string;
   quantity: number;
   totalPrice: number;
-  platformFee: number;
-  paymentMethod: string;
   status: string;
   pickupCode: string;
   createdAt: string;
   completedAt: string | null;
   bag: PublicBagDto;
-  payment: PublicPaymentDto | null;
   review: { id: string; rating: number; comment: string } | null;
 };
 
@@ -94,14 +86,11 @@ export const customerOrderSelect = {
   id: true,
   quantity: true,
   totalPrice: true,
-  platformFee: true,
-  paymentMethod: true,
   status: true,
   pickupCode: true,
   createdAt: true,
   completedAt: true,
   bag: { select: publicBagSelect },
-  payment: { select: { id: true, provider: true, providerRef: true, status: true } },
   review: { select: { id: true, rating: true, comment: true } },
 } as const satisfies Prisma.OrderSelect;
 
@@ -169,21 +158,11 @@ export function toCustomerOrderDto(order: CustomerOrderMappable): CustomerOrderD
     id: order.id,
     quantity: order.quantity,
     totalPrice: order.totalPrice,
-    platformFee: order.platformFee,
-    paymentMethod: order.paymentMethod,
     status: order.status,
     pickupCode: order.pickupCode,
     createdAt: isoDate(order.createdAt),
     completedAt: order.completedAt ? isoDate(order.completedAt) : null,
     bag: toPublicBagDto(order.bag),
-    payment: order.payment
-      ? {
-          status: order.payment.status,
-          ...(order.payment.provider === "freedompay" && order.payment.providerRef && order.payment.status === "PENDING_HOLD"
-            ? { checkoutUrl: `/api/payments/freedompay/checkout?payment=${encodeURIComponent(order.payment.id)}` }
-            : {}),
-        }
-      : null,
     review: order.review
       ? { id: order.review.id, rating: order.review.rating, comment: order.review.comment }
       : null,

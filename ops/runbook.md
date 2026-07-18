@@ -1,8 +1,8 @@
 # FoodGood operational runbook
 
-## Worker stopped
+## Worker stopped or queue failed
 
-1. Check `worker:<name>` in `SystemState`, `foodgood_queue_depth`, `foodgood_queue_oldest_age_seconds`, and the worker `/metrics` endpoint.
+1. Check `worker:<name>` in `SystemState`, `foodgood_queue_depth`, `foodgood_queue_oldest_age_seconds`, `foodgood_queue_failed_jobs`, and the worker `/metrics` endpoint.
 2. Restart only the affected worker. Do not manually clear `leaseOwner`: an expired lease is reclaimed through `SKIP LOCKED`.
 3. Confirm `foodgood_queue_expired_leases` returns to zero and queue depth decreases.
 4. Run `DATABASE_URL="$DIRECT_URL" npm run load:check` after drain.
@@ -16,7 +16,7 @@
 
 ## Redis unavailable
 
-1. Confirm requests still work and `foodgood_rate_limit_fallback_total` increases.
+1. Confirm readiness stays healthy, deep health reports Redis unavailable, and `foodgood_rate_limit_fallback_reason_total{reason=~"unavailable|command_error"}` increases.
 2. Watch PostgreSQL writes to `RateLimitBucket` and pool saturation.
 3. Restore Redis, then verify newly created rate-limit keys have a positive `PTTL`.
 
@@ -35,7 +35,8 @@
 
 ## Before and after staging load
 
-- Confirm PgBouncer, Redis, S3/CDN, all four workers, backups, metrics, and alerts.
+- Confirm both web replicas, PgBouncer, Redis, S3/CDN, both workers, backups, metrics, and alerts.
 - Keep staging credentials and cookies outside Git and CI output.
-- Run `DATABASE_URL="$DIRECT_URL" npm run load:seed`, execute `npm run load:k6`, then run `DATABASE_URL="$DIRECT_URL" npm run load:check`.
-- Production sizing is approved only after p95/p99, pool saturation, memory, queue drain, expired leases, WAL, and query plans meet the documented SLOs.
+- Run the two-instance baseline and one-instance failover gates in `docs/PRODUCTION_RUNBOOK.md`.
+- Export the k6 summary and run `K6_SUMMARY_FILE=<path> npm run staging:k6:check`; dropped iterations must be zero.
+- Production sizing is approved only after p95/p99, PostgreSQL/PgBouncer saturation, Redis fallback, memory, queue drain, expired leases, WAL, and query plans meet the documented SLOs.

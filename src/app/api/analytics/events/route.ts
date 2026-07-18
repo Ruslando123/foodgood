@@ -30,7 +30,6 @@ export async function POST(request: Request) {
         bagId: order.bagId,
         orderId: order.id,
         amount: order.totalPrice,
-        platformFee: order.platformFee,
         quantity: order.quantity,
         clientSource: order.clientSource || source,
         dedupeKey: `client:${clientEventId}`,

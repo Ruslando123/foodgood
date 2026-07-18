@@ -14,7 +14,8 @@ function formatDate(date: Date) {
   });
 }
 
-function sla(openedAt: Date | null, now: Date) {
+function sla(openedAt: Date | null, firstContactAt: Date | null, now: Date) {
+  if (firstContactAt) return { label: `Контакт: ${formatDate(firstContactAt)}`, className: "bg-emerald-50 text-emerald-700" };
   const opened = openedAt ?? now;
   const deadline = new Date(opened.getTime() + 2 * 60 * 60 * 1000);
   const remaining = deadline.getTime() - now.getTime();
@@ -26,7 +27,7 @@ function sla(openedAt: Date | null, now: Date) {
 export default async function AdminSupportPage() {
   const orders = await prisma.order.findMany({
     where: { supportStatus: "OPEN" },
-    include: { user: true, bag: { include: { venue: true } } },
+    include: { user: true, supportOwner: true, bag: { include: { venue: true } } },
     orderBy: [{ supportOpenedAt: "asc" }, { createdAt: "asc" }],
     take: 100,
   });
@@ -45,7 +46,7 @@ export default async function AdminSupportPage() {
           <li className="flex gap-2"><IconPhone size={18} className="shrink-0 text-primary" /><span><b>1. Связаться с клиентом</b><br /><span className="text-xs text-muted">В течение двух часов после обращения</span></span></li>
           <li className="flex gap-2"><IconReceipt size={18} className="shrink-0 text-primary" /><span><b>2. Проверить заказ</b><br /><span className="text-xs text-muted">Статус, оплату, код и факт выдачи</span></span></li>
           <li className="flex gap-2"><IconBuildingStore size={18} className="shrink-0 text-primary" /><span><b>3. Предупредить партнёра</b><br /><span className="text-xs text-muted">Уточнить обстоятельства и зафиксировать ответ</span></span></li>
-          <li className="flex gap-2"><IconGift size={18} className="shrink-0 text-primary" /><span><b>4. Компенсировать</b><br /><span className="text-xs text-muted">Промокод или возврат, если проблема подтверждена</span></span></li>
+          <li className="flex gap-2"><IconGift size={18} className="shrink-0 text-primary" /><span><b>4. Согласовать решение</b><br /><span className="text-xs text-muted">FoodGood может выдать промокод; возврат денег оформляет заведение</span></span></li>
         </ol>
       </section>
 
@@ -55,7 +56,7 @@ export default async function AdminSupportPage() {
         ) : (
           <div className="divide-y">
             {orders.map((order) => {
-              const status = sla(order.supportOpenedAt, now);
+              const status = sla(order.supportOpenedAt, order.supportFirstContactAt, now);
               const category = order.supportCategory as ComplaintCategory | null;
               return (
                 <article key={order.id} className="space-y-3 p-4">
@@ -78,10 +79,11 @@ export default async function AdminSupportPage() {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="text-xs text-muted">
                       Получено: {formatDate(order.supportOpenedAt ?? order.createdAt)} · статус заказа: {order.status}
+                      {order.supportFirstContactAt ? <> · первый контакт: {formatDate(order.supportFirstContactAt)}{order.supportOwner ? ` (${order.supportOwner.name ?? order.supportOwner.phone ?? "администратор"})` : ""}</> : " · первый контакт ещё не отмечен"}
                     </div>
                     <div className="flex items-center gap-3">
                       <Link href={`/admin/orders?q=${order.id}`} className="text-xs font-semibold text-primary">Открыть заказ</Link>
-                      <AdminResolveSupportButton id={order.id} />
+                      <AdminResolveSupportButton id={order.id} firstContactAt={order.supportFirstContactAt?.toISOString() ?? null} ownerLabel={order.supportOwner?.name ?? order.supportOwner?.phone ?? null} />
                     </div>
                   </div>
                 </article>

@@ -4,7 +4,7 @@ import { csvCell, parseFinanceDateRange } from "@/lib/csv";
 import { requireMerchant } from "@/modules/auth/server";
 import { apiRoute } from "@/shared/server/api";
 
-const HEADER = ["order_id", "date", "venue", "package", "quantity", "gross_kzt", "fee_kzt", "net_kzt"];
+const HEADER = ["order_id", "date", "venue", "package", "quantity", "venue_till_kzt"];
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
               ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
             });
             if (!orders.length) break;
-            const rows = orders.map((order) => [order.id, order.completedAt, order.bag.venue.name, order.bag.title, order.quantity, order.totalPrice, order.platformFee, order.totalPrice - order.platformFee]);
+            const rows = orders.map((order) => [order.id, order.completedAt, order.bag.venue.name, order.bag.title, order.quantity, order.totalPrice]);
             controller.enqueue(encoder.encode(`${rows.map((row) => row.map(csvCell).join(",")).join("\n")}\n`));
             if (orders.length < 500) break;
             cursor = orders.at(-1)?.id;

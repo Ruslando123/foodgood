@@ -16,14 +16,10 @@ import { trackProductEvent } from "@/lib/client/product-analytics";
 
 const STATUS_LABEL: Record<Order["status"], string> = {
   RESERVED: "Забронирован · оплата в заведении",
-  PENDING_PAYMENT: "Ожидает оплаты",
-  PAID: "Оплачен · готовится",
   READY_FOR_PICKUP: "Готов к выдаче",
-  CAPTURE_PENDING: "Выдача подтверждается",
   COMPLETED: "Выдан",
-  REFUND_PENDING: "Возврат обрабатывается",
-  CANCELLED: "Отменён · возврат оформлен",
-  EXPIRED: "Не забран · деньги возвращены",
+  CANCELLED: "Бронь отменена",
+  EXPIRED: "Не забран",
 };
 
 type OrderScope = "active" | "history";
@@ -94,10 +90,7 @@ function OrdersContent() {
   }, [load, pages, tab]);
 
   async function cancel(order: Order) {
-    const question = order.paymentMethod === "PAY_AT_PICKUP"
-      ? "Отменить бронь? Оплата ещё не производилась."
-      : "Отменить заказ? Деньги будут возвращены на карту.";
-    if (!confirm(question)) return;
+    if (!confirm("Отменить бронь? Оплата ещё не производилась.")) return;
     setBusyOrderId(order.id);
     setError(null);
     try {
@@ -180,7 +173,7 @@ function OrderCard({
   cancelling: boolean;
   onCancel: () => void;
 }) {
-  const isActive = ["RESERVED", "PAID", "READY_FOR_PICKUP"].includes(order.status);
+  const isActive = ["RESERVED", "READY_FOR_PICKUP"].includes(order.status);
   const start = new Date(order.bag.pickupStart).getTime();
   const end = new Date(order.bag.pickupEnd).getTime();
   const canCancel = isActive && now < start;
@@ -194,8 +187,6 @@ function OrderCard({
   return (
     <article className={`space-y-3 rounded-[17px] border bg-white p-4 shadow-[0_3px_14px_rgba(20,40,28,0.06)] ${highlighted ? "border-primary" : "border-black/[0.07]"}`}>
       {highlighted && order.status === "RESERVED" && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-primary"><IconCheck size={16} />Бронь подтверждена · оплатите при получении</p>}
-      {highlighted && !["RESERVED", "PENDING_PAYMENT"].includes(order.status) && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-primary"><IconCheck size={16} />Заказ оплачен и подтверждён</p>}
-      {highlighted && order.status === "PENDING_PAYMENT" && <p className="flex items-center gap-1.5 text-[12px] font-semibold text-amber-700"><IconRefresh size={16} />Завершите оплату заказа</p>}
       <div className="flex justify-between gap-2">
         <div>
           <Link href={`/venue/${order.bag.venue.id}`} className="text-[15px] font-bold hover:text-primary">
@@ -215,7 +206,7 @@ function OrderCard({
             <QrCanvas value={order.pickupCode} size={170} />
             <p className="font-mono text-xl font-bold tracking-widest">{order.pickupCode}</p>
             <p className="text-xs text-muted">Покажите QR или код сотруднику</p>
-            {order.paymentMethod === "PAY_AT_PICKUP" && <p className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">К оплате в заведении: {formatPrice(order.totalPrice)}</p>}
+            <p className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">К оплате в заведении: {formatPrice(order.totalPrice)}</p>
           </div>
           <div className="grid grid-cols-2 gap-2 text-center text-[13px] font-semibold">
             <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="rounded-[11px] bg-[#edf7f1] px-3 py-2.5 text-primary">Маршрут в 2GIS ↗</a>
@@ -233,13 +224,7 @@ function OrderCard({
         <div className="space-y-3">
           <div className="rounded-xl bg-[#f3f4f3] p-3 text-[13px]">
             <span className="flex items-center gap-1.5">{order.status === "COMPLETED" ? <IconCheck size={16} className="text-primary" /> : <IconRefresh size={16} />} {orderStatusLabel(order)}</span>
-            {order.payment?.status === "REFUNDED" && <p className="mt-1 text-xs text-muted">Возврат отмечен платёжной системой</p>}
           </div>
-          {order.status === "PENDING_PAYMENT" && order.payment?.checkoutUrl && (
-            <a href={order.payment.checkoutUrl} className="block rounded-xl bg-primary px-3 py-2.5 text-center text-sm font-semibold text-white">
-              Продолжить оплату
-            </a>
-          )}
           <Link href={`/bag/${order.bag.id}`} className="block rounded-xl bg-primary/10 px-3 py-2.5 text-center text-sm font-semibold text-primary">
             Заказать снова
           </Link>
@@ -252,10 +237,7 @@ function OrderCard({
 }
 
 function orderStatusLabel(order: Order): string {
-  if (order.paymentMethod !== "PAY_AT_PICKUP") return STATUS_LABEL[order.status];
   if (order.status === "COMPLETED") return "Получен · оплата в заведении";
-  if (order.status === "CANCELLED") return "Бронь отменена";
-  if (order.status === "EXPIRED") return "Не забран";
   return STATUS_LABEL[order.status];
 }
 

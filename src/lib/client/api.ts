@@ -33,33 +33,19 @@ export type Bag = {
   distanceKm?: number | null;
 };
 
-export type Payment = {
-  status: "PENDING_HOLD" | "HELD" | "CAPTURED" | "REFUNDED" | "FAILED";
-  checkoutUrl?: string;
-};
-
-export type PaymentMode = "ONLINE" | "PAY_AT_PICKUP";
-
 export type Order = {
   id: string;
   quantity: number;
   totalPrice: number;
-  platformFee: number;
-  paymentMethod: PaymentMode;
   status:
     | "RESERVED"
-    | "PENDING_PAYMENT"
-    | "PAID"
     | "READY_FOR_PICKUP"
-    | "CAPTURE_PENDING"
     | "COMPLETED"
-    | "REFUND_PENDING"
     | "CANCELLED"
     | "EXPIRED";
   pickupCode: string;
   createdAt: string;
   bag: Bag;
-  payment?: Payment | null;
   review?: { id: string; rating: number; comment: string } | null;
 };
 

@@ -8,6 +8,12 @@ function describe(action: string): string {
     OWNER_CREATED: "Добавлен владелец",
     OWNER_REMOVED: "Удалён доступ владельца",
     OPERATION_RETRY_REQUESTED: "Запрошен повтор операции",
+    PRIVACY_POLICY_ACCEPTED: "Принята политика конфиденциальности",
+    COMMUNICATIONS_CONSENT_GRANTED: "Дано согласие на предложения",
+    COMMUNICATIONS_CONSENT_REVOKED: "Отозвано согласие на предложения",
+    CUSTOMER_CONTACT_EXPORT_STARTED: "Выгружена согласованная клиентская база",
+    ORDER_SUPPORT_CONTACTED: "Зафиксирован первый контакт по обращению",
+    ORDER_SUPPORT_RESOLVED: "Обращение закрыто",
   };
   return labels[action] ?? action;
 }

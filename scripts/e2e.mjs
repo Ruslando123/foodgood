@@ -8,7 +8,6 @@ const env = {
   DATABASE_URL: databaseUrl,
   E2E_DATABASE_URL: databaseUrl,
   FOODGOOD_DISABLE_DEV_OTP: "false",
-  PAYMENT_MODE: process.env.PAYMENT_MODE ?? "PAY_AT_PICKUP",
 };
 
 function run(command, args) {

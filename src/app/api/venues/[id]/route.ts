@@ -16,6 +16,7 @@ export async function GET(
         bags: {
           where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() } },
           orderBy: { pickupEnd: "asc" },
+          take: 100,
           select: {
             id: true, venueId: true, title: true, description: true, price: true,
             originalPrice: true, quantityTotal: true, quantityLeft: true,

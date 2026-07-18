@@ -16,8 +16,7 @@ export default defineConfig({
     video: "retain-on-failure",
     ...devices["Desktop Chrome"],
   },
-  webServer: [
-    {
+  webServer: {
       command: "npm run start -- --hostname localhost --port 3100",
       url: "http://localhost:3100/api/health",
       reuseExistingServer: false,
@@ -27,20 +26,13 @@ export default defineConfig({
         SESSION_SECRET: "e2e-session-secret-at-least-32-bytes-long",
         OTP_SECRET: "e2e-otp-secret-at-least-32-bytes-long",
         FOODGOOD_E2E_DEV_OTP: "true",
+        FOODGOOD_LOCAL_REHEARSAL: "true",
+        APP_BASE_URL: "http://localhost:3100",
+        PILOT_INVITE_CODE_HASH: "052067a5a994e8cac137bc3b2d15283e55222fff49198be65d0eb3005c5c1f92",
+        TELEGRAM_AUTH_ENABLED: "true",
+        TELEGRAM_BOT_TOKEN: "12345:E2E_TEST_TOKEN",
       },
     },
-    {
-      command: "npm run worker:payments",
-      url: "http://localhost:3101/metrics",
-      reuseExistingServer: false,
-      timeout: 120_000,
-      env: {
-        DATABASE_URL: process.env.E2E_DATABASE_URL ?? process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "",
-        WORKER_METRICS_PORT: "3101",
-        FOODGOOD_E2E_DEV_OTP: "true",
-      },
-    },
-  ],
   projects: [
     { name: "mobile-chromium", use: { ...devices["Pixel 7"] } },
   ],

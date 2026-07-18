@@ -83,14 +83,15 @@ export async function queryCatalog(input: {
   ];
   if (cityId) filters.push(Prisma.sql`venue."cityId" = ${cityId}`);
   if (query.q) {
-    const needle = `%${query.q.toLocaleLowerCase("ru")}%`;
+    const escapedQuery = query.q.toLocaleLowerCase("ru").replace(/[\\%_]/g, "\\$&");
+    const needle = `%${escapedQuery}%`;
     filters.push(Prisma.sql`bag.id IN (
       SELECT search_bag.id FROM "Bag" search_bag
-      WHERE lower(search_bag.title) LIKE ${needle}
+      WHERE lower(search_bag.title) LIKE ${needle} ESCAPE '\\'
       UNION
       SELECT search_bag.id FROM "Venue" search_venue
       JOIN "Bag" search_bag ON search_bag."venueId" = search_venue.id
-      WHERE lower(search_venue.name || ' ' || search_venue.address) LIKE ${needle}
+      WHERE lower(search_venue.name || ' ' || search_venue.address) LIKE ${needle} ESCAPE '\\'
     )`);
   }
   if (query.category) filters.push(Prisma.sql`venue.category = ${query.category}`);

@@ -22,8 +22,14 @@ export default async function FavoritesPage({ searchParams }: { searchParams: Pr
     include: {
       venue: {
         include: {
-          bags: { where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() } }, orderBy: { price: "asc" } },
-          reviews: { where: { moderationStatus: "PUBLISHED" }, select: { rating: true } },
+          _count: {
+            select: { bags: { where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() } } } },
+          },
+          bags: {
+            where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() } },
+            orderBy: { price: "asc" },
+            take: 100,
+          },
         },
       },
     },
@@ -38,9 +44,9 @@ export default async function FavoritesPage({ searchParams }: { searchParams: Pr
     </header>
     <main className="space-y-4 px-4">
       {total === 0 ? <div className="flex min-h-[620px] flex-col items-center px-7 pt-20 text-center"><span className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-rose-50 text-rose-500"><IconHeart size={38} stroke={1.5} /></span><h2 className="mt-5 text-[20px] font-bold tracking-[-0.02em]">Сохраняйте любимые места</h2><p className="mt-2 max-w-[275px] text-[14px] leading-5 text-muted">Нажимайте сердечко у заведений — новые выгодные пакеты будут всегда под рукой.</p><Link href="/" className="mt-6 rounded-[12px] bg-primary px-6 py-3 text-[14px] font-semibold text-white">Найти заведения</Link></div> : favorites.map(({ venue }) => {
-        const rating = venue.reviews.length ? venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length : null;
+        const rating = venue.ratingCount > 0 ? venue.ratingAverage : null;
         const bestDiscount = venue.bags.length ? Math.max(...venue.bags.map((bag) => Math.round((1 - bag.price / Math.max(1, bag.originalPrice)) * 100))) : null;
-        return <FavoriteVenueCard key={venue.id} venue={{ id: venue.id, name: venue.name, address: venue.address, category: venue.category, categoryLabel: VENUE_CATEGORIES[venue.category] ?? "Заведение", photo: venue.photo, cityName: kazakhstanCityById(venue.cityId)?.name ?? "Казахстан", rating, reviewCount: venue.reviews.length, activeBags: venue.bags.length, lowestPrice: venue.bags[0]?.price ?? null, bestDiscount }} />;
+        return <FavoriteVenueCard key={venue.id} venue={{ id: venue.id, name: venue.name, address: venue.address, category: venue.category, categoryLabel: VENUE_CATEGORIES[venue.category] ?? "Заведение", photo: venue.photo, cityName: kazakhstanCityById(venue.cityId)?.name ?? "Казахстан", rating, reviewCount: venue.ratingCount, activeBags: venue._count.bags, lowestPrice: venue.bags[0]?.price ?? null, bestDiscount }} />;
       })}
       {pageCount > 1 && <nav className="flex items-center justify-between pb-4 pt-1 text-sm"><Link aria-disabled={page === 1} href={page === 1 ? "/favorites?page=1" : `/favorites?page=${page - 1}`} className={`rounded-xl border px-4 py-2 font-semibold ${page === 1 ? "pointer-events-none opacity-40" : "text-primary"}`}>Назад</Link><span className="text-xs text-muted">{page} из {pageCount}</span><Link aria-disabled={page === pageCount} href={page === pageCount ? `/favorites?page=${pageCount}` : `/favorites?page=${page + 1}`} className={`rounded-xl border px-4 py-2 font-semibold ${page === pageCount ? "pointer-events-none opacity-40" : "text-primary"}`}>Далее</Link></nav>}
     </main>

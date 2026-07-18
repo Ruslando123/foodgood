@@ -2,7 +2,9 @@ import { ApiError } from "@/shared/server/api";
 
 export function csvCell(value: string | number | Date | null): string {
   let text = value instanceof Date ? value.toISOString() : String(value ?? "");
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  // Spreadsheet programs may ignore leading whitespace before evaluating a
+  // formula, so guard it as well as the four formula prefixes.
+  if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
   return `"${text.replaceAll('"', '""')}"`;
 }
 

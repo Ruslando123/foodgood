@@ -12,7 +12,12 @@ export async function GET(request: Request) {
       where: { venue: { ownerId: user.id } },
       include: {
         venue: true,
-        orders: { where: { status: { in: ["RESERVED", "PAID", "READY_FOR_PICKUP", "CAPTURE_PENDING", "COMPLETED"] } } },
+        orders: {
+          where: { status: { in: ["RESERVED", "READY_FOR_PICKUP", "COMPLETED"] } },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+        },
+        _count: { select: { orders: true } },
       },
       orderBy: { createdAt: "desc" },
       take: 50,
