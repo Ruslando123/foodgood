@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { prisma } from "./db";
+import { PRIVACY_POLICY_VERSION } from "./privacy";
 import { startLeaseHeartbeat } from "./lease-heartbeat";
 import { workerClaims, workerFailures, workerJobDuration, workerLeaseLost, workerSuccesses } from "./metrics";
 
@@ -192,7 +193,12 @@ async function fanoutNewBag(bagId: string, cursor: string | undefined, batchSize
   const followers = await prisma.favorite.findMany({
     where: {
       venueId: bag.venueId,
-      user: { notificationOffers: true },
+      user: {
+        notificationOffers: true,
+        communicationsConsent: true,
+        privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+        privacyAcceptedAt: { not: null },
+      },
       ...(cursor ? { id: { gt: cursor } } : {}),
     },
     orderBy: { id: "asc" },

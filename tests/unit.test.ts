@@ -19,6 +19,8 @@ import { readVenuePhoto, removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-ph
 import { csvCell, parseFinanceDateRange } from "@/lib/csv";
 import { zonedDayBounds } from "@/lib/timezone";
 import { otpSecretValue, sessionSecretValue } from "@/lib/secrets";
+import { isPilotInviteRequired, isValidPilotInviteCode } from "@/lib/pilot-invite";
+import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -144,6 +146,7 @@ describe("venue photos", () => {
 describe("finance CSV", () => {
   it("нейтрализует формулы Excel", () => {
     expect(csvCell("=HYPERLINK(\"https://evil.example\")")).toBe("\"'=HYPERLINK(\"\"https://evil.example\"\")\"");
+    expect(csvCell("  =1+1")).toBe("\"'  =1+1\"");
     expect(csvCell("Обычное название")).toBe("\"Обычное название\"");
   });
 
@@ -151,6 +154,32 @@ describe("finance CSV", () => {
     const range = parseFinanceDateRange("https://foodgood.kz/export?from=2026-01-01&to=2026-01-31");
     expect(range.label).toBe("2026-01-01_2026-01-31");
     expect(() => parseFinanceDateRange("https://foodgood.kz/export?from=2024-01-01&to=2026-01-01")).toThrow("366");
+  });
+});
+
+describe("customer consent", () => {
+  it("считает согласие действительным только для текущей версии с датой", () => {
+    expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: new Date() })).toBe(true);
+    expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: null })).toBe(false);
+    expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: "old-version", privacyAcceptedAt: new Date() })).toBe(false);
+  });
+});
+
+describe("pilot invite gate", () => {
+  it("сравнивает только SHA-256 digest и в production закрывается без env", () => {
+    vi.stubEnv("PILOT_INVITE_CODE_HASH", "");
+    expect(isPilotInviteRequired()).toBe(false);
+    expect(isValidPilotInviteCode("anything")).toBe(true);
+    vi.stubEnv("NODE_ENV", "production");
+    expect(isPilotInviteRequired()).toBe(true);
+    expect(isValidPilotInviteCode("anything")).toBe(false);
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("PILOT_INVITE_CODE_HASH", "f2610957d5a52085e4a47d7431d9dc3cb92607d8e2b1310ce9ad6d55a1e62b4d"); // sha256("pilot-only")
+    expect(isPilotInviteRequired()).toBe(true);
+    expect(isValidPilotInviteCode("pilot-only")).toBe(true);
+    expect(isValidPilotInviteCode("wrong-code")).toBe(false);
+    expect(isValidPilotInviteCode("x".repeat(257))).toBe(false);
+    vi.unstubAllEnvs();
   });
 });
 

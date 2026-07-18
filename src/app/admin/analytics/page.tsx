@@ -61,6 +61,8 @@ export default async function AdminAnalyticsPage({
   ]);
 
   const s = snapshot.stages;
+  const outcomes = snapshot.outcomes;
+  const customers = snapshot.customers;
   const funnel = [
     { name: "offer_view" as const, label: "Просмотрели", value: s.offer_view.uniqueCount },
     { name: "reserve_started" as const, label: "Начали бронь", value: s.reserve_started.uniqueCount },
@@ -70,12 +72,12 @@ export default async function AdminAnalyticsPage({
   ];
   const maxFunnel = Math.max(1, ...funnel.map((item) => item.value));
   const metrics = [
-    { label: "Опубликовано наборов", value: s.partner_offer_created.quantity.toLocaleString("ru-RU"), hint: `${s.partner_offer_created.uniqueCount} предложений` },
-    { label: "Продано", value: s.order_created.quantity.toLocaleString("ru-RU"), hint: `${s.order_created.uniqueCount} заказов` },
-    { label: "Забрано", value: s.order_completed.quantity.toLocaleString("ru-RU"), hint: `${conversion(s.order_completed.quantity, s.order_created.quantity)} от проданных` },
-    { label: "Отменено", value: s.order_cancelled.quantity.toLocaleString("ru-RU"), hint: `${conversion(s.order_cancelled.quantity, s.order_created.quantity)} от проданных` },
-    { label: "GMV", value: price(s.order_completed.amount), hint: "Завершённые заказы" },
-    { label: "Новых клиентов", value: s.order_created.uniqueCount.toLocaleString("ru-RU"), hint: "Уникальные покупатели с бронью" },
+    { label: "Забронировано", value: outcomes.quantity.toLocaleString("ru-RU"), hint: `${outcomes.orders} броней в когорте периода` },
+    { label: "Забрано", value: outcomes.completedQuantity.toLocaleString("ru-RU"), hint: `${conversion(outcomes.completed, outcomes.orders)} броней выданы` },
+    { label: "Отменено", value: outcomes.cancelledQuantity.toLocaleString("ru-RU"), hint: `${conversion(outcomes.cancelled, outcomes.orders)} броней отменены` },
+    { label: "Не забрано", value: outcomes.expiredQuantity.toLocaleString("ru-RU"), hint: `${conversion(outcomes.expired, outcomes.orders)} истекли без выдачи` },
+    { label: "Новые / повторные", value: `${customers.firstTime} / ${customers.repeat}`, hint: `${customers.total} клиентов с бронью` },
+    { label: "Принято на кассе", value: price(outcomes.gmv), hint: "Только выданные брони; без комиссии FoodGood" },
   ];
 
   return (
@@ -126,19 +128,25 @@ export default async function AdminAnalyticsPage({
 
       <div className="grid gap-5 lg:grid-cols-2">
         <section className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white">
-          <div className="border-b border-black/[0.07] p-4"><h2 className="font-semibold">Источники клиентов</h2><p className="text-xs text-muted">Атрибуция, сохранённая в момент первого действия.</p></div>
-          {snapshot.sources.length === 0 ? <p className="p-5 text-sm text-muted">Событий за период пока нет.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead className="bg-black/[0.02] text-left text-xs text-muted"><tr><th className="p-3">Источник</th><th className="p-3 text-right">Просмотры</th><th className="p-3 text-right">Заказы</th><th className="p-3 text-right">Получены</th><th className="p-3 text-right">GMV</th></tr></thead><tbody>{snapshot.sources.map((row) => <tr key={row.source} className="border-t border-black/[0.06]"><td className="p-3 font-medium">{row.source}</td><td className="p-3 text-right">{row.views}</td><td className="p-3 text-right">{row.orders}</td><td className="p-3 text-right">{row.completed}</td><td className="p-3 text-right">{price(row.gmv)}</td></tr>)}</tbody></table></div>}
+          <div className="border-b border-black/[0.07] p-4"><h2 className="font-semibold">Полезность источников</h2><p className="text-xs text-muted">Просмотры берутся из событий, исходы — из броней, созданных в период.</p></div>
+          {snapshot.sources.length === 0 ? <p className="p-5 text-sm text-muted">Броней и событий за период пока нет.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[780px] text-sm"><thead className="bg-black/[0.02] text-left text-xs text-muted"><tr><th className="p-3">Источник</th><th className="p-3 text-right">Просмотры</th><th className="p-3 text-right">Брони</th><th className="p-3 text-right">Забрано</th><th className="p-3 text-right">Выдача</th><th className="p-3 text-right">Отмена</th><th className="p-3 text-right">Не забрано</th><th className="p-3 text-right">На кассе</th></tr></thead><tbody>{snapshot.sources.map((row) => <tr key={row.source} className="border-t border-black/[0.06]"><td className="p-3 font-medium">{row.source}</td><td className="p-3 text-right">{row.views}</td><td className="p-3 text-right">{row.orders}</td><td className="p-3 text-right">{row.completed}</td><td className="p-3 text-right">{conversion(row.completed, row.orders)}</td><td className="p-3 text-right">{row.cancelled}</td><td className="p-3 text-right">{row.expired}</td><td className="p-3 text-right">{price(row.gmv)}</td></tr>)}</tbody></table></div>}
         </section>
 
         <section className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white">
-          <div className="border-b border-black/[0.07] p-4"><h2 className="font-semibold">Контроль качества</h2><p className="text-xs text-muted">Сигналы, которые требуют операционного внимания.</p></div>
-          <div className="grid grid-cols-2 gap-3 p-4">
+          <div className="border-b border-black/[0.07] p-4"><h2 className="font-semibold">Контроль закрытого пилота</h2><p className="text-xs text-muted">Исходы по броням, созданным в выбранный период.</p></div>
+          <div className="grid gap-3 p-4 sm:grid-cols-3">
             <div className="rounded-xl bg-red-50 p-4"><p className="text-xs text-red-700">Жалобы</p><p className="mt-1 text-2xl font-bold text-red-700">{s.complaint_created.events}</p></div>
-            <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs text-amber-800">Отменённые заказы</p><p className="mt-1 text-2xl font-bold text-amber-800">{s.order_cancelled.uniqueCount}</p></div>
+            <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs text-amber-800">Отмены</p><p className="mt-1 text-2xl font-bold text-amber-800">{outcomes.cancelled}</p><p className="text-xs text-amber-800">{conversion(outcomes.cancelled, outcomes.orders)}</p></div>
+            <div className="rounded-xl bg-orange-50 p-4"><p className="text-xs text-orange-800">Неявки</p><p className="mt-1 text-2xl font-bold text-orange-800">{outcomes.expired}</p><p className="text-xs text-orange-800">{conversion(outcomes.expired, outcomes.orders)}</p></div>
           </div>
-          <p className="px-4 pb-4 text-xs leading-5 text-muted">Оборот считается по завершённым броням и отражает деньги, принятые заведениями на кассе. FoodGood не удерживает комиссию.</p>
+          <p className="px-4 pb-4 text-xs leading-5 text-muted">Процент выдачи — завершённые брони от всех созданных в период. Оборот — деньги, принятые заведениями на кассе; FoodGood не удерживает комиссию.</p>
         </section>
       </div>
+
+      <section className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white">
+        <div className="border-b border-black/[0.07] p-4"><h2 className="font-semibold">Полезность заведений</h2><p className="text-xs text-muted">Помогает сравнить спрос и фактическую выдачу без учёта комиссии платформы.</p></div>
+        {snapshot.venues.length === 0 ? <p className="p-5 text-sm text-muted">Заведений с бронями или событиями за период пока нет.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[880px] text-sm"><thead className="bg-black/[0.02] text-left text-xs text-muted"><tr><th className="p-3">Заведение</th><th className="p-3 text-right">Просмотры</th><th className="p-3 text-right">Предложения</th><th className="p-3 text-right">Брони</th><th className="p-3 text-right">Забрано</th><th className="p-3 text-right">Выдача</th><th className="p-3 text-right">Отмены</th><th className="p-3 text-right">Неявки</th><th className="p-3 text-right">На кассе</th></tr></thead><tbody>{snapshot.venues.map((row) => <tr key={row.venueId} className="border-t border-black/[0.06]"><td className="p-3 font-medium">{row.venueName}</td><td className="p-3 text-right">{row.views}</td><td className="p-3 text-right">{row.offers}</td><td className="p-3 text-right">{row.orders}</td><td className="p-3 text-right">{row.completed}</td><td className="p-3 text-right">{conversion(row.completed, row.orders)}</td><td className="p-3 text-right">{row.cancelled}</td><td className="p-3 text-right">{row.expired}</td><td className="p-3 text-right">{price(row.gmv)}</td></tr>)}</tbody></table></div>}
+      </section>
 
       <section className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white">
         <div className="border-b border-black/[0.07] p-4"><h2 className="font-semibold">Последние события</h2><p className="text-xs text-muted">До 25 записей для быстрой проверки тестового заказа.</p></div>

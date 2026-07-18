@@ -18,6 +18,7 @@ import {
 } from "@/modules/api/dto";
 import { idempotentOrderRequest } from "@/modules/orders/idempotency";
 import { enqueueBatchJob, runBatchJobs } from "@/lib/jobs";
+import { PRIVACY_POLICY_VERSION } from "@/lib/privacy";
 import { createFixtures, inMinutes, resetDb } from "./helpers";
 
 const qrMock = vi.hoisted(() => ({ pickupCodes: [] as string[] }));
@@ -289,10 +290,24 @@ describe("пакетные уведомления", () => {
   it("продолжает fanout, если последний favorite предыдущей страницы удалён", async () => {
     const { venue, bag } = await createFixtures();
     const followers = await Promise.all(Array.from({ length: 4 }, async (_, index) => {
-      const user = await prisma.user.create({ data: { telegramId: `fanout-${index}`, role: "CUSTOMER" } });
+      const user = await prisma.user.create({ data: {
+        telegramId: `fanout-${index}`,
+        role: "CUSTOMER",
+        communicationsConsent: true,
+        privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+        privacyAcceptedAt: new Date(),
+      } });
       const favorite = await prisma.favorite.create({ data: { userId: user.id, venueId: venue.id } });
       return { user, favorite };
     }));
+    const outdated = await prisma.user.create({ data: {
+      telegramId: "fanout-outdated-policy",
+      role: "CUSTOMER",
+      communicationsConsent: true,
+      privacyPolicyVersion: "outdated",
+      privacyAcceptedAt: new Date(),
+    } });
+    await prisma.favorite.create({ data: { userId: outdated.id, venueId: venue.id } });
     await enqueueBatchJob({
       queue: "notifications",
       type: "FANOUT_NEW_BAG",

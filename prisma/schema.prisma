@@ -8,16 +8,24 @@ datasource db {
 }
 
 model User {
-  id                    String   @id @default(cuid())
-  phone                 String?  @unique
-  telegramId            String?  @unique
-  name                  String?
-  role                  String   @default("CUSTOMER") // CUSTOMER | MERCHANT | ADMIN
-  status                String   @default("ACTIVE") // ACTIVE | BLOCKED
-  notificationReminders Boolean  @default(true)
-  notificationOffers    Boolean  @default(true)
-  sessionVersion        Int      @default(0)
-  createdAt             DateTime @default(now())
+  id                             String    @id @default(cuid())
+  phone                          String?   @unique
+  telegramId                     String?   @unique
+  name                           String?
+  role                           String    @default("CUSTOMER") // CUSTOMER | MERCHANT | ADMIN
+  status                         String    @default("ACTIVE") // ACTIVE | BLOCKED
+  notificationReminders          Boolean   @default(true)
+  notificationOffers             Boolean   @default(true)
+  /// Versioned acceptance of the privacy policy. Both fields are retained so
+  /// the pilot can demonstrate exactly which text a customer accepted and when.
+  privacyPolicyVersion           String?
+  privacyAcceptedAt              DateTime?
+  /// Optional marketing/communications permission. The offers preference is
+  /// kept in sync with it; delivery also requires the current privacy version.
+  communicationsConsent          Boolean   @default(false)
+  communicationsConsentUpdatedAt DateTime?
+  sessionVersion                 Int       @default(0)
+  createdAt                      DateTime  @default(now())
 
   venues        Venue[]
   orders        Order[]
@@ -25,6 +33,8 @@ model User {
   notifications Notification[]
   favorites     Favorite[]
   reviews       Review[]
+
+  @@index([role, communicationsConsent])
 }
 
 model SystemState {

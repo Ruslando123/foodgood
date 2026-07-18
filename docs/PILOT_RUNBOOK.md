@@ -1,4 +1,4 @@
-# FoodGood pilot runbook (1–3 venues)
+# FoodGood pilot runbook (3–5 venues, 20–50 customers)
 
 ## Entry criteria
 
@@ -7,21 +7,31 @@
 - Every pilot venue confirms that it accepts payment on its own till and issues the fiscal receipt before completing the pickup code.
 - Telegram OTP webhook is healthy, S3/CDN health is green, required worker heartbeats are green, and alerts reach the on-call owner.
 - `main` requires the `production-gate` status check and disallows direct/force pushes.
+- The support owner can open `/admin/support`, contact a customer within two hours, and record the resolution against the order.
 
 ## Venue selection
 
-Choose 1–3 venues with a named owner, predictable pickup window, fewer than 10 pilot bags per day, and staff available to scan/enter pickup codes. Record the venue IDs, owner contacts, opening dates, refund contact, and daily order cap before activation.
+Choose 3–5 venues with a named owner, predictable pickup window, fewer than 10 pilot bags per day, and staff available to scan/enter pickup codes. Record the venue IDs, owner contacts, opening dates, support contact, and daily order cap before activation. Invite 20–50 customers in controlled cohorts; keep a named owner for each cohort and do not add a cohort until the previous pickup cycle is reconciled.
+
+## Customer cohorts and consent
+
+1. Create a new random invite code for each cohort. Store only its SHA-256 digest in `PILOT_INVITE_CODE_HASH`; never put the plaintext code in Git, logs, screenshots, or analytics.
+2. Send the plaintext code only to the named cohort. Existing accounts can continue signing in after the hash is rotated; only new accounts need the current code.
+3. Every new customer must accept the displayed, versioned privacy policy. News and special offers use a separate optional switch in Settings and remain off by default.
+4. Use the admin CSV only for the stated pilot communication. It contains only active customers with current privacy acceptance and active communications consent. Access is recorded in the audit log.
+5. Store the downloaded CSV in an approved encrypted location, do not upload it to third-party mailing tools, and delete working copies after the communication is completed. Revoked contacts disappear from subsequent exports.
 
 ## Daily operating loop
 
 1. Before sales: verify `/api/health/deep`, expiry/notification worker heartbeats, Telegram OTP delivery, and S3 access.
-2. During sales: watch `RESERVED` orders, no-shows, inventory, and customer support.
+2. During sales: watch `RESERVED` orders, no-shows, inventory, and customer support. Encourage each customer to use the order-card “Обратная связь или помощь” entry point; it is linked to that order.
 3. At pickup: staff accepts payment, issues the venue receipt, then confirms the pickup code. FoodGood does not collect or settle pilot money.
-4. Record reservations, successful pickups, cancellations, no-shows, support cases, and the amount accepted by each venue.
+4. Record reservations, successful pickups, cancellations, no-shows, support cases, and the amount accepted by each venue. For every support case, record first-contact time, owner, venue response, resolution, and whether the customer confirmed it was resolved.
 5. Reconcile completed FoodGood orders against each venue's till report at the end of the day.
 
 ## Rollout guardrails
 
-- Start with one venue for at least one full pickup cycle; add the second/third only after reconciliation is clean.
+- Start with three venues for at least one full pickup cycle; add the fourth/fifth only after reconciliation is clean and support cases meet the two-hour first-contact target.
 - Pause new orders immediately for a code completed before payment, missing receipt, negative inventory, repeated no-shows, or untested restore evidence.
-- Do not expand beyond three venues until seven consecutive days reconcile cleanly with venue till reports and the backup restore drill meets the agreed RPO/RTO.
+- Pause a venue's new orders when an open support case passes two hours without customer contact; resume only after the case owner documents the response.
+- Do not expand beyond five venues or 50 invited customers until seven consecutive days reconcile cleanly with venue till reports and the backup restore drill meets the agreed RPO/RTO.

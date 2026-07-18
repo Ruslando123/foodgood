@@ -13,4 +13,3 @@ RUN chmod 0555 /usr/local/bin/foodgood-pgbouncer \
 
 EXPOSE 6432
 ENTRYPOINT ["/usr/local/bin/foodgood-pgbouncer"]
-

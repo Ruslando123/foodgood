@@ -45,7 +45,7 @@ export default async function AdminSupportPage() {
           <li className="flex gap-2"><IconPhone size={18} className="shrink-0 text-primary" /><span><b>1. Связаться с клиентом</b><br /><span className="text-xs text-muted">В течение двух часов после обращения</span></span></li>
           <li className="flex gap-2"><IconReceipt size={18} className="shrink-0 text-primary" /><span><b>2. Проверить заказ</b><br /><span className="text-xs text-muted">Статус, оплату, код и факт выдачи</span></span></li>
           <li className="flex gap-2"><IconBuildingStore size={18} className="shrink-0 text-primary" /><span><b>3. Предупредить партнёра</b><br /><span className="text-xs text-muted">Уточнить обстоятельства и зафиксировать ответ</span></span></li>
-          <li className="flex gap-2"><IconGift size={18} className="shrink-0 text-primary" /><span><b>4. Компенсировать</b><br /><span className="text-xs text-muted">Промокод или возврат, если проблема подтверждена</span></span></li>
+          <li className="flex gap-2"><IconGift size={18} className="shrink-0 text-primary" /><span><b>4. Согласовать решение</b><br /><span className="text-xs text-muted">FoodGood может выдать промокод; возврат денег оформляет заведение</span></span></li>
         </ol>
       </section>
 

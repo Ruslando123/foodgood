@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { PRIVACY_POLICY_VERSION } from "../src/lib/privacy";
 
 const prisma = new PrismaClient();
 
@@ -38,8 +39,13 @@ async function main() {
   const merchant2 = await prisma.user.create({
     data: { phone: "+77010000002", name: "Magnum Кулинария", role: "MERCHANT" },
   });
-  await prisma.user.create({
-    data: { phone: "+77070000001", name: "Демо-покупатель", role: "CUSTOMER" },
+  const acceptedAt = new Date();
+  await prisma.user.createMany({
+    data: [
+      { phone: "+77070000001", name: "Демо-покупатель", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt },
+      { phone: "+77070000002", name: "E2E покупатель 2", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt },
+      { phone: "+77070000004", name: "E2E покупатель 4", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt },
+    ],
   });
   await prisma.user.create({ data: { phone: "+77010000003", name: "Демо-админ", role: "ADMIN" } });
 

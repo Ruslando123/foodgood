@@ -1,4 +1,20 @@
+import { createHmac } from "crypto";
 import { expect, test, type Page } from "@playwright/test";
+
+function telegramInitData(id: number): string {
+  const params = new URLSearchParams({
+    auth_date: String(Math.floor(Date.now() / 1000)),
+    query_id: `e2e-${id}`,
+    user: JSON.stringify({ id, first_name: "Pilot" }),
+  });
+  const dataCheckString = [...params.entries()]
+    .map(([key, value]) => `${key}=${value}`)
+    .sort()
+    .join("\n");
+  const secret = createHmac("sha256", "WebAppData").update("12345:E2E_TEST_TOKEN").digest();
+  params.set("hash", createHmac("sha256", secret).update(dataCheckString).digest("hex"));
+  return params.toString();
+}
 
 async function login(page: Page, phone: string, expectedPath: RegExp) {
   await page.goto("/login");
@@ -11,6 +27,37 @@ async function login(page: Page, phone: string, expectedPath: RegExp) {
   ]);
   await expect(page).toHaveURL(expectedPath);
 }
+
+test("новый покупатель явно принимает политику перед первым входом", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Номер телефона").fill("+7 707 000 00 05");
+  await page.getByRole("button", { name: "Продолжить" }).click();
+  await expect(page.getByText("Для входа в пилот нужен действующий код приглашения", { exact: true })).toBeVisible();
+  await page.getByLabel("Код приглашения").fill("pilot-e2e");
+  await page.getByRole("button", { name: "Продолжить" }).click();
+  await page.getByRole("button", { name: /Использовать демо-код/ }).click();
+  const acceptance = page.getByRole("checkbox", { name: /Принимаю политику конфиденциальности/ });
+  await expect(acceptance).toBeVisible();
+  await acceptance.check();
+  await Promise.all([
+    page.waitForURL(/\/$/),
+    page.getByRole("button", { name: "Войти" }).click(),
+  ]);
+});
+
+test("новый Telegram-покупатель также проходит invite-gate", async ({ request }) => {
+  const initData = telegramInitData(770700005);
+  const rejected = await request.post("/api/auth/telegram", {
+    data: { initData, privacyAccepted: true },
+  });
+  expect(rejected.status()).toBe(403);
+  expect(await rejected.json()).toMatchObject({ error: { code: "PILOT_INVITE_REQUIRED" } });
+
+  const accepted = await request.post("/api/auth/telegram", {
+    data: { initData, inviteCode: "pilot-e2e", privacyAccepted: true },
+  });
+  expect(accepted.ok()).toBeTruthy();
+});
 
 async function orderStatus(page: Page, orderId: string) {
   const response = await page.request.get(`/api/orders/${orderId}`);
@@ -57,6 +104,35 @@ test("клиент покупает, владелец выдаёт, клиент
   await expect(page.getByRole("button", { name: "Оставить отзыв" })).toHaveCount(0);
 });
 
+test("клиент отправляет привязанную к заказу обратную связь в поддержку", async ({ page, browser }) => {
+  await page.addInitScript(() => localStorage.setItem("foodgood-location", JSON.stringify({ lat: 43.2389, lng: 76.8897, cityId: "almaty" })));
+  await login(page, "+7 707 000 00 04", /\/$/);
+  const bagLinks = page.locator('a[href^="/bag/"]');
+  await expect(bagLinks.first()).toBeVisible();
+  await bagLinks.first().click();
+  await page.getByRole("button", { name: /Забронировать за/ }).click();
+  await page.getByRole("button", { name: "Подтвердить бронь" }).click();
+  await expect(page).toHaveURL(/\/orders\?new=/);
+  const orderId = new URL(page.url()).searchParams.get("new")!;
+
+  await page.getByRole("button", { name: "Обратная связь или помощь" }).click();
+  await page.getByRole("button", { name: "Другое" }).click();
+  const submit = page.getByRole("button", { name: "Отправить", exact: true });
+  await expect(submit).toBeDisabled();
+  await page.getByPlaceholder("Опишите отзыв или проблему (минимум 5 символов)").fill("Нужна помощь с окном выдачи");
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  await expect(page.getByRole("status")).toContainText("Обращение отправлено");
+
+  const adminContext = await browser.newContext();
+  const adminPage = await adminContext.newPage();
+  await login(adminPage, "+7 701 000 00 03", /\/admin\/venues/);
+  await adminPage.goto("/admin/support");
+  await expect(adminPage.getByText(orderId, { exact: false })).toBeVisible();
+  await expect(adminPage.getByText("Нужна помощь с окном выдачи", { exact: true })).toBeVisible();
+  await adminContext.close();
+});
+
 test("владелец публикует пакет", async ({ page }) => {
   await login(page, "+7 701 000 00 01", /\/$/);
   await page.goto("/business/new");
@@ -73,7 +149,7 @@ test("администратор открывает рабочие раздел�
     page.waitForURL(/\/admin\/orders/),
     page.getByRole("link", { name: "Заказы" }).click(),
   ]);
-  await expect(page.getByRole("heading", { name: "Заказы" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Брони" })).toBeVisible();
 });
 
 test("повторяет бронирование тем же ключом после потери ответа", async ({ page }) => {

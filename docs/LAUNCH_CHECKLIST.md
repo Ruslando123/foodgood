@@ -26,6 +26,7 @@ REDIS_URL=rediss://...
 REDIS_REQUIRED=true
 SESSION_SECRET=<at least 32 random bytes>
 OTP_SECRET=<different random secret>
+PILOT_INVITE_CODE_HASH=<required SHA-256 hex digest for closed-pilot customer invites>
 ADMIN_PHONE=+7...
 APP_BASE_URL=https://foodgood.example.kz
 TELEGRAM_OTP_ENABLED=true
@@ -141,7 +142,8 @@ The restore target must be an isolated empty PostgreSQL 16/PostGIS database. A s
 
 ## Production pilot
 
-- Start with 1–3 venues and reconcile completed FoodGood reservations against each venue's till report daily.
+- Start with 3–5 venues and invite 20–50 customers in named cohorts; reconcile completed FoodGood reservations against each venue's till report daily.
 - Alert on worker heartbeat loss, failed notification jobs, expired reservations, and inventory mismatches.
-- Keep a documented cancellation, no-show, and customer-support procedure. FoodGood does not process refunds in pilot mode.
+- Before the first customer cohort, submit one order-linked “Обратная связь или помощь” message and confirm it appears in `/admin/support`; assign an owner and confirm first contact can be made within two hours.
+- Keep a documented cancellation, no-show, and customer-support procedure, including first-contact time, venue response, and final resolution. FoodGood does not process refunds in pilot mode.
 - Do not enable Telegram until its authentication and notification flows are tested separately.
