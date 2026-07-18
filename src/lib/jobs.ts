@@ -1,11 +1,10 @@
 import { randomUUID } from "crypto";
 import { prisma } from "./db";
 import { startLeaseHeartbeat } from "./lease-heartbeat";
-import { queueRefund } from "./orders";
 import { workerClaims, workerFailures, workerJobDuration, workerLeaseLost, workerSuccesses } from "./metrics";
 
-export type BatchQueue = "notifications" | "refunds";
-type BatchJobType = "FANOUT_NEW_BAG" | "REFUND_CANCELLED_BAG" | "PICKUP_REMINDER";
+export type BatchQueue = "notifications";
+type BatchJobType = "FANOUT_NEW_BAG" | "PICKUP_REMINDER";
 type ClaimedJob = {
   id: string;
   queue: string;
@@ -161,7 +160,6 @@ async function processJob(job: ClaimedJob, batchSize: number): Promise<JobResult
   }
   if (!payload.bagId) throw new Error("Batch job has no bagId");
   if (job.type === "FANOUT_NEW_BAG") return fanoutNewBag(payload.bagId, payload.cursor, batchSize);
-  if (job.type === "REFUND_CANCELLED_BAG") return refundCancelledBag(payload.bagId, batchSize);
   throw new Error(`Unsupported batch job type: ${job.type}`);
 }
 
@@ -170,7 +168,7 @@ async function pickupReminder(orderId: string): Promise<JobResult> {
     where: { id: orderId },
     include: { user: true, bag: { include: { venue: true } } },
   });
-  if (!order || !order.user.notificationReminders || !["RESERVED", "PAID", "READY_FOR_PICKUP"].includes(order.status) || order.bag.pickupEnd <= new Date()) {
+  if (!order || !order.user.notificationReminders || !["RESERVED", "READY_FOR_PICKUP"].includes(order.status) || order.bag.pickupEnd <= new Date()) {
     return { done: true };
   }
   await prisma.notification.createMany({
@@ -192,10 +190,13 @@ async function pickupReminder(orderId: string): Promise<JobResult> {
 async function fanoutNewBag(bagId: string, cursor: string | undefined, batchSize: number): Promise<JobResult> {
   const bag = await prisma.bag.findUniqueOrThrow({ where: { id: bagId }, include: { venue: true } });
   const followers = await prisma.favorite.findMany({
-    where: { venueId: bag.venueId, user: { notificationOffers: true } },
+    where: {
+      venueId: bag.venueId,
+      user: { notificationOffers: true },
+      ...(cursor ? { id: { gt: cursor } } : {}),
+    },
     orderBy: { id: "asc" },
     take: batchSize,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     select: { id: true, userId: true },
   });
   if (followers.length) {
@@ -216,39 +217,4 @@ async function fanoutNewBag(bagId: string, cursor: string | undefined, batchSize
   return followers.length < batchSize
     ? { done: true }
     : { done: false, payloadJson: JSON.stringify({ bagId, cursor: followers.at(-1)!.id }) };
-}
-
-async function refundCancelledBag(bagId: string, batchSize: number): Promise<JobResult> {
-  const bag = await prisma.bag.findUniqueOrThrow({ where: { id: bagId }, include: { venue: true } });
-  const orders = await prisma.order.findMany({
-    where: { bagId, paymentMethod: "ONLINE", status: { in: ["PAID", "READY_FOR_PICKUP"] } },
-    orderBy: { id: "asc" },
-    take: batchSize,
-    select: { id: true },
-  });
-  for (const order of orders) {
-    if (!(await queueRefund(order.id, "CANCELLED"))) continue;
-    const details = await prisma.order.findUnique({
-      where: { id: order.id },
-      include: { user: true, payment: { include: { operations: { where: { type: "REFUND" }, take: 1 } } } },
-    });
-    const operation = details?.payment?.operations[0];
-    if (details?.user.telegramId && operation) {
-      await prisma.outboxMessage.upsert({
-        where: { operationId_type: { operationId: operation.id, type: "TELEGRAM_BAG_CANCELLED" } },
-        update: {},
-        create: {
-          operationId: operation.id,
-          orderId: order.id,
-          type: "TELEGRAM_BAG_CANCELLED",
-          nextAttemptAt: new Date(0),
-          payloadJson: JSON.stringify({
-            telegramId: details.user.telegramId,
-            text: `😔 «${bag.venue.name}» отменил пакет «${bag.title}». Деньги вернутся на карту.`,
-          }),
-        },
-      });
-    }
-  }
-  return { done: orders.length < batchSize };
 }

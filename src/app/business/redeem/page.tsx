@@ -19,7 +19,7 @@ export default function RedeemPage() {
     try {
       const { order } = await api<{ order: Order }>("/api/business/redeem", {
         method: "POST",
-        body: JSON.stringify({ code, paymentConfirmed: true }),
+        body: JSON.stringify({ code, cashReceivedConfirmed: true }),
       });
       setResult(order);
       setCode("");
@@ -33,7 +33,7 @@ export default function RedeemPage() {
   return (
     <div className="mx-auto min-h-dvh max-w-xl pb-8">
       <header className="px-4 pb-3 pt-6">
-        <Link href="/business/orders?status=PAID" className="text-sm font-semibold text-primary">← К заказам</Link>
+        <Link href="/business/orders?status=RESERVED" className="text-sm font-semibold text-primary">← К броням</Link>
         <h1 className="mt-3 text-2xl font-bold">Выдача заказа</h1>
       </header>
 
@@ -65,9 +65,7 @@ export default function RedeemPage() {
           <div className="rounded-2xl bg-primary/10 border border-primary/30 p-4 space-y-1">
             <p className="font-bold text-primary">✅ Заказ выдан!</p>
             <p className="text-sm">{result.bag.title} × {result.quantity}</p>
-            <p className="text-sm text-muted">{result.paymentMethod === "PAY_AT_PICKUP"
-              ? `Оплата ${formatPrice(result.totalPrice)} принята заведением.`
-              : `Оплата ${formatPrice(result.totalPrice)} списана с холда — деньги зачислены заведению.`}</p>
+            <p className="text-sm text-muted">Оплата {formatPrice(result.totalPrice)} принята заведением.</p>
           </div>
         )}
       </main>

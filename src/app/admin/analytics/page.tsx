@@ -75,7 +75,7 @@ export default async function AdminAnalyticsPage({
     { label: "Забрано", value: s.order_completed.quantity.toLocaleString("ru-RU"), hint: `${conversion(s.order_completed.quantity, s.order_created.quantity)} от проданных` },
     { label: "Отменено", value: s.order_cancelled.quantity.toLocaleString("ru-RU"), hint: `${conversion(s.order_cancelled.quantity, s.order_created.quantity)} от проданных` },
     { label: "GMV", value: price(s.order_completed.amount), hint: "Завершённые заказы" },
-    { label: "Комиссия FoodGood", value: price(s.order_completed.platformFee), hint: "Снимок комиссии заказа" },
+    { label: "Новых клиентов", value: s.order_created.uniqueCount.toLocaleString("ru-RU"), hint: "Уникальные покупатели с бронью" },
   ];
 
   return (
@@ -136,7 +136,7 @@ export default async function AdminAnalyticsPage({
             <div className="rounded-xl bg-red-50 p-4"><p className="text-xs text-red-700">Жалобы</p><p className="mt-1 text-2xl font-bold text-red-700">{s.complaint_created.events}</p></div>
             <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs text-amber-800">Отменённые заказы</p><p className="mt-1 text-2xl font-bold text-amber-800">{s.order_cancelled.uniqueCount}</p></div>
           </div>
-          <p className="px-4 pb-4 text-xs leading-5 text-muted">GMV считается по завершённым заказам. «Продано» — количество наборов в созданных заказах; «забрано» и комиссия — по событию успешной выдачи.</p>
+          <p className="px-4 pb-4 text-xs leading-5 text-muted">Оборот считается по завершённым броням и отражает деньги, принятые заведениями на кассе. FoodGood не удерживает комиссию.</p>
         </section>
       </div>
 

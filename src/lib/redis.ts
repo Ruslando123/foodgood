@@ -1,4 +1,5 @@
 import Redis from "ioredis";
+import { redisAvailable, redisConfigured } from "./metrics";
 
 const globalRedis = globalThis as unknown as { foodgoodRedis?: Redis };
 
@@ -11,6 +12,7 @@ export function redisClient(): Redis | null {
       maxRetriesPerRequest: 1,
       enableOfflineQueue: false,
       connectTimeout: 1_000,
+      commandTimeout: 1_000,
     });
     globalRedis.foodgoodRedis.on("error", () => undefined);
   }
@@ -26,5 +28,30 @@ export async function redisReady(): Promise<Redis | null> {
     return redis;
   } catch {
     return null;
+  }
+}
+
+export type RedisHealth = "disabled" | "ok" | "unavailable";
+
+/** Active, bounded Redis check used by deep health and the metrics scrape. */
+export async function checkRedisHealth(): Promise<RedisHealth> {
+  if (!process.env.REDIS_URL) {
+    redisConfigured.set(0);
+    redisAvailable.set(0);
+    return "disabled";
+  }
+  redisConfigured.set(1);
+  const redis = await redisReady();
+  if (!redis) {
+    redisAvailable.set(0);
+    return "unavailable";
+  }
+  try {
+    await redis.ping();
+    redisAvailable.set(1);
+    return "ok";
+  } catch {
+    redisAvailable.set(0);
+    return "unavailable";
   }
 }

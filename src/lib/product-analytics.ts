@@ -24,7 +24,6 @@ type ProductEventInput = {
   bagId: string;
   orderId?: string | null;
   amount: number;
-  platformFee?: number;
   quantity?: number;
   clientSource?: string | null;
   dedupeKey?: string;
@@ -57,7 +56,6 @@ export async function recordProductEvent(db: AnalyticsDb, input: ProductEventInp
     bagId: input.bagId,
     orderId: input.orderId ?? null,
     amount: Math.max(0, Math.round(input.amount)),
-    platformFee: Math.max(0, Math.round(input.platformFee ?? 0)),
     quantity: Math.max(1, Math.round(input.quantity ?? 1)),
     clientSource: normalizeClientSource(input.clientSource),
     dedupeKey: input.dedupeKey,
@@ -81,7 +79,6 @@ export async function recordOrderLifecycleEvent(
     userId: true,
     bagId: true,
     totalPrice: true,
-    platformFee: true,
     quantity: true,
     clientSource: true,
     bag: { select: { venueId: true } },
@@ -94,7 +91,6 @@ export async function recordOrderLifecycleEvent(
     bagId: order.bagId,
     orderId: order.id,
     amount: order.totalPrice,
-    platformFee: order.platformFee,
     quantity: order.quantity,
     clientSource: order.clientSource,
     dedupeKey: `${name}:${order.id}`,
@@ -109,7 +105,6 @@ export type AnalyticsStage = {
   uniqueCount: number;
   quantity: number;
   amount: number;
-  platformFee: number;
 };
 
 export type ProductAnalyticsSnapshot = {
@@ -135,7 +130,6 @@ type AggregateRow = {
   uniqueCount: number;
   quantity: number;
   amount: bigint;
-  platformFee: bigint;
 };
 
 type SourceRow = { source: string; views: number; orders: number; completed: number; gmv: bigint };
@@ -158,8 +152,7 @@ export async function getProductAnalyticsSnapshot(options: { start?: Date; end?:
           ELSE COALESCE("orderId", id)
         END)::int AS "uniqueCount",
         COALESCE(SUM(quantity), 0)::int AS quantity,
-        COALESCE(SUM(amount), 0)::bigint AS amount,
-        COALESCE(SUM("platformFee"), 0)::bigint AS "platformFee"
+        COALESCE(SUM(amount), 0)::bigint AS amount
       FROM "ProductEvent" ${where}
       GROUP BY name
     `),
@@ -191,7 +184,6 @@ export async function getProductAnalyticsSnapshot(options: { start?: Date; end?:
     uniqueCount: 0,
     quantity: 0,
     amount: 0,
-    platformFee: 0,
   }])) as Record<ProductEventName, AnalyticsStage>;
   for (const row of aggregates) {
     if (!PRODUCT_EVENT_NAMES.includes(row.name)) continue;
@@ -201,7 +193,6 @@ export async function getProductAnalyticsSnapshot(options: { start?: Date; end?:
       uniqueCount: row.uniqueCount,
       quantity: row.quantity,
       amount: Number(row.amount),
-      platformFee: Number(row.platformFee),
     };
   }
   return {

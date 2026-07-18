@@ -1,218 +1,365 @@
 import http from "k6/http";
-import { check, fail, sleep } from "k6";
+import { check, sleep } from "k6";
+import { SharedArray } from "k6/data";
 import exec from "k6/execution";
-import { Counter, Rate, Trend } from "k6/metrics";
+import { Rate, Trend } from "k6/metrics";
 
-const BASE_URL = __ENV.BASE_URL || "";
-const CONTROL_SECRET = __ENV.LOAD_TEST_CONTROL_SECRET || "";
+const BASE_URL = (__ENV.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
+const PROFILE = __ENV.LOAD_PROFILE || "normal";
+/** @type {{
+ * runId: string,
+ * customers: Array<{ cookie: string }>,
+ * warmupCustomer?: { cookie: string },
+ * warmupBagId?: string,
+ * expectedWarmupReservations?: number,
+ * reservationBags?: Array<{ id: string }>,
+ * redeemAttempts?: Array<{ cookie: string, code: string }>,
+ * hotBagId?: string,
+ * lastBagId?: string,
+ * }} */
 const fixtures = JSON.parse(open(__ENV.LOAD_FIXTURE_FILE || "./fixtures.local.json"));
 
-const businessFailures = new Rate("business_failures");
-const oversell = new Counter("oversell_detected");
-const lastBagCreated = new Counter("last_bag_orders_created");
-const providerOrdersCreated = new Counter("provider_orders_created");
-const redeemSuccess = new Counter("redeem_success");
-const providerFaultEnabled = new Counter("provider_fault_enabled");
-const providerFaultApplied = new Counter("provider_fault_applied");
-const providerLatency = new Trend("provider_degradation_latency", true);
-const catalogLatency = new Trend("catalog_latency", true);
-const orderLatency = new Trend("order_latency", true);
-const redeemLatency = new Trend("redeem_latency", true);
-const apiLatency = new Trend("other_api_latency", true);
+if (!["normal", "hot", "ramp", "soak", "all"].includes(PROFILE)) {
+  throw new Error(`LOAD_PROFILE must be normal, hot, ramp, soak, or all; received ${PROFILE}`);
+}
+// Ramp and soak retain the exact, finite normal-profile mutation wave while
+// changing only the catalog traffic model. This keeps their database outcome
+// deterministic even though catalog arrivals are open-model.
+const runsNormalProfile = ["normal", "ramp", "soak", "all"].includes(PROFILE);
+const runsHotProfile = PROFILE === "hot" || PROFILE === "all";
+if (!fixtures.runId || !Array.isArray(fixtures.customers) || !fixtures.customers.length) {
+  throw new Error("Load fixture must contain runId and at least one customer");
+}
+if (runsNormalProfile && (!Array.isArray(fixtures.reservationBags) || !fixtures.reservationBags.length)) {
+  throw new Error("Normal profile requires reservationBags in the load fixture");
+}
+if (runsNormalProfile && (!Array.isArray(fixtures.redeemAttempts) || !fixtures.redeemAttempts.length)) {
+  throw new Error("Normal profile requires redeemAttempts in the load fixture");
+}
+if (runsNormalProfile && (!fixtures.warmupCustomer?.cookie || !fixtures.warmupBagId || fixtures.expectedWarmupReservations !== 1)) {
+  throw new Error("Normal profile requires a single dedicated warmup customer and bag");
+}
+if (runsNormalProfile && (
+  fixtures.customers.some((customer) => customer.cookie === fixtures.warmupCustomer.cookie)
+  || fixtures.reservationBags.some((bag) => bag.id === fixtures.warmupBagId)
+)) {
+  throw new Error("Normal profile warmup customer and bag must be isolated from measured fixtures");
+}
+if (runsHotProfile && (!fixtures.hotBagId || !fixtures.lastBagId)) {
+  throw new Error("Hot profile requires hotBagId and lastBagId in the load fixture");
+}
 
-const status200 = http.expectedStatuses(200);
-const orderRaceStatuses = http.expectedStatuses(201, 409);
-const orderCreatedStatus = http.expectedStatuses(201);
-const redeemStatuses = http.expectedStatuses(200, 409);
+const customers = new SharedArray("customers", () => fixtures.customers);
+const reservationBags = runsNormalProfile
+  ? new SharedArray("reservation-bags", () => fixtures.reservationBags || [])
+  : [];
+const redeemAttempts = runsNormalProfile
+  ? new SharedArray("redeem-attempts", () => fixtures.redeemAttempts || [])
+  : [];
 
+function integerEnv(name, fallback, minimum = 1) {
+  const value = Number(__ENV[name] || fallback);
+  if (!Number.isInteger(value) || value < minimum) throw new Error(`${name} must be an integer >= ${minimum}`);
+  return value;
+}
+
+function durationEnv(name, fallback) {
+  const value = __ENV[name] || fallback;
+  if (!/^\d+(ms|s|m|h)$/.test(value)) throw new Error(`${name} must be a k6 duration such as 30s or 2m`);
+  return value;
+}
+
+function thresholdEnv(name, fallback) {
+  return integerEnv(name, fallback, 1);
+}
+
+function rateEnv(name, fallback) {
+  const value = Number(__ENV[name] || fallback);
+  if (!Number.isFinite(value) || value <= 0 || value >= 1) throw new Error(`${name} must be a number between 0 and 1`);
+  return value;
+}
+
+const catalogDuration = new Trend("catalog_duration", true);
+const distributedReserveDuration = new Trend("distributed_reserve_duration", true);
+const hotReserveDuration = new Trend("hot_reserve_duration", true);
+const redeemDuration = new Trend("redeem_duration", true);
+const lastBagDuration = new Trend("last_bag_duration", true);
+const catalogUnexpected = new Rate("catalog_unexpected");
+const distributedReserveUnexpected = new Rate("distributed_reserve_unexpected");
+const hotReserveUnexpected = new Rate("hot_reserve_unexpected");
+const redeemUnexpected = new Rate("redeem_unexpected");
+const lastBagUnexpected = new Rate("last_bag_unexpected");
+let distributedReserveVUs = 1;
+let distributedReserveStaggerMs = 0;
+
+/** @returns {{ [name: string]: import("k6/options").Scenario }} */
+function normalCatalogScenario() {
+  const catalogPreAllocatedVUs = integerEnv(
+    "NORMAL_CATALOG_PREALLOCATED_VUS",
+    // Keep the old knob as a preallocation fallback without restoring its
+    // former unbounded constant-VU request rate.
+    __ENV.NORMAL_CATALOG_VUS || 100,
+  );
+  const catalogMaxVUs = integerEnv("NORMAL_CATALOG_MAX_VUS", 150);
+  if (catalogMaxVUs < catalogPreAllocatedVUs) {
+    throw new Error("NORMAL_CATALOG_MAX_VUS must be >= NORMAL_CATALOG_PREALLOCATED_VUS");
+  }
+  return {
+    executor: "constant-arrival-rate",
+    exec: "catalog",
+    rate: integerEnv("NORMAL_CATALOG_RATE", 100),
+    timeUnit: "1s",
+    duration: durationEnv("NORMAL_CATALOG_DURATION", "2m"),
+    preAllocatedVUs: catalogPreAllocatedVUs,
+    maxVUs: catalogMaxVUs,
+  };
+}
+
+function openCatalogScenario(profile) {
+  const prefix = profile.toUpperCase();
+  const preAllocatedVUs = integerEnv(`${prefix}_CATALOG_PREALLOCATED_VUS`, profile === "ramp" ? 200 : 150);
+  const maxVUs = integerEnv(`${prefix}_CATALOG_MAX_VUS`, profile === "ramp" ? 500 : 300);
+  if (maxVUs < preAllocatedVUs) {
+    throw new Error(`${prefix}_CATALOG_MAX_VUS must be >= ${prefix}_CATALOG_PREALLOCATED_VUS`);
+  }
+
+  if (profile === "soak") {
+    return {
+      executor: "constant-arrival-rate",
+      exec: "catalog",
+      rate: integerEnv("SOAK_CATALOG_RATE", 100),
+      timeUnit: "1s",
+      duration: durationEnv("SOAK_DURATION", "30m"),
+      preAllocatedVUs,
+      maxVUs,
+    };
+  }
+
+  const startRate = integerEnv("RAMP_START_RATE", 25);
+  const warmupRate = integerEnv("RAMP_WARMUP_RATE", 50);
+  const steadyRate = integerEnv("RAMP_STEADY_RATE", 100);
+  const peakRate = integerEnv("RAMP_PEAK_RATE", 200);
+  const recoveryRate = integerEnv("RAMP_RECOVERY_RATE", 50);
+  if (startRate > warmupRate || warmupRate > steadyRate || steadyRate > peakRate || recoveryRate > peakRate) {
+    throw new Error("Ramp rates must satisfy start <= warmup <= steady <= peak and recovery <= peak");
+  }
+
+  return {
+    executor: "ramping-arrival-rate",
+    exec: "catalog",
+    startRate,
+    timeUnit: "1s",
+    stages: [
+      { duration: durationEnv("RAMP_WARMUP_DURATION", "1m"), target: warmupRate },
+      { duration: durationEnv("RAMP_STEADY_DURATION", "3m"), target: steadyRate },
+      { duration: durationEnv("RAMP_PEAK_DURATION", "2m"), target: peakRate },
+      { duration: durationEnv("RAMP_RECOVERY_DURATION", "1m"), target: recoveryRate },
+    ],
+    preAllocatedVUs,
+    maxVUs,
+  };
+}
+
+/** @returns {{ [name: string]: import("k6/options").Scenario }} */
+function exactMutationScenarios() {
+  const mutationStartTime = durationEnv("NORMAL_MUTATION_START_TIME", "5s");
+  distributedReserveVUs = Math.min(integerEnv("NORMAL_RESERVE_VUS", 20), customers.length);
+  distributedReserveStaggerMs = integerEnv("NORMAL_RESERVE_STAGGER_MS", 25, 0);
+  return {
+    distributed_reserve: {
+      executor: "shared-iterations",
+      exec: "distributedReserve",
+      vus: distributedReserveVUs,
+      iterations: customers.length,
+      startTime: durationEnv("NORMAL_RESERVE_START_TIME", mutationStartTime),
+      maxDuration: durationEnv("NORMAL_RESERVE_MAX_DURATION", "2m"),
+    },
+    redeem: {
+      executor: "shared-iterations",
+      exec: "redeem",
+      vus: Math.min(integerEnv("NORMAL_REDEEM_VUS", 10), redeemAttempts.length),
+      iterations: redeemAttempts.length,
+      startTime: durationEnv("NORMAL_REDEEM_START_TIME", mutationStartTime),
+      maxDuration: durationEnv("NORMAL_REDEEM_MAX_DURATION", "2m"),
+    },
+  };
+}
+
+/** @returns {{ [name: string]: import("k6/options").Scenario }} */
+function hotScenarios() {
+  return {
+    hot_reserve: {
+      executor: "shared-iterations",
+      exec: "hotReserve",
+      vus: Math.min(integerEnv("HOT_RESERVE_VUS", 50), customers.length),
+      iterations: customers.length,
+      maxDuration: durationEnv("HOT_RESERVE_MAX_DURATION", "5m"),
+    },
+    last_bag_race: {
+      executor: "shared-iterations",
+      exec: "lastBagRace",
+      vus: Math.min(integerEnv("LAST_BAG_VUS", 20), customers.length),
+      iterations: Math.min(integerEnv("LAST_BAG_ATTEMPTS", 20), customers.length),
+      maxDuration: durationEnv("LAST_BAG_MAX_DURATION", "30s"),
+    },
+  };
+}
+
+function normalThresholds() {
+  const unexpectedRate = rateEnv("NORMAL_UNEXPECTED_RATE", 0.005);
+  return {
+    catalog_duration: [
+      `p(95)<${thresholdEnv("NORMAL_CATALOG_P95_MS", 400)}`,
+      `p(99)<${thresholdEnv("NORMAL_CATALOG_P99_MS", 900)}`,
+    ],
+    distributed_reserve_duration: [
+      `p(95)<${thresholdEnv("NORMAL_RESERVE_P95_MS", 750)}`,
+      `p(99)<${thresholdEnv("NORMAL_RESERVE_P99_MS", 1500)}`,
+    ],
+    redeem_duration: [
+      `p(95)<${thresholdEnv("NORMAL_REDEEM_P95_MS", 750)}`,
+      `p(99)<${thresholdEnv("NORMAL_REDEEM_P99_MS", 1500)}`,
+    ],
+    catalog_unexpected: [`rate<${unexpectedRate}`],
+    "dropped_iterations{scenario:catalog}": ["count==0"],
+    distributed_reserve_unexpected: [`rate<${unexpectedRate}`],
+    redeem_unexpected: [`rate<${unexpectedRate}`],
+  };
+}
+
+function openCatalogThresholds(profile) {
+  const prefix = profile.toUpperCase();
+  const unexpectedRate = rateEnv(`${prefix}_UNEXPECTED_RATE`, 0.005);
+  return {
+    catalog_duration: [
+      `p(95)<${thresholdEnv(`${prefix}_CATALOG_P95_MS`, 400)}`,
+      `p(99)<${thresholdEnv(`${prefix}_CATALOG_P99_MS`, 900)}`,
+    ],
+    catalog_unexpected: [`rate<${unexpectedRate}`],
+    "dropped_iterations{scenario:catalog}": ["count==0"],
+  };
+}
+
+function exactMutationThresholds() {
+  const unexpectedRate = rateEnv("NORMAL_UNEXPECTED_RATE", 0.005);
+  return {
+    distributed_reserve_duration: [
+      `p(95)<${thresholdEnv("NORMAL_RESERVE_P95_MS", 750)}`,
+      `p(99)<${thresholdEnv("NORMAL_RESERVE_P99_MS", 1500)}`,
+    ],
+    redeem_duration: [
+      `p(95)<${thresholdEnv("NORMAL_REDEEM_P95_MS", 750)}`,
+      `p(99)<${thresholdEnv("NORMAL_REDEEM_P99_MS", 1500)}`,
+    ],
+    distributed_reserve_unexpected: [`rate<${unexpectedRate}`],
+    redeem_unexpected: [`rate<${unexpectedRate}`],
+  };
+}
+
+function hotThresholds() {
+  const unexpectedRate = rateEnv("HOT_UNEXPECTED_RATE", 0.005);
+  return {
+    hot_reserve_duration: [
+      `p(95)<${thresholdEnv("HOT_RESERVE_P95_MS", 2500)}`,
+      `p(99)<${thresholdEnv("HOT_RESERVE_P99_MS", 5000)}`,
+    ],
+    last_bag_duration: [`p(95)<${thresholdEnv("LAST_BAG_P95_MS", 2500)}`],
+    hot_reserve_unexpected: [`rate<${unexpectedRate}`],
+    last_bag_unexpected: [`rate<${unexpectedRate}`],
+  };
+}
+
+/** @type {import("k6/options").Options} */
 export const options = {
   scenarios: {
-    catalog: {
-      executor: "ramping-arrival-rate", exec: "browseCatalog", startRate: 5, timeUnit: "1s",
-      stages: [
-        { duration: __ENV.WARMUP_DURATION || "5m", target: 15 },
-        { duration: __ENV.PEAK_DURATION || "15m", target: 40 },
-        { duration: __ENV.SPIKE_DURATION || "7m", target: 80 },
-        { duration: __ENV.SOAK_DURATION || "30m", target: 25 },
-      ],
-      preAllocatedVUs: 50, maxVUs: 200,
-    },
-    order_history: {
-      executor: "ramping-arrival-rate", exec: "readOrderHistory", startRate: 1, timeUnit: "1s",
-      stages: [
-        { duration: __ENV.WARMUP_DURATION || "5m", target: 3 },
-        { duration: __ENV.PEAK_DURATION || "15m", target: 8 },
-        { duration: __ENV.SPIKE_DURATION || "7m", target: 16 },
-        { duration: __ENV.SOAK_DURATION || "30m", target: 5 },
-      ],
-      preAllocatedVUs: 20, maxVUs: 80,
-    },
-    notifications: { executor: "constant-arrival-rate", exec: "readNotifications", rate: 3, timeUnit: "1s", duration: "52m", startTime: "5m", preAllocatedVUs: 10, maxVUs: 30 },
-    last_bag: { executor: "per-vu-iterations", exec: "buyLastBag", vus: 100, iterations: 1, startTime: __ENV.WRITE_START_TIME || "20m" },
-    redeem: { executor: "constant-vus", exec: "redeemOrders", vus: 10, duration: "22m", startTime: "5m" },
-    mass_expiry: { executor: "constant-vus", exec: "observeMassExpiry", vus: 10, duration: __ENV.SPIKE_DURATION || "7m", startTime: __ENV.WRITE_START_TIME || "20m" },
-    provider_fault_enable: { executor: "shared-iterations", exec: "enableProviderFault", vus: 1, iterations: 1, startTime: __ENV.FAULT_ENABLE_TIME || "19m55s", maxDuration: "30s" },
-    provider_degradation: { executor: "constant-arrival-rate", exec: "buyDuringProviderDegradation", rate: 10, timeUnit: "1s", duration: __ENV.SPIKE_DURATION || "7m", preAllocatedVUs: 30, maxVUs: 80, startTime: __ENV.WRITE_START_TIME || "20m" },
-    provider_fault_verify: { executor: "shared-iterations", exec: "verifyProviderFault", vus: 1, iterations: 1, startTime: __ENV.FAULT_VERIFY_TIME || "20m15s", maxDuration: "30s" },
-    provider_fault_disable: { executor: "shared-iterations", exec: "disableProviderFault", vus: 1, iterations: 1, startTime: __ENV.FAULT_DISABLE_TIME || "27m10s", maxDuration: "30s" },
+    ...(PROFILE === "normal" || PROFILE === "all" ? { catalog: normalCatalogScenario() } : {}),
+    ...(PROFILE === "ramp" || PROFILE === "soak" ? { catalog: openCatalogScenario(PROFILE) } : {}),
+    ...(runsNormalProfile ? exactMutationScenarios() : {}),
+    ...(runsHotProfile ? hotScenarios() : {}),
   },
   thresholds: {
-    checks: ["rate>0.99"],
-    http_req_duration: ["p(95)<500", "p(99)<1200"],
-    http_req_failed: ["rate<0.005"],
-    business_failures: ["rate<0.01"],
-    oversell_detected: ["count==0"],
-    last_bag_orders_created: [`count==${fixtures.expectedLastBagWinners}`],
-    provider_orders_created: [`count>=${fixtures.minimumProviderOrders}`],
-    redeem_success: [`count>=${fixtures.minimumSuccessfulRedeems}`],
-    provider_fault_enabled: ["count==1"],
-    provider_fault_applied: ["count==1"],
-    provider_degradation_latency: ["p(95)<1000"],
-    catalog_latency: ["p(95)<400", "p(99)<900"],
-    order_latency: ["p(95)<500", "p(99)<1000"],
-    redeem_latency: ["p(95)<500", "p(99)<1000"],
-    other_api_latency: ["p(95)<500", "p(99)<1200"],
+    ...(PROFILE === "normal" || PROFILE === "all" ? normalThresholds() : {}),
+    ...(PROFILE === "ramp" || PROFILE === "soak" ? openCatalogThresholds(PROFILE) : {}),
+    ...(PROFILE === "ramp" || PROFILE === "soak" ? exactMutationThresholds() : {}),
+    ...(runsHotProfile ? hotThresholds() : {}),
   },
 };
 
-function customerCookie() {
-  return fixtures.customers[(__VU + __ITER) % fixtures.customers.length].cookie;
-}
-
-function headers(cookie) {
-  return { "Content-Type": "application/json", Cookie: cookie };
-}
-
-function controlParams(responseCallback = status200) {
-  return { headers: { "Content-Type": "application/json", Authorization: `Bearer ${CONTROL_SECRET}` }, responseCallback };
+function params(cookie, extraHeaders = {}, expectedStatuses) {
+  return {
+    headers: { "Content-Type": "application/json", Cookie: cookie, ...extraHeaders },
+    ...(expectedStatuses ? { responseCallback: http.expectedStatuses(...expectedStatuses) } : {}),
+  };
 }
 
 export function setup() {
-  const missing = [];
-  if (!BASE_URL) missing.push("BASE_URL");
-  if (!CONTROL_SECRET) missing.push("LOAD_TEST_CONTROL_SECRET");
-  if (!Array.isArray(fixtures.customers) || fixtures.customers.length < 100) missing.push("fixtures.customers>=100");
-  if (!Array.isArray(fixtures.redeemAttempts) || fixtures.redeemAttempts.length === 0) missing.push("fixtures.redeemAttempts");
-  for (const key of ["lastBagId", "degradedProviderBagId", "expiryBagId", "expectedLastBagWinners", "minimumProviderOrders", "minimumProviderHolds", "minimumSuccessfulRedeems"]) {
-    if (!fixtures[key]) missing.push(`fixtures.${key}`);
-  }
-  if (missing.length) fail(`Missing required load inputs: ${missing.join(", ")}`);
-  const response = http.del(`${BASE_URL}/api/internal/mock-payment-fault`, null, controlParams());
-  if (!check(response, { "mock provider fault control is reachable": (r) => r.status === 200 })) fail("Cannot reset mock provider fault mode");
-  return { runId: fixtures.runId };
+  if (!runsNormalProfile) return;
+  const response = http.post(
+    `${BASE_URL}/api/orders`,
+    JSON.stringify({ bagId: fixtures.warmupBagId, quantity: 1 }),
+    params(fixtures.warmupCustomer.cookie, { "Idempotency-Key": `load-warmup-${fixtures.runId}` }, [201]),
+  );
+  const created = check(response, { "reservation path warmed": (result) => result.status === 201 });
+  if (!created) throw new Error(`Reservation warmup failed with HTTP ${response.status}`);
 }
 
-export function teardown() {
-  http.del(`${BASE_URL}/api/internal/mock-payment-fault`, null, controlParams());
+export function catalog() {
+  const response = http.get(`${BASE_URL}/api/bags?city=almaty&limit=20`);
+  catalogDuration.add(response.timings.duration);
+  catalogUnexpected.add(response.status !== 200);
+  check(response, { "catalog 200": (result) => result.status === 200 });
 }
 
-export function enableProviderFault() {
-  const response = http.post(`${BASE_URL}/api/internal/mock-payment-fault`, JSON.stringify({
-    runId: fixtures.runId,
-    delayMs: Number(__ENV.MOCK_PROVIDER_DELAY_MS || 250),
-    errorRate: Number(__ENV.MOCK_PROVIDER_ERROR_RATE || 0.1),
-    timeoutRate: Number(__ENV.MOCK_PROVIDER_TIMEOUT_RATE || 0.05),
-    timeoutDelayMs: Number(__ENV.MOCK_PROVIDER_TIMEOUT_DELAY_MS || 15_000),
-    enabledSeconds: Number(__ENV.MOCK_PROVIDER_FAULT_SECONDS || 600),
-  }), controlParams());
-  if (response.status !== 200) {
-    exec.test.abort(`Cannot enable provider fault mode: HTTP ${response.status}: ${response.body}`);
-  }
-  const body = response.json();
-  if (body.runId !== fixtures.runId || body.enabled !== true) {
-    exec.test.abort("Provider fault endpoint returned unexpected state");
-  }
-  providerFaultEnabled.add(1);
+export function distributedReserve() {
+  const iteration = exec.scenario.iterationInTest;
+  const staggerMs = (iteration % distributedReserveVUs) * distributedReserveStaggerMs;
+  if (staggerMs > 0) sleep(staggerMs / 1_000);
+  const customer = customers[iteration % customers.length];
+  const bag = reservationBags[iteration % reservationBags.length];
+  const response = http.post(
+    `${BASE_URL}/api/orders`,
+    JSON.stringify({ bagId: bag.id, quantity: 1 }),
+    params(customer.cookie, { "Idempotency-Key": `load-distributed-${fixtures.runId}-${iteration}` }, [201]),
+  );
+  distributedReserveDuration.add(response.timings.duration);
+  distributedReserveUnexpected.add(response.status !== 201);
+  check(response, { "distributed reservation created": (result) => result.status === 201 });
 }
 
-export function verifyProviderFault() {
-  for (let attempt = 0; attempt < 15; attempt += 1) {
-    const response = http.get(
-      `${BASE_URL}/api/internal/mock-payment-fault?runId=${encodeURIComponent(fixtures.runId)}`,
-      controlParams()
-    );
-    if (response.status === 200) {
-      const body = response.json();
-      if (body.runId === fixtures.runId && body.configured === true && body.applied === true && Number(body.statistics?.appliedCount) > 0) {
-        providerFaultApplied.add(1);
-        return;
-      }
-    }
-    sleep(1);
-  }
-  exec.test.abort("Payment worker did not acknowledge mock provider fault mode");
+export function hotReserve() {
+  const iteration = exec.scenario.iterationInTest;
+  const customer = customers[iteration % customers.length];
+  const response = http.post(
+    `${BASE_URL}/api/orders`,
+    JSON.stringify({ bagId: fixtures.hotBagId, quantity: 1 }),
+    params(customer.cookie, { "Idempotency-Key": `load-hot-${fixtures.runId}-${iteration}` }, [201]),
+  );
+  hotReserveDuration.add(response.timings.duration);
+  hotReserveUnexpected.add(response.status !== 201);
+  check(response, { "hot-row reservation created": (result) => result.status === 201 });
 }
 
-export function disableProviderFault() {
-  const response = http.del(`${BASE_URL}/api/internal/mock-payment-fault`, null, controlParams());
-  check(response, { "provider fault mode disabled": (r) => r.status === 200 });
+export function lastBagRace() {
+  const iteration = exec.scenario.iterationInTest;
+  const customer = customers[iteration % customers.length];
+  const response = http.post(
+    `${BASE_URL}/api/orders`,
+    JSON.stringify({ bagId: fixtures.lastBagId, quantity: 1 }),
+    params(customer.cookie, { "Idempotency-Key": `last-bag-${fixtures.runId}-${iteration}` }, [201, 409]),
+  );
+  lastBagDuration.add(response.timings.duration);
+  lastBagUnexpected.add(response.status !== 201 && response.status !== 409);
+  check(response, { "single-bag race handled": (result) => result.status === 201 || result.status === 409 });
 }
 
-export function browseCatalog() {
-  const cursor = Math.random() > 0.7 ? "&minDiscount=50&maxPrice=2500" : "";
-  const response = http.get(`${BASE_URL}/api/bags?city=almaty&sort=distance&lat=43.2389&lng=76.8897${cursor}`, { responseCallback: status200 });
-  catalogLatency.add(response.timings.duration);
-  check(response, { "catalog 200": (r) => r.status === 200, "catalog has bags": (r) => Array.isArray(r.json("bags")) });
-  sleep(Math.random());
-}
-
-export function buyLastBag() {
-  const response = http.post(`${BASE_URL}/api/orders`, JSON.stringify({ bagId: fixtures.lastBagId, quantity: 1 }), {
-    headers: { ...headers(customerCookie()), "Idempotency-Key": `k6-last-${__VU}-${__ITER}` },
-    responseCallback: orderRaceStatuses,
-  });
-  orderLatency.add(response.timings.duration);
-  const accepted = response.status === 201;
-  const soldOut = response.status === 409;
-  if (accepted) {
-    lastBagCreated.add(1);
-    if (Number(response.json("order.bag.quantityLeft")) < 0) oversell.add(1);
-  }
-  businessFailures.add(!accepted && !soldOut);
-  check(response, { "last bag returns created or sold out": () => accepted || soldOut, "last bag is never rate limited": (r) => r.status !== 429 });
-}
-
-export function redeemOrders() {
-  const attempt = fixtures.redeemAttempts[(__VU * 17 + __ITER) % fixtures.redeemAttempts.length];
-  const response = http.post(`${BASE_URL}/api/business/redeem`, JSON.stringify({ code: attempt.code }), {
-    headers: headers(attempt.cookie), responseCallback: redeemStatuses,
-  });
-  redeemLatency.add(response.timings.duration);
-  if (response.status === 200) redeemSuccess.add(1);
-  businessFailures.add(![200, 409].includes(response.status));
-  check(response, { "redeem accepted or already claimed": (r) => [200, 409].includes(r.status), "redeem is never rate limited": (r) => r.status !== 429 });
-  sleep(0.5);
-}
-
-export function readOrderHistory() {
-  const response = http.get(`${BASE_URL}/api/orders?scope=history&limit=20`, { headers: headers(customerCookie()), responseCallback: status200 });
-  apiLatency.add(response.timings.duration);
-  check(response, { "order history available": (r) => r.status === 200 });
-}
-
-export function readNotifications() {
-  const response = http.get(`${BASE_URL}/api/notifications`, { headers: headers(customerCookie()), responseCallback: status200 });
-  apiLatency.add(response.timings.duration);
-  check(response, { "notifications available": (r) => r.status === 200 });
-}
-
-export function observeMassExpiry() {
-  const catalog = http.get(`${BASE_URL}/api/bags?city=almaty&q=LOAD%20mass%20expiry`, { responseCallback: status200 });
-  const deep = http.get(`${BASE_URL}/api/health/deep`, { responseCallback: status200 });
-  catalogLatency.add(catalog.timings.duration);
-  check(catalog, { "catalog remains available during expiry": (r) => r.status === 200 });
-  check(deep, { "deep health remains observable": (r) => r.status === 200 });
-  sleep(1);
-}
-
-export function buyDuringProviderDegradation() {
-  const started = Date.now();
-  const response = http.post(`${BASE_URL}/api/orders`, JSON.stringify({ bagId: fixtures.degradedProviderBagId, quantity: 1 }), {
-    headers: { ...headers(customerCookie()), "Idempotency-Key": `k6-degraded-${__VU}-${__ITER}` },
-    responseCallback: orderCreatedStatus,
-  });
-  providerLatency.add(Date.now() - started);
-  if (response.status === 201) providerOrdersCreated.add(1);
-  businessFailures.add(response.status !== 201);
-  check(response, { "degradation order is queued": (r) => r.status === 201, "degradation order is never rate limited": (r) => r.status !== 429 });
+export function redeem() {
+  const attempt = redeemAttempts[exec.scenario.iterationInTest % redeemAttempts.length];
+  const response = http.post(
+    `${BASE_URL}/api/business/redeem`,
+    JSON.stringify({ code: attempt.code, cashReceivedConfirmed: true }),
+    params(attempt.cookie, {}, [200]),
+  );
+  redeemDuration.add(response.timings.duration);
+  redeemUnexpected.add(response.status !== 200);
+  check(response, { "redeem completed": (result) => result.status === 200 });
 }

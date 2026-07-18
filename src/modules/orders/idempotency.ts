@@ -8,7 +8,8 @@ const PROCESSING_TTL_MS = 60_000;
 const RESULT_TTL_MS = 24 * 60 * 60_000;
 const REDIS_CACHE_TTL_MS = 10 * 60_000;
 const WAIT_MS = 5_000;
-const POLL_MS = 25;
+const MIN_POLL_MS = 50;
+const MAX_POLL_MS = 500;
 
 function keyConflict(): never {
   throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key уже использован с другими параметрами");
@@ -94,8 +95,12 @@ export async function idempotentOrderRequest<T>(
     }
 
     const deadline = Date.now() + WAIT_MS;
+    let pollMs = MIN_POLL_MS;
     while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      const remainingMs = deadline - Date.now();
+      const jitteredMs = Math.round(pollMs * (0.8 + Math.random() * 0.4));
+      await new Promise((resolve) => setTimeout(resolve, Math.max(1, Math.min(remainingMs, jitteredMs))));
+      pollMs = Math.min(MAX_POLL_MS, pollMs * 2);
       const completed = await prisma.orderIdempotencyKey.findUnique({ where: { key } });
       if (!completed) break;
       if (completed.fingerprint !== fingerprint) keyConflict();
@@ -117,7 +122,7 @@ export async function idempotentOrderRequest<T>(
   if (!ownerId) throw new Error("Idempotency ownership was not acquired");
   try {
     const result = await work(ownerId, ownerToken);
-    const resultExpiresAt = new Date(Date.now() + RESULT_TTL_MS);
+    const resultExpiresAt = resultRetentionExpiry(result);
     const completed = await prisma.orderIdempotencyKey.updateMany({
       where: { id: ownerId, ownerToken, status: "PROCESSING" },
       data: { status: "SUCCEEDED", resultJson: JSON.stringify(result), expiresAt: resultExpiresAt },
@@ -134,6 +139,19 @@ export async function idempotentOrderRequest<T>(
     });
     throw error;
   }
+}
+
+/**
+ * Keep an order's dedupe record through its pickup window. A delayed mobile
+ * retry must never create a second reservation merely because 24 hours passed.
+ */
+function resultRetentionExpiry(result: unknown): Date {
+  const fallback = Date.now() + RESULT_TTL_MS;
+  if (!result || typeof result !== "object" || !("bag" in result)) return new Date(fallback);
+  const bag = (result as { bag?: unknown }).bag;
+  if (!bag || typeof bag !== "object" || !("pickupEnd" in bag)) return new Date(fallback);
+  const pickupEnd = new Date((bag as { pickupEnd: string | Date }).pickupEnd).getTime();
+  return new Date(Number.isFinite(pickupEnd) ? Math.max(fallback, pickupEnd + RESULT_TTL_MS) : fallback);
 }
 
 export async function pruneExpiredOrderIdempotencyKeys(limit = 500): Promise<number> {

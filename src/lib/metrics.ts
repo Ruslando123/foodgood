@@ -1,12 +1,14 @@
-import { Counter, Histogram, Registry, collectDefaultMetrics } from "prom-client";
+import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom-client";
 
 const globalMetrics = globalThis as unknown as {
   registry?: Registry;
   apiDuration?: Histogram<"method" | "route" | "status">;
   queryDuration?: Histogram<"model" | "operation">;
-  paymentFailures?: Counter<"operation">;
   workerRuns?: Counter<"worker" | "result">;
   rateLimitFallback?: Counter;
+  rateLimitFallbackByReason?: Counter<"reason">;
+  redisConfigured?: Gauge;
+  redisAvailable?: Gauge;
   workerDuration?: Histogram<"worker" | "result">;
   workerBatchSize?: Histogram<"worker">;
   workerLeaseLost?: Counter<"worker">;
@@ -38,14 +40,6 @@ export const queryDuration = globalMetrics.queryDuration ?? new Histogram({
 });
 globalMetrics.queryDuration = queryDuration;
 
-export const paymentFailures = globalMetrics.paymentFailures ?? new Counter({
-  name: "foodgood_payment_failures_total",
-  help: "Failed payment provider operations",
-  labelNames: ["operation"],
-  registers: [metricsRegistry],
-});
-globalMetrics.paymentFailures = paymentFailures;
-
 export const workerRuns = globalMetrics.workerRuns ?? new Counter({
   name: "foodgood_worker_runs_total",
   help: "Worker iterations by result",
@@ -60,6 +54,29 @@ export const rateLimitFallback = globalMetrics.rateLimitFallback ?? new Counter(
   registers: [metricsRegistry],
 });
 globalMetrics.rateLimitFallback = rateLimitFallback;
+
+export const rateLimitFallbackByReason = globalMetrics.rateLimitFallbackByReason ?? new Counter({
+  name: "foodgood_rate_limit_fallback_reason_total",
+  help: "PostgreSQL rate-limit fallbacks by cause",
+  labelNames: ["reason"],
+  registers: [metricsRegistry],
+});
+globalMetrics.rateLimitFallbackByReason = rateLimitFallbackByReason;
+
+export const redisConfigured = globalMetrics.redisConfigured ?? new Gauge({
+  name: "foodgood_redis_configured",
+  help: "Whether REDIS_URL is configured for this process",
+  registers: [metricsRegistry],
+});
+globalMetrics.redisConfigured = redisConfigured;
+
+export const redisAvailable = globalMetrics.redisAvailable ?? new Gauge({
+  name: "foodgood_redis_available",
+  help: "Whether the most recent active Redis check succeeded",
+  registers: [metricsRegistry],
+});
+globalMetrics.redisAvailable = redisAvailable;
+redisConfigured.set(process.env.REDIS_URL ? 1 : 0);
 
 export const workerDuration = globalMetrics.workerDuration ?? new Histogram({
   name: "foodgood_worker_iteration_duration_seconds",

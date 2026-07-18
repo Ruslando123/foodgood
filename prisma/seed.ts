@@ -21,14 +21,10 @@ async function main() {
   await prisma.otpChallenge.deleteMany();
   await prisma.telegramLoginRequest.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
-  await prisma.outboxMessage.deleteMany();
   await prisma.batchJob.deleteMany();
   await prisma.review.deleteMany();
   await prisma.favorite.deleteMany();
   await prisma.notification.deleteMany();
-  await prisma.paymentEvent.deleteMany();
-  await prisma.paymentOperation.deleteMany();
-  await prisma.payment.deleteMany();
   await prisma.order.deleteMany();
   await prisma.bag.deleteMany();
   await prisma.venue.deleteMany();

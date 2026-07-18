@@ -1,55 +1,41 @@
 import { prisma } from "@/lib/db";
 import { metricsRegistry } from "@/lib/metrics";
+import { checkRedisHealth } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const secret = process.env.METRICS_SECRET;
-  if (!secret && process.env.NODE_ENV === "production") {
-    return new Response("Metrics are not configured", { status: 503 });
-  }
-  if (secret && request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-  const [queueRows, poolRows, failureRows, needsReview, reconciliationMismatches, heartbeatRows, staleOrderRows] = await Promise.all([
-    prisma.$queryRaw<Array<{ queue: string; lag: number; depth: bigint; expiredLeases: bigint }>>`
-      SELECT queue,
-             EXTRACT(EPOCH FROM (now() - MIN("nextAttemptAt")))::double precision AS lag,
-             COUNT(*) AS depth,
-             COUNT(*) FILTER (WHERE status = 'PROCESSING' AND "leaseExpiresAt" < now()) AS "expiredLeases"
-      FROM (
-        SELECT 'payments' AS queue, status, "nextAttemptAt", "leaseExpiresAt" FROM "PaymentOperation" WHERE status IN ('PENDING','RETRY','PROCESSING','WAITING_PROVIDER')
-        UNION ALL
-        SELECT 'outbox', status, "nextAttemptAt", "leaseExpiresAt" FROM "OutboxMessage" WHERE status IN ('PENDING','RETRY','PROCESSING')
-        UNION ALL
-        SELECT queue, status, "nextAttemptAt", "leaseExpiresAt" FROM "BatchJob" WHERE status IN ('PENDING','RETRY','PROCESSING')
-      ) queues GROUP BY queue
+  if (!secret && process.env.NODE_ENV === "production") return new Response("Metrics are not configured", { status: 503 });
+  if (secret && request.headers.get("authorization") !== `Bearer ${secret}`) return new Response("Unauthorized", { status: 401 });
+
+  const [queueRows, poolRows, heartbeatRows] = await Promise.all([
+    prisma.$queryRaw<Array<{ queue: string; lag: number; depth: bigint; expiredLeases: bigint; failed: bigint }>>`
+      WITH expected(queue) AS (VALUES ('notifications'))
+      SELECT expected.queue,
+             COALESCE(EXTRACT(EPOCH FROM (now() - MIN(job."nextAttemptAt") FILTER (
+               WHERE job.status IN ('PENDING','RETRY','PROCESSING')
+             ))), 0)::double precision AS lag,
+             COUNT(job.id) FILTER (WHERE job.status IN ('PENDING','RETRY','PROCESSING')) AS depth,
+             COUNT(job.id) FILTER (WHERE job.status = 'PROCESSING' AND job."leaseExpiresAt" < now()) AS "expiredLeases",
+             COUNT(job.id) FILTER (WHERE job.status = 'FAILED') AS failed
+      FROM expected
+      LEFT JOIN "BatchJob" job ON job.queue = expected.queue
+      GROUP BY expected.queue
     `,
     prisma.$queryRaw<Array<{ active: bigint; total: bigint; maximum: number }>>`
-      SELECT
-        COUNT(*) FILTER (WHERE state = 'active') AS active,
-        COUNT(*) AS total,
-        current_setting('max_connections')::integer AS maximum
+      SELECT COUNT(*) FILTER (WHERE state = 'active') AS active,
+             COUNT(*) AS total,
+             current_setting('max_connections')::integer AS maximum
       FROM pg_stat_activity WHERE datname = current_database()
     `,
-    prisma.$queryRaw<Array<{ failures: bigint }>>`
-      SELECT COUNT(*) AS failures FROM "PaymentOperation"
-      WHERE "lastError" IS NOT NULL AND "updatedAt" > now() - interval '10 minutes'
-    `,
-    prisma.paymentOperation.count({ where: { status: "NEEDS_REVIEW" } }),
-    prisma.paymentEvent.count({ where: { type: "RECONCILIATION", status: "FAILED", createdAt: { gt: new Date(Date.now() - 24 * 60 * 60_000) } } }),
     prisma.$queryRaw<Array<{ worker: string; timestamp: number }>>`
       SELECT expected.worker,
              COALESCE(EXTRACT(EPOCH FROM ((state."valueJson"::jsonb ->> 'finishedAt')::timestamptz)), 0)::double precision AS timestamp
-      FROM (VALUES ('payments'), ('expiry'), ('notifications'), ('outbox')) AS expected(worker)
+      FROM (VALUES ('expiry'), ('notifications')) AS expected(worker)
       LEFT JOIN "SystemState" state ON state.key = 'worker:' || expected.worker
     `,
-    prisma.$queryRaw<Array<{ status: string; age: number }>>`
-      SELECT status, EXTRACT(EPOCH FROM (now() - MIN("updatedAt")))::double precision AS age
-      FROM "Order"
-      WHERE status IN ('PENDING_PAYMENT', 'CAPTURE_PENDING', 'REFUND_PENDING')
-      GROUP BY status
-    `,
+    checkRedisHealth(),
   ]);
   const base = await metricsRegistry.metrics();
   const queueMetrics = queueRows.map((row) => [
@@ -57,15 +43,12 @@ export async function GET(request: Request) {
     `foodgood_queue_oldest_age_seconds{queue="${row.queue}"} ${Math.max(0, row.lag ?? 0)}`,
     `foodgood_queue_depth{queue="${row.queue}"} ${row.depth}`,
     `foodgood_queue_expired_leases{queue="${row.queue}"} ${row.expiredLeases}`,
+    `foodgood_queue_failed_jobs{queue="${row.queue}"} ${row.failed}`,
   ].join("\n")).join("\n");
   const pool = poolRows[0];
-  const poolMetrics = pool
-    ? `foodgood_db_pool_active ${pool.active}\nfoodgood_db_pool_connections ${pool.total}\nfoodgood_db_max_connections ${pool.maximum}`
-    : "";
-  const failureMetrics = `foodgood_payment_failures_recent ${failureRows[0]?.failures ?? 0}\nfoodgood_payment_needs_review ${needsReview}\nfoodgood_payment_reconciliation_mismatches ${reconciliationMismatches}`;
+  const poolMetrics = pool ? `foodgood_db_pool_active ${pool.active}\nfoodgood_db_pool_connections ${pool.total}\nfoodgood_db_max_connections ${pool.maximum}` : "";
   const heartbeatMetrics = heartbeatRows.map((row) => `foodgood_worker_last_heartbeat_seconds{worker="${row.worker}"} ${row.timestamp}`).join("\n");
-  const staleOrderMetrics = staleOrderRows.map((row) => `foodgood_order_status_oldest_age_seconds{status="${row.status}"} ${Math.max(0, row.age ?? 0)}`).join("\n");
-  return new Response(`${base}${queueMetrics}\n${poolMetrics}\n${failureMetrics}\n${heartbeatMetrics}\n${staleOrderMetrics}\n`, {
+  return new Response(`${base}${queueMetrics}\n${poolMetrics}\n${heartbeatMetrics}\n`, {
     headers: { "Content-Type": metricsRegistry.contentType, "Cache-Control": "no-store" },
   });
 }

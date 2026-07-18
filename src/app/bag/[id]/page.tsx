@@ -12,7 +12,6 @@ import {
   api,
   Bag,
   Order,
-  PaymentMode,
   SessionUser,
   formatPrice,
   formatPickupWindow,
@@ -31,7 +30,6 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const [paying, setPaying] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [checkoutPending, setCheckoutPending] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<PaymentMode>("ONLINE");
   const checkoutKey = useRef<string | null>(null);
   const viewedBagId = useRef<string | null>(null);
   const bagRequest = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 });
@@ -137,10 +135,9 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       const sequence = ++request.sequence;
       request.controller = controller;
       try {
-        const data = await api<{ bag: Bag; paymentMode: PaymentMode }>(`/api/bags/${id}`, { signal: controller.signal });
+        const data = await api<{ bag: Bag }>(`/api/bags/${id}`, { signal: controller.signal });
         if (!mounted || sequence !== request.sequence) return;
         setBag(data.bag);
-        setPaymentMode(data.paymentMode);
         if (!checkoutKey.current) {
           changeQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1)));
         }
@@ -193,11 +190,10 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
     try {
       const [{ user }, latestResponse] = await Promise.all([
         api<{ user: SessionUser | null }>("/api/auth/me"),
-        api<{ bag: Bag; paymentMode: PaymentMode }>(`/api/bags/${id}`),
+        api<{ bag: Bag }>(`/api/bags/${id}`),
       ]);
       const latest = latestResponse.bag;
       setBag(latest);
-      setPaymentMode(latestResponse.paymentMode);
       if (!user) {
         router.push(`/login?next=/bag/${id}`);
         return;
@@ -225,22 +221,13 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
     setProcessing(true);
     setError(null);
     try {
-      if (!checkoutKey.current) throw new Error("Сессия оплаты истекла. Начните оформление снова.");
+      if (!checkoutKey.current) throw new Error("Сессия бронирования истекла. Начните оформление снова.");
       const { order } = await api<{ order: Order }>("/api/orders", {
         method: "POST",
         headers: { "Idempotency-Key": checkoutKey.current },
         body: JSON.stringify({ bagId: id, quantity }),
       });
       clearCheckoutKey();
-      let current = order;
-      for (let attempt = 0; attempt < 20 && current.status === "PENDING_PAYMENT" && !current.payment?.checkoutUrl; attempt++) {
-        await new Promise((resolve) => window.setTimeout(resolve, 750));
-        current = (await api<{ order: Order }>(`/api/orders/${order.id}`)).order;
-      }
-      if (current.payment?.checkoutUrl) {
-        window.location.assign(current.payment.checkoutUrl);
-        return;
-      }
       router.push(`/orders?new=${order.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не получилось оформить заказ");
@@ -324,7 +311,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         <section className="space-y-2.5 rounded-[17px] border border-black/[0.07] bg-white p-4 text-[12px]">
           <h2 className="text-[14px] font-bold">Правила отмены</h2>
           <p><b>До начала выдачи:</b> отмените заказ бесплатно в разделе «Заказы».</p>
-          <p><b>Если заведение не может выдать заказ:</b> онлайн-оплата возвращается полностью; при оплате на месте списания нет.</p>
+          <p><b>Если заведение не может выдать заказ:</b> бронь отменяется, списания денег нет.</p>
           <p><b>После начала выдачи:</b> сообщите о проблеме из карточки заказа — администратор проверит ситуацию и свяжется с вами в течение двух часов.</p>
           <Link href="/legal/refunds" className="inline-block font-semibold text-primary">Полные условия отмены и возврата →</Link>
         </section>
@@ -362,7 +349,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
           {processing
             ? "Проверяем наличие…"
             : checkoutPending
-              ? paymentMode === "PAY_AT_PICKUP" ? "Продолжить бронирование" : "Повторить оплату"
+              ? "Продолжить бронирование"
               : available ? `Забронировать за ${formatPrice(total)}` : "Недоступно 😔"}
         </button>
       </div>
@@ -380,21 +367,14 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
             className="w-full max-w-md space-y-4 rounded-t-[24px] bg-white p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="font-bold text-lg">{paymentMode === "PAY_AT_PICKUP" ? "Бронирование" : "Оплата"}</h2>
+            <h2 className="font-bold text-lg">Бронирование</h2>
             <div className="text-sm space-y-1">
               <div className="flex justify-between"><span className="text-muted">{bag.title} × {quantity}</span><span>{formatPrice(total)}</span></div>
               <div className="flex justify-between font-bold text-base pt-2 border-t border-black/5"><span>Итого</span><span>{formatPrice(total)}</span></div>
             </div>
-            {paymentMode === "PAY_AT_PICKUP" ? (
-              <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">
-                Оплатите {formatPrice(total)} непосредственно заведению при получении. Заведение выдаст кассовый чек. FoodGood не принимает деньги за эту бронь.
-              </p>
-            ) : (
-              <p className="text-xs text-muted">
-                Данные карты вводятся на защищённой странице Freedom Pay. Деньги холдируются
-                и спишутся только после получения заказа.
-              </p>
-            )}
+            <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+              Оплатите {formatPrice(total)} непосредственно заведению при получении. Заведение выдаст кассовый чек. FoodGood не принимает деньги за эту бронь.
+            </p>
             <button
               onClick={confirmOrder}
               disabled={processing}
@@ -402,7 +382,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
             >
               {processing
                 ? "Обработка…"
-                : paymentMode === "PAY_AT_PICKUP" ? "Подтвердить бронь" : `Оплатить ${formatPrice(total)}`}
+                : "Подтвердить бронь"}
             </button>
             <button
               onClick={cancelCheckout}

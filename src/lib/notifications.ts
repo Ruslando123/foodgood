@@ -10,7 +10,7 @@ export async function scheduleMissingPickupReminders(limit = 500): Promise<numbe
     FROM "Order" orders
     JOIN "Bag" bag ON bag.id = orders."bagId"
     JOIN "User" account ON account.id = orders."userId"
-    WHERE orders.status IN ('RESERVED', 'PAID', 'READY_FOR_PICKUP')
+    WHERE orders.status IN ('RESERVED', 'READY_FOR_PICKUP')
       AND bag."pickupEnd" > now()
       AND account."notificationReminders" = true
       AND NOT EXISTS (

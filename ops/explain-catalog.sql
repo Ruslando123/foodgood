@@ -38,11 +38,3 @@ WHERE bag.status = 'ACTIVE'
   )
 ORDER BY bag."pickupEnd", bag.id
 LIMIT 25;
-
-EXPLAIN (ANALYZE, BUFFERS, VERBOSE)
-SELECT id, "nextAttemptAt"
-FROM "PaymentOperation"
-WHERE status IN ('PENDING', 'RETRY', 'PROCESSING')
-  AND "nextAttemptAt" <= now()
-ORDER BY "nextAttemptAt", id
-LIMIT 100;

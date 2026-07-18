@@ -27,10 +27,10 @@ export function json<T>(data: T, init?: ResponseInit) {
 }
 
 const STATIC_API_SEGMENTS = new Set([
-  "api", "admin", "business", "auth", "orders", "bags", "venues", "owners", "users", "operations",
+  "api", "admin", "business", "auth", "orders", "bags", "venues", "owners", "users",
   "reviews", "favorites", "notifications", "metrics", "health", "live", "ready", "deep", "internal",
-  "reconcile", "redeem", "finance", "export", "stats", "phone", "verify", "logout", "logout-all", "me",
-  "support", "cancel", "retry", "review", "media", "mock-payment-fault", "payments", "freedompay", "result", "checkout",
+  "redeem", "finance", "export", "stats", "phone", "verify", "logout", "logout-all", "me",
+  "support", "cancel", "review", "media",
   "analytics", "events",
 ]);
 
@@ -52,6 +52,9 @@ export async function apiRoute(
   const labels = { method: request?.method ?? "UNKNOWN", route: routeLabel(request) };
   const stop = apiDuration.startTimer();
   try {
+    if (request && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+      assertSameOrigin(request);
+    }
     const response = await handler();
     stop({ ...labels, status: String(response.status) });
     return response;

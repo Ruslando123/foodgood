@@ -8,7 +8,6 @@ import {
   IconArrowLeft,
   IconBuildingStore,
   IconChevronRight,
-  IconCreditCard,
   IconHelpCircle,
   IconInfoCircle,
   IconSeedlingFilled,
@@ -215,7 +214,6 @@ function LoginContent() {
           <MenuLink href="/orders" icon={<IconReceipt />} label="Мои заказы" />
           <MenuLink href="/notifications" icon={<IconBell />} label="Уведомления" />
           <SettingsPreferences embedded />
-          <MenuLink href="/payment-methods" icon={<IconCreditCard />} label="Способы оплаты" />
           {user.role === "ADMIN" && <MenuLink href="/admin/venues" icon={<IconBuildingStore />} label="Панель администратора" />}
           {user.role === "MERCHANT" && <MenuLink href="/business" icon={<IconBuildingStore />} label="Кабинет заведения" />}
           <MenuLink href="/help" icon={<IconHelpCircle />} label="Помощь" />

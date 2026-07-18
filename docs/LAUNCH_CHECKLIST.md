@@ -2,24 +2,19 @@
 
 ## Required infrastructure
 
-- Render web service and managed PostgreSQL in the Frankfurt region (`render.yaml`).
+- Выбранная площадка для web-приложения, PostgreSQL и двух фоновых workers. Конкретный хостинг пока не зафиксирован.
 - Paid PostgreSQL with SSL, automated backups, point-in-time recovery where available, and a tested restore procedure.
 - Redis with persistence/availability appropriate for distributed rate limits and short-lived caches.
 - S3-compatible object storage plus a public CDN/base URL for venue photos.
-- Four continuously running processes, deployed independently from the web process:
+- Two continuously running processes, deployed independently from the web process:
 
   ```bash
-  npm run worker:payments
   npm run worker:expiry
   npm run worker:notifications
-  npm run worker:outbox
   ```
 
 - Telegram-бот FoodGood, публичный HTTPS webhook и отдельный webhook secret.
-- Freedom Pay Kazakhstan merchant account with test mode and manual clearing enabled.
-- Freedom Pay Merchant API with signed result callback, two-step hold/capture, cancel/refund, and daily reconciliation.
-
-The retired `/api/internal/reconcile` endpoint is not a scheduler target. All reconciliation is performed by the dedicated workers above.
+- No bank or payment-provider credentials are configured for the pilot.
 
 ## Required production environment
 
@@ -28,6 +23,7 @@ NODE_ENV=production
 DATABASE_URL=postgresql://...        # pooled runtime connection
 DIRECT_URL=postgresql://...          # direct migrations/admin connection
 REDIS_URL=rediss://...
+REDIS_REQUIRED=true
 SESSION_SECRET=<at least 32 random bytes>
 OTP_SECRET=<different random secret>
 ADMIN_PHONE=+7...
@@ -36,9 +32,6 @@ TELEGRAM_OTP_ENABLED=true
 TELEGRAM_BOT_TOKEN=123456:...
 TELEGRAM_BOT_USERNAME=FoodGoodBot
 TELEGRAM_WEBHOOK_SECRET=<at least 32 random bytes>
-FREEDOM_PAY_MERCHANT_ID=...
-FREEDOM_PAY_SECRET_KEY=...
-FREEDOM_PAY_TEST_MODE=false
 S3_ENDPOINT=https://...
 S3_REGION=...
 S3_BUCKET=...
@@ -48,7 +41,6 @@ S3_PUBLIC_BASE_URL=https://cdn.example.kz
 METRICS_SECRET=<different random secret>
 TELEGRAM_AUTH_ENABLED=false
 TELEGRAM_NOTIFICATIONS_ENABLED=false
-ALLOW_MOCK_PAYMENTS_IN_PRODUCTION=false
 ```
 
 Generate independent secrets with `openssl rand -base64 48`. Never set `FOODGOOD_E2E_DEV_OTP` or load-test control variables in production.
@@ -75,12 +67,10 @@ Never run `npm run seed` against production.
 
 | Process | Responsibility | Primary alerts |
 |---|---|---|
-| `worker:payments` | HOLD/CAPTURE/REFUND and payment retries | payment failures, `NEEDS_REVIEW`, expired leases |
 | `worker:expiry` | stale-order expiry and TTL cleanup | stale active orders, missing heartbeat |
 | `worker:notifications` | durable notification and reminder jobs | queue age/depth, failed jobs |
-| `worker:outbox` | Telegram/external outbox delivery | failed outbox messages, queue age |
 
-Scrape the authenticated web `/api/metrics` endpoint. It aggregates durable queue state and the four worker heartbeats from PostgreSQL. Load `ops/prometheus/alerts.yml` and configure Render deploy/unhealthy notifications in the Dashboard.
+Scrape the authenticated `/api/metrics` endpoint on every web replica. Also scrape `/metrics` on both workers with the same bearer secret under `job="foodgood-worker"`; process-local worker failure and lease metrics exist only there. Load `ops/prometheus/alerts.yml` and configure deploy/unhealthy notifications on the selected hosting platform.
 
 ## Staging smoke test
 
@@ -92,25 +82,36 @@ BASE_URL=https://... npm run load:k6:staging
 STAGING_DATABASE_URL=... RESTORE_DATABASE_URL=... RESTORE_CONFIRM_EMPTY=true npm run staging:restore
 ```
 
-The staging load profile is read-only so it cannot generate real Freedom Pay operations. Run the full mutating `load:k6` plus `load:check` only in a separate mock-provider load environment. The restore target must be an isolated empty PostgreSQL 16/PostGIS database. A staging gate is incomplete without the restore evidence.
+The staging load profile is read-only. Run the mutating profiles only in a separate test environment backed by a disposable database:
+
+```bash
+LOAD_SEED_CONFIRM=foodgood-load-only SESSION_SECRET=load-only-secret npm run load:seed
+BASE_URL=https://isolated-load.example npm run load:k6:normal
+npm run load:check:normal
+BASE_URL=https://isolated-load.example npm run load:k6:hot
+npm run load:check:hot
+
+# Ramp и soak мутируют normal-фикстуры: перед каждым нужен новый disposable seed.
+BASE_URL=https://isolated-load.example npm run load:k6:ramp
+npm run load:check:ramp
+BASE_URL=https://isolated-load.example npm run load:k6:soak
+npm run load:check:soak
+```
+
+The normal profile is the steady-state release gate: its `setup()` first creates one reservation with a dedicated customer and bag to warm the lazy order route, rate-limit path, Prisma connection, and reservation SQL without recording that request in `distributed_reserve_duration`. It then spreads measured reservations deterministically across `LOAD_RESERVATION_BAGS` rows, drives catalog traffic with a bounded `constant-arrival-rate` of 100 requests/second, waits five seconds before starting reservation and redeem mutations, staggers each normal reservation cohort by `NORMAL_RESERVE_STAGGER_MS` (25 ms by default), interleaves redeem attempts round-robin across merchants, requires every prepared redeem code to complete once, and keeps p95/p99 reservation defaults at 750/1500 ms. The stagger is outside the custom HTTP latency metric and prevents `shared-iterations` from creating a synthetic simultaneous burst; the hot profile remains responsible for burst and contention behavior. Configure catalog demand with `NORMAL_CATALOG_RATE`, `NORMAL_CATALOG_PREALLOCATED_VUS`, and `NORMAL_CATALOG_MAX_VUS`; defaults preallocate 100 VUs with a 150-VU ceiling, and any dropped catalog iteration fails the gate. Configure the shared mutation warmup with `NORMAL_MUTATION_START_TIME`, or override each scenario with `NORMAL_RESERVE_START_TIME` and `NORMAL_REDEEM_START_TIME`. Cold-start after a new deployment is a separate deployment SLO and must not be inferred from this steady-state gate. The hot profile deliberately serializes work on one inventory row; its 2500/5000 ms defaults are a contention regression budget, while the last-bag scenario still requires only `201` or `409` and exactly one winner. Override thresholds only when the environment's agreed SLO is documented. Use a fresh seed for every pair of runs; `load:check:normal` and `load:check:hot` validate only the fixtures exercised by that profile. The background expiry wave is disabled by default so it cannot contaminate these measurements; enable it explicitly with `LOAD_EXPIRY_ORDERS`, and use `LOAD_EXPIRY_DELAY_SECONDS` to choose when it starts.
+
+The production-like `ramp` profile uses `ramping-arrival-rate`: 25 requests/second at the start, then 50, 100, 200, and recovery at 50 requests/second over 1m/3m/2m/1m stages. The `soak` profile uses `constant-arrival-rate` at 100 requests/second for 30 minutes. Both also run exactly one finite normal mutation wave, so `load:check:ramp` and `load:check:soak` still require every seeded reservation and redeem to complete and every affected Bag to be `SOLD_OUT` with zero inventory. They retain the 400/900 ms catalog and 750/1500 ms mutation gates, require an unexpected-status rate below 0.5%, and fail on any dropped catalog iteration. Configure ramp with `RAMP_START_RATE`, `RAMP_WARMUP_*`, `RAMP_STEADY_*`, `RAMP_PEAK_*`, `RAMP_RECOVERY_*`, and `RAMP_CATALOG_{PREALLOCATED,MAX}_VUS`; configure soak with `SOAK_DURATION`, `SOAK_CATALOG_RATE`, and `SOAK_CATALOG_{PREALLOCATED,MAX}_VUS`. Profile-specific catalog SLO overrides are `RAMP_CATALOG_{P95,P99}_MS` and `SOAK_CATALOG_{P95,P99}_MS`; do not override them unless the agreed SLO changes. Short orchestration runs may reduce only durations (for example, all ramp stage durations to `10s`, or `SOAK_DURATION=2m`), not thresholds. Use a fresh disposable database and seed for each ramp or soak run because both consume the normal mutation fixtures.
+
+The restore target must be an isolated empty PostgreSQL 16/PostGIS database. A staging gate is incomplete without the restore evidence.
 
 1. Request a Telegram code, share the native contact, and verify phone matching, expiry, single use, and lock after five failures.
-2. Create an order and observe `PENDING_PAYMENT -> PAID` through the payments worker.
-3. Redeem it and observe `CAPTURE_PENDING -> COMPLETED`.
-4. Cancel another paid order and observe `REFUND_PENDING -> CANCELLED`.
-5. Stop only the payments worker, confirm payment operations remain queued, restart it, and confirm recovery.
-6. Stop only the notifications or outbox worker, confirm its queue remains durable, restart it, and confirm drain.
-7. Simulate provider timeout and verify `RETRY`; exhaust retries and verify `NEEDS_REVIEW` in `/admin/operations`.
-8. Retry the operation from the admin screen and verify an audit record is created.
+2. Create a reservation and verify `RESERVED` and the expected inventory decrement.
+3. Mark it ready, accept payment at the venue till, issue the receipt, and redeem it as `COMPLETED`.
+4. Cancel another reservation before pickup and verify inventory is restored without any bank refund flow.
+5. Stop the notifications worker, confirm its queue remains durable, restart it, and confirm drain.
+6. Verify the admin funnel records source, reservation, completion, cancellation, and repeat-customer signals.
 
 ## Production integration checklist
-
-### Freedom Pay
-
-- Validate test merchant ID, secret, callback URL allowlist, signature verification, and manual clearing.
-- Reconcile duplicate callbacks and repeat HOLD/CAPTURE/REFUND calls with stable idempotency keys.
-- Exercise timeout-after-success, declined payment, delayed callback, refund, and daily settlement reconciliation.
-- Confirm production rejects mock payments and that the configuration guard finds no enabled mock-payment bypass assignment.
 
 ### Telegram OTP
 
@@ -140,7 +141,7 @@ The staging load profile is read-only so it cannot generate real Freedom Pay ope
 
 ## Production pilot
 
-- Start with 1–3 venues and manually reconcile every payment daily.
-- Alert on worker heartbeat loss, `NEEDS_REVIEW`, failed outbox messages, and orders stuck in intermediate states.
-- Keep a documented manual refund and customer-support procedure.
+- Start with 1–3 venues and reconcile completed FoodGood reservations against each venue's till report daily.
+- Alert on worker heartbeat loss, failed notification jobs, expired reservations, and inventory mismatches.
+- Keep a documented cancellation, no-show, and customer-support procedure. FoodGood does not process refunds in pilot mode.
 - Do not enable Telegram until its authentication and notification flows are tested separately.

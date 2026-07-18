@@ -34,9 +34,9 @@ try {
     `SELECT 'venues=' || count(*) FROM "Venue"`,
     `SELECT 'orders=' || count(*) FROM "Order"`,
     `SELECT 'negative_inventory=' || count(*) FROM "Bag" WHERE "quantityLeft" < 0`,
-    `SELECT 'duplicate_payment_operations=' || count(*) FROM (SELECT "paymentId", type FROM "PaymentOperation" GROUP BY "paymentId", type HAVING count(*) > 1) duplicates`,
+    `SELECT 'duplicate_pickup_codes=' || count(*) FROM (SELECT "pickupCode" FROM "Order" GROUP BY "pickupCode" HAVING count(*) > 1) duplicates`,
   ].join("; ")], { capture: true });
-  if (!evidence.includes("postgis=") || !evidence.includes("negative_inventory=0") || !evidence.includes("duplicate_payment_operations=0")) {
+  if (!evidence.includes("postgis=") || !evidence.includes("negative_inventory=0") || !evidence.includes("duplicate_pickup_codes=0")) {
     throw new Error(`Restored database failed integrity checks:\n${evidence}`);
   }
   console.log(`${evidence}\nrestore_duration_seconds=${Math.ceil((Date.now() - startedAt) / 1000)}`);

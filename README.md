@@ -1,154 +1,123 @@
-# FoodGood 🌱 — маркетплейс излишков еды
+# FoodGood 🌱 — сервис бронирования излишков еды
 
-MVP фудшеринг-платформы для Казахстана: кофейни, пекарни и супермаркеты продают свежую, но нераспроданную еду в конце дня со скидкой 60–70% в формате **«пакетов-сюрпризов»**. Покупатель оплачивает пакет в приложении (деньги холдируются), приходит в окно выдачи и показывает QR-код — заказ завершается, деньги уходят заведению за вычетом комиссии платформы.
+FoodGood помогает кофейням, пекарням и магазинам предлагать нераспроданную еду со скидкой в формате пакетов-сюрпризов. Покупатель бесплатно бронирует пакет, приходит в указанное окно, оплачивает его на кассе заведения и показывает код выдачи.
+
+На пилоте FoodGood не принимает деньги, не подключается к банкам и не удерживает комиссию. Цель пилота — собрать клиентскую базу и проверить конверсию брони в выдачу и повторный спрос.
 
 ## Быстрый старт
 
 ```bash
 npm install
 npm run db:generate
-npm run db:push   # применяет схему к PostgreSQL из DATABASE_URL
-npm run seed      # демо-данные: 6 заведений Алматы + пакеты на вечер
-npm run dev       # http://localhost:3000
+npm run db:push
+npm run seed
+npm run dev
 ```
 
-Фоновые процессы запускаются независимо от web-приложения:
+Нужен PostgreSQL 16 с PostGIS и `pg_trgm`. Подключение задаётся через `DATABASE_URL`.
+
+Фоновые процессы:
 
 ```bash
-npm run worker:payments
 npm run worker:expiry
 npm run worker:notifications
-npm run worker:outbox
 ```
 
-Workers постоянно забирают короткие пакеты задач через `FOR UPDATE SKIP LOCKED`; их можно масштабировать независимо количеством процессов. HTTP-запросы только изменяют локальное состояние и атомарно ставят durable job в PostgreSQL.
+- `worker:expiry` закрывает завершившиеся предложения и просроченные брони.
+- `worker:notifications` доставляет напоминания и другие отложенные уведомления.
 
-`20260711134610_init` — полная baseline-миграция, включая `PaymentOperation`. Не отмечайте её
-как applied на существующей базе: Prisma пропустит создание новой таблицы. Для локальной базы
-разработчика безопаснее пересоздать схему:
+Оба процесса используют долговечную очередь в PostgreSQL и могут запускаться отдельно от web-приложения.
+
+## Сценарий пилота
+
+1. Заведение публикует пакет и окно выдачи.
+2. Покупатель бесплатно создаёт бронь со статусом `RESERVED`.
+3. Заведение может отметить бронь как `READY_FOR_PICKUP`.
+4. На месте покупатель платит напрямую заведению и получает его кассовый чек.
+5. Сотрудник подтверждает оплату на кассе и завершает выдачу кодом; бронь получает статус `COMPLETED`.
+6. Бронь можно отменить до начала окна выдачи; остаток возвращается в продажу.
+
+В приложении нет банковских реквизитов, платёжного шлюза, онлайн-возвратов и платформенной комиссии.
+
+## Основные разделы
+
+- Покупатель: каталог и карта, карточка пакета, бесплатная бронь, список броней и код выдачи.
+- Заведение: регистрация точки, публикация пакетов, список броней, отметка готовности и выдача.
+- Администратор: заведения, брони, продуктовая воронка и обращения клиентов.
+
+## Проверка
 
 ```bash
-DATABASE_URL="..." npx prisma migrate reset
+npm run lint
+npx tsc --noEmit
+npm test
+npm run build
 ```
 
-Для production-базы с данными нужна отдельная проверенная data migration/бэкап; не применяйте
-baseline через `migrate resolve` без сверки фактической схемы.
+`npm test` поднимает тестовый PostgreSQL через Docker Compose. Если передан `TEST_DATABASE_URL`, используется уже запущенная тестовая база.
 
-Демо-аккаунты (код подтверждения всегда `0000`):
+## Нагрузочная проверка
 
-| Роль       | Телефон        |
-|------------|----------------|
-| Покупатель | `+77070000001` |
-| Мерчант    | `+77010000001` |
-| Мерчант 2  | `+77010000002` |
-
-## Что внутри
-
-- **Покупатель** (`/`) — список и карта пакетов поблизости (геолокация + сортировка по расстоянию), карточка пакета, мок-оплата с холдированием, «Мои заказы» с QR-кодом для выдачи, отмена с возвратом денег.
-- **Заведение** (`/business`) — дашборд (выручка, комиссия, «спасено пакетов»), публикация пакета-сюрприза в пару кликов, выдача заказа по коду с кассы, регистрация заведения с точкой на карте.
-- **API** (`/api/*`) — REST на route handlers; платёжные операции имеют уникальный idempotency key, статусы `CAPTURE_PENDING`/`REFUND_PENDING` и lease-based reconciliation для безопасных повторов.
-
-## Тесты
-
-```bash
-npm test   # поднимает временный PostgreSQL через Docker Compose, применяет миграции и запускает Vitest
-npm run test:upgrade # обновляет схему коммита e5efe8a и требует пустой prisma migrate diff
-```
-
-Для CI или уже запущенной БД достаточно передать `TEST_DATABASE_URL` — Docker тогда не используется.
-
-Тесты покрывают жизненный цикл заказа, отказ провайдера, recovery после сбоя БД и параллельные worker retry. Тестовый контейнер использует PostgreSQL 16 + PostGIS.
-
-## Нагрузочный прогон
-
-[`load/k6.js`](load/k6.js) содержит warm-up (5 мин), ожидаемый peak (15 мин), spike 2× (7 мин) и soak (30 мин), а также отдельные сценарии каталога, истории, уведомлений, гонки за последний пакет, выдачи, массового истечения и деградации mock-провайдера. Перед запуском staging должен быть заполнен production-подобным объёмом данных.
+Mutating-нагрузку запускайте только на одноразовой тестовой БД. Seed требует явного подтверждения и создаёт изолированные наборы данных для normal и hot; ramp и soak повторно используют normal-семантику на свежем seed:
 
 ```bash
 LOAD_SEED_CONFIRM=foodgood-load-only \
-LOAD_VENUES=100 LOAD_BAGS_PER_VENUE=50 LOAD_EXPIRY_ORDERS=10000 \
+SESSION_SECRET=load-only-secret \
+LOAD_CUSTOMERS=200 LOAD_RESERVATION_BAGS=20 \
 npm run load:seed
 
-BASE_URL=https://staging.example \
-LOAD_FIXTURE_FILE=load/fixtures.local.json \
-LOAD_TEST_CONTROL_SECRET='staging-only-secret' \
-npm run load:k6
+BASE_URL=http://localhost:3000 npm run load:k6:normal
+npm run load:check:normal
 
-LOAD_FIXTURE_FILE=load/fixtures.local.json \
-LOAD_DRAIN_TIMEOUT_MS=300000 npm run load:check
+BASE_URL=http://localhost:3000 npm run load:k6:hot
+npm run load:check:hot
+
+# Новая одноразовая БД/фикстура для каждого следующего прогона
+BASE_URL=http://localhost:3000 npm run load:k6:ramp
+npm run load:check:ramp
+
+BASE_URL=http://localhost:3000 npm run load:k6:soak
+npm run load:check:soak
 ```
 
-Seed создаёт production-подобный каталог, пул изолированных customer/merchant-сессий, отдельный пакет с остатком `1`, большой degradation-пакет, оплаченные заказы для выдачи и 10 000 истекающих заказов. Сессионные cookies пишутся с правами `0600` в игнорируемый `load/fixtures.local.json` и не выводятся в лог. Web и payments worker изолированного staging должны получить `LOAD_TEST_MODE=true` и одинаковый `LOAD_TEST_CONTROL_SECRET`; production blueprint оставляет mode выключенным и вообще не содержит control secret. k6 аварийно останавливается, если fault не сохранился или payment worker не подтвердил его применение. Финальная проверка контролирует fault statistics, терминальные ошибки, согласованность Order/Payment/Operation, успешные HOLD/CAPTURE, точного победителя last-bag, queue drain и lease.
+- `normal` распределяет брони по нескольким пакетам и измеряет steady-state throughput без искусственной блокировки одной строки; `setup()` выполняет одну бронь отдельным customer/bag для прогрева order route и reservation SQL, затем каталог подаётся с фиксированной интенсивностью 100 запросов/с, а измеряемые мутации начинаются после короткой паузы. Брони детерминированно рассредоточены внутри каждой VU-когорты, а коды выдачи чередуются round-robin между заведениями, чтобы normal-профиль не создавал синтетический синхронный burst.
+- `hot` направляет все брони в отдельный пакет и отдельно запускает гонку за последний экземпляр. Его более мягкий latency gate предназначен для выявления деградации при row contention, а не заменяет обычный SLO.
+- `ramp` подаёт каталог как открытый поток запросов и плавно растёт от 25 до 200 запросов/с, после чего проверяет восстановление на 50 запросах/с. Параллельно выполняется один конечный normal-набор броней и выдач, поэтому результат мутаций остаётся точно проверяемым.
+- `soak` держит открытый поток каталога 100 запросов/с в течение 30 минут и выполняет тот же конечный normal-набор мутаций. Он предназначен для поиска утечек ресурсов, роста очередей и деградации задержек во времени.
+
+Интенсивность каталога, резерв VU, длительности, latency thresholds и допустимая доля неожиданных статусов настраиваются переменными из `load/k6.js`, например `NORMAL_CATALOG_RATE`, `NORMAL_CATALOG_PREALLOCATED_VUS`, `NORMAL_CATALOG_MAX_VUS`, `NORMAL_MUTATION_START_TIME`, `NORMAL_RESERVE_START_TIME`, `NORMAL_REDEEM_START_TIME`, `NORMAL_RESERVE_VUS`, `NORMAL_RESERVE_STAGGER_MS`, `HOT_RESERVE_VUS`, `NORMAL_RESERVE_P95_MS`, `HOT_RESERVE_P95_MS`, `NORMAL_UNEXPECTED_RATE` и `HOT_UNEXPECTED_RATE`. Для ramp доступны `RAMP_START_RATE`, четыре пары `RAMP_*_DURATION`/`RAMP_*_RATE`, `RAMP_CATALOG_PREALLOCATED_VUS`, `RAMP_CATALOG_MAX_VUS`, `RAMP_CATALOG_P95_MS` и `RAMP_CATALOG_P99_MS`; для soak — `SOAK_DURATION`, `SOAK_CATALOG_RATE` и соответствующие `SOAK_CATALOG_*` лимиты. Короткий локальный прогон можно выполнить, например, с четырьмя ramp-длительностями `10s` или `SOAK_DURATION=2m`; latency/error gates при этом не ослабляются. По умолчанию мутации начинаются через 5 секунд, а normal-брони рассредоточиваются с шагом 25 мс; этот pacing не входит в `distributed_reserve_duration`, который измеряет только HTTP. Любой dropped iteration проваливает normal, ramp и soak. Cold-start после нового deployment проверяется отдельным SLO и не смешивается со steady-state release gate. Normal и hot могут последовательно использовать одну свежую фикстуру, поскольку их данные изолированы; для каждого ramp/soak-прогона нужна новая одноразовая БД и фикстура. Каждый профиль проверяется сразу после прогона. Подробности production-проверок находятся в `docs/LAUNCH_CHECKLIST.md`.
 
 ## Production-инфраструктура
 
-- Redis (`REDIS_URL`) обслуживает rate limit и короткий кэш идемпотентных ответов. Durable результат заказа остаётся в PostgreSQL.
-- Фото сохраняются в S3-compatible storage; `S3_PUBLIC_BASE_URL` должен указывать на CDN. Локальная файловая система остаётся только fallback для разработки.
-- Каталог фильтруется и сортируется PostgreSQL, использует PostGIS/GiST для радиуса, trigram-индексы для поиска, агрегированный рейтинг и составной cursor.
-- `/api/metrics` отдаёт Prometheus-метрики HTTP/query latency, queue depth/oldest age, expired leases, heartbeat, соединений БД и payment failures. Каждый worker отдаёт свои process-метрики на `WORKER_METRICS_PORT` (`/metrics`). Правила находятся в [`ops/alerts.yml`](ops/alerts.yml), действия — в [`ops/runbook.md`](ops/runbook.md).
-- `DATABASE_CONNECTION_LIMIT` ограничивает Prisma pool каждого процесса. Конфигурация `render.yaml`: web 5 + workers 4/3/3/3 = 18 соединений; лимит PgBouncer/PostgreSQL должен оставлять минимум 20% резерва сверх этого и административных подключений.
-- Миграции используют отдельный `DIRECT_URL`; PgBouncer URL применяется только работающими web/worker процессами.
-- Health разделён на дешёвые `/api/health/live` и `/api/health/ready`, а также кэшируемый на 20 секунд `/api/health/deep` для очередей, workers и S3.
-- Pickup reminder создаётся как scheduled durable job при успешном HOLD; старые заказы один раз догоняются командой `npm run jobs:backfill-reminders` после миграций, без постоянного сканирования обычным worker.
-- Worker `/metrics` запускается только при явно заданном `WORKER_METRICS_PORT`; поэтому локальные workers не конфликтуют за порт, а изолированные deployment-процессы могут использовать собственные значения.
+- PostgreSQL хранит пользователей, заведения, предложения, брони, уведомления и продуктовые события.
+- Redis используется для распределённого rate limit и короткого кэша идемпотентных ответов; PostgreSQL остаётся источником истины.
+- S3-compatible storage и CDN используются для фотографий заведений.
+- `/api/health/live`, `/api/health/ready` и `/api/health/deep` предназначены для health checks.
+- `/api/metrics` и worker `/metrics` отдают Prometheus-метрики очередей, задержек, heartbeat и ресурсов БД.
 
-## Текущее состояние
-
-- Есть рабочий покупательский сценарий: список и карта пакетов, геолокация, карточка пакета, демо-оплата, заказы, QR-код и отмена до начала окна выдачи.
-- Есть кабинет заведения: регистрация точки, публикация пакетов, статистика, список активных пакетов и выдача заказа по коду.
-- Есть серверная бизнес-логика: атомарный резерв остатков, статусы заказов, mock hold/capture/refund и независимо масштабируемые workers.
-- Есть авторизация: код по телефону через Telegram-бота, dev-код `0000`, Telegram WebApp `initData`, httpOnly JWT-cookie.
-- Есть демо-данные для Алматы, Prisma-схема и тесты для ключевых доменных правил.
-
-## Что сделать дальше
-
-Подробный поэтапный план развития продукта и архитектуры лежит в [`docs/PRODUCT_ARCHITECTURE_ROADMAP.md`](docs/PRODUCT_ARCHITECTURE_ROADMAP.md).
-
-### Перед пилотом
-
-- Создать FoodGood-бота через @BotFather, настроить HTTPS webhook и проверить получение OTP через системную кнопку контакта Telegram.
-- Добавить Freedom Pay adapter и подписанные webhooks поверх уже реализованных hold/capture/refund, идемпотентности, retries и журнала платёжных событий.
-- Провести и задокументировать восстановление PostgreSQL/S3 из backup в изолированное окружение.
-- Усилить роли и доступы: явная проверка `MERCHANT`, приглашения сотрудников заведения, разделение владельца и кассира.
-
-### Для продукта
-
-- Добавить повтор заказа с проверкой актуальной цены и доступности пакета.
-- Добавить push-канал и production-шаблоны SMS/Telegram для уже существующей durable notification очереди.
-- Развить жалобы по качеству в отдельный SLA-процесс с вложениями и историей решений.
-
-### Для эксплуатации
-
-- Подключить существующие Prometheus endpoints и `ops/alerts.yml` к выбранному production-мониторингу.
-- Расширить production-build e2e сценариями отмены и истечения заказа.
-- Подготовить production-деплой: переменные окружения, секреты, домен, HTTPS, CSP/security headers.
-- Проверить UX на мобильных устройствах и Telegram WebView, включая плохую сеть, отказ геолокации и пустые состояния.
-
-## Стек
-
-Next.js 15 (App Router, TypeScript) · Prisma + PostgreSQL/PostGIS · Redis · S3/CDN · Tailwind CSS 4 · Leaflet + OpenStreetMap · JWT-сессии в httpOnly-cookie (`jose`).
+Web-приложение, PostgreSQL и два worker-процесса можно разместить на любой подходящей площадке.
 
 ## Ключевые модули
 
 | Файл | Назначение |
-|------|-----------|
-| `src/lib/orders.ts` | Жизненный цикл заказа: транзакционный резерв остатка, hold/capture/refund, выдача по коду |
-| `src/lib/payments.ts` | Интерфейс `PaymentProvider` + мок-реализация |
-| `src/lib/auth.ts` | Сессии, вход по телефону (dev-код `0000`), нормализация номеров КЗ |
-| `src/lib/telegram-otp.ts` | Deep link, проверка Telegram-контакта, webhook и доставка OTP |
-| `src/lib/telegram.ts` | Верификация `initData` Telegram WebApp + Bot API |
-| `src/lib/config.ts` | Комиссия платформы (22%), категории, центр карты |
-| `src/lib/jobs.ts` | Durable batch jobs для массовых уведомлений и возвратов |
-| `src/modules/catalog/db.ts` | SQL-каталог, PostGIS и cursor pagination |
-| `prisma/schema.prisma` | User / Venue / Bag / Order / Payment / BatchJob |
+|---|---|
+| `src/lib/orders.ts` | Атомарный резерв, отмена, готовность, выдача и истечение броней |
+| `src/modules/orders/state-machine.ts` | Допустимые переходы статусов брони |
+| `src/lib/jobs.ts` | Очередь уведомлений |
+| `src/modules/catalog/db.ts` | Каталог, PostGIS-поиск и пагинация |
+| `src/lib/telegram-otp.ts` | Доставка OTP через Telegram-бота |
+| `prisma/schema.prisma` | Основная модель данных без платёжных таблиц |
 
-## Как подключить продакшен-интеграции
+## Демо-аккаунты
 
-- **Платёжный шлюз**: для пилота выбран Freedom Pay с ручным клирингом; реализуйте `PaymentProvider` после получения test merchant credentials.
-- **Telegram-код**: создайте бота у @BotFather, задайте `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_WEBHOOK_SECRET`, включите `TELEGRAM_OTP_ENABLED=true`, затем выполните `npm run telegram:webhook`. Бот сверяет системный контакт и отправляет OTP бесплатно.
-- **Telegram WebApp**: для автоматического входа внутри Telegram дополнительно включите `TELEGRAM_AUTH_ENABLED=true` и укажите URL приложения как WebApp у @BotFather.
-- **Карта 2ГИС/Яндекс**: карта изолирована в `src/components/MapView.tsx` — замените Leaflet-слой на MapGL с API-ключом.
-- **PostgreSQL**: требуется PostgreSQL 16 с расширениями PostGIS и `pg_trgm`; применяйте миграции через `prisma migrate deploy`.
+В development код подтверждения — `0000`.
 
-## Бизнес-модель
+| Роль | Телефон |
+|---|---|
+| Покупатель | `+77070000001` |
+| Заведение | `+77010000001` |
+| Заведение 2 | `+77010000002` |
 
-Платформа удерживает комиссию **22%** (`PLATFORM_FEE_PCT` в `src/lib/config.ts`) с каждого выданного заказа; комиссия фиксируется в заказе на момент покупки. Для заведения выручка от пакетов — это деньги из того, что иначе пошло бы в списание.
+## Дальше
+
+Сначала проводим пилот на 1–3 заведениях и измеряем регистрации, брони, фактические выдачи, отмены и повторные заказы. Вопрос монетизации можно возвращать только после подтверждения спроса; текущий код не содержит банковской интеграции.

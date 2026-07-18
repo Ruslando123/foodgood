@@ -3,12 +3,8 @@ import { recordOrderLifecycleEvent } from "@/lib/product-analytics";
 
 export const ORDER_STATUSES = [
   "RESERVED",
-  "PENDING_PAYMENT",
-  "PAID",
   "READY_FOR_PICKUP",
-  "CAPTURE_PENDING",
   "COMPLETED",
-  "REFUND_PENDING",
   "CANCELLED",
   "EXPIRED",
 ] as const;
@@ -17,14 +13,10 @@ export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 const ALLOWED_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
   RESERVED: ["READY_FOR_PICKUP", "COMPLETED", "CANCELLED", "EXPIRED"],
-  PENDING_PAYMENT: ["PAID", "REFUND_PENDING", "CANCELLED", "EXPIRED"],
-  PAID: ["READY_FOR_PICKUP", "CAPTURE_PENDING", "REFUND_PENDING"],
-  READY_FOR_PICKUP: ["CAPTURE_PENDING", "COMPLETED", "REFUND_PENDING", "CANCELLED", "EXPIRED"],
-  CAPTURE_PENDING: ["COMPLETED"],
+  READY_FOR_PICKUP: ["COMPLETED", "CANCELLED", "EXPIRED"],
   COMPLETED: [],
-  REFUND_PENDING: ["CANCELLED", "EXPIRED"],
-  CANCELLED: ["REFUND_PENDING"],
-  EXPIRED: ["REFUND_PENDING"],
+  CANCELLED: [],
+  EXPIRED: [],
 };
 
 function assertAllowed(from: readonly OrderStatus[], to: OrderStatus): void {
@@ -65,22 +57,49 @@ export async function transitionBagOrders(
   tx: Prisma.TransactionClient,
   bagId: string,
   from: OrderStatus | readonly OrderStatus[],
-  to: OrderStatus,
-  where: Prisma.OrderWhereInput = {}
+  to: OrderStatus
 ): Promise<number> {
   const source = Array.isArray(from) ? from : [from];
   assertAllowed(source, to);
-  const changed = await tx.order.updateMany({
-    where: { ...where, bagId, status: { in: [...source] } },
-    data: { status: to },
-  });
-  if (changed.count && (to === "COMPLETED" || to === "CANCELLED")) {
-    const affected = await tx.order.findMany({ where: { ...where, bagId, status: to }, select: { id: true } });
-    await Promise.all(affected.map(({ id }) => recordOrderLifecycleEvent(
-      tx,
-      to === "COMPLETED" ? "order_completed" : "order_cancelled",
-      id
-    )));
+  const affected = await tx.$queryRaw<Array<{
+    id: string;
+    userId: string;
+    bagId: string;
+    totalPrice: number;
+    quantity: number;
+    clientSource: string;
+    venueId: string;
+  }>>(Prisma.sql`
+    UPDATE "Order" orders
+    SET status = ${to}
+    FROM "Bag" bag
+    WHERE orders."bagId" = ${bagId}
+      AND bag.id = orders."bagId"
+      AND orders.status IN (${Prisma.join(source)})
+    RETURNING orders.id, orders."userId", orders."bagId", orders."totalPrice",
+      orders.quantity, orders."clientSource", bag."venueId"
+  `);
+  if (affected.length && (to === "COMPLETED" || to === "CANCELLED")) {
+    const eventName = to === "COMPLETED" ? "order_completed" : "order_cancelled";
+    // A bag may contain thousands of reservations. Insert analytics in
+    // bounded multi-row statements instead of issuing two queries per order.
+    for (let offset = 0; offset < affected.length; offset += 1_000) {
+      const rows = affected.slice(offset, offset + 1_000);
+      await tx.productEvent.createMany({
+        data: rows.map((order) => ({
+          name: eventName,
+          userId: order.userId,
+          venueId: order.venueId,
+          bagId: order.bagId,
+          orderId: order.id,
+          amount: order.totalPrice,
+          quantity: order.quantity,
+          clientSource: order.clientSource,
+          dedupeKey: `${eventName}:${order.id}`,
+        })),
+        skipDuplicates: true,
+      });
+    }
   }
-  return changed.count;
+  return affected.length;
 }

@@ -37,7 +37,6 @@ export async function createOrderComplaint(input: {
       bagId: order.bagId,
       orderId: order.id,
       amount: order.totalPrice,
-      platformFee: order.platformFee,
       quantity: order.quantity,
       clientSource: order.clientSource,
       metadata: { category: input.category },

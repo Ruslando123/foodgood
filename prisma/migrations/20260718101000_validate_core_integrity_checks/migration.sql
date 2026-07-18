@@ -1,0 +1,35 @@
+-- Validate the online CHECK constraints after their short ADD locks have been
+-- released. VALIDATE CONSTRAINT does not block ordinary reads or writes.
+ALTER TABLE "User" VALIDATE CONSTRAINT "User_role_check";
+ALTER TABLE "User" VALIDATE CONSTRAINT "User_status_check";
+ALTER TABLE "User" VALIDATE CONSTRAINT "User_sessionVersion_check";
+ALTER TABLE "OtpChallenge" VALIDATE CONSTRAINT "OtpChallenge_attempts_check";
+ALTER TABLE "OtpChallenge" VALIDATE CONSTRAINT "OtpChallenge_expiry_check";
+ALTER TABLE "TelegramLoginRequest" VALIDATE CONSTRAINT "TelegramLoginRequest_status_check";
+ALTER TABLE "TelegramLoginRequest" VALIDATE CONSTRAINT "TelegramLoginRequest_consumed_check";
+ALTER TABLE "TelegramLoginRequest" VALIDATE CONSTRAINT "TelegramLoginRequest_expiry_check";
+ALTER TABLE "RateLimitBucket" VALIDATE CONSTRAINT "RateLimitBucket_count_check";
+ALTER TABLE "Venue" VALIDATE CONSTRAINT "Venue_status_check";
+ALTER TABLE "Venue" VALIDATE CONSTRAINT "Venue_coordinates_check";
+ALTER TABLE "Venue" VALIDATE CONSTRAINT "Venue_rating_aggregate_check";
+ALTER TABLE "Bag" VALIDATE CONSTRAINT "Bag_price_check";
+ALTER TABLE "Bag" VALIDATE CONSTRAINT "Bag_quantity_check";
+ALTER TABLE "Bag" VALIDATE CONSTRAINT "Bag_pickup_window_check";
+ALTER TABLE "Bag" VALIDATE CONSTRAINT "Bag_status_check";
+ALTER TABLE "Order" VALIDATE CONSTRAINT "Order_quantity_check";
+ALTER TABLE "Order" VALIDATE CONSTRAINT "Order_totalPrice_check";
+ALTER TABLE "Order" VALIDATE CONSTRAINT "Order_status_check";
+ALTER TABLE "Order" VALIDATE CONSTRAINT "Order_completion_check";
+ALTER TABLE "Order" VALIDATE CONSTRAINT "Order_support_status_check";
+ALTER TABLE "Order" VALIDATE CONSTRAINT "Order_support_category_check";
+ALTER TABLE "Order" VALIDATE CONSTRAINT "Order_support_timestamps_check";
+ALTER TABLE "ProductEvent" VALIDATE CONSTRAINT "ProductEvent_amount_check";
+ALTER TABLE "ProductEvent" VALIDATE CONSTRAINT "ProductEvent_quantity_check";
+ALTER TABLE "OrderIdempotencyKey" VALIDATE CONSTRAINT "OrderIdempotencyKey_status_check";
+ALTER TABLE "OrderIdempotencyKey" VALIDATE CONSTRAINT "OrderIdempotencyKey_expiry_check";
+ALTER TABLE "Notification" VALIDATE CONSTRAINT "Notification_channel_check";
+ALTER TABLE "Notification" VALIDATE CONSTRAINT "Notification_status_check";
+ALTER TABLE "BatchJob" VALIDATE CONSTRAINT "BatchJob_status_check";
+ALTER TABLE "BatchJob" VALIDATE CONSTRAINT "BatchJob_counters_check";
+ALTER TABLE "Review" VALIDATE CONSTRAINT "Review_rating_check";
+ALTER TABLE "Review" VALIDATE CONSTRAINT "Review_moderationStatus_check";

@@ -29,6 +29,8 @@ export async function GET(req: NextRequest) {
       cursor: req.nextUrl.searchParams.get("cursor"),
       limit,
     });
-    return json(result);
+    return json(result, {
+      headers: { "Cache-Control": "public, s-maxage=15, stale-while-revalidate=30" },
+    });
   });
 }

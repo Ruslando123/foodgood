@@ -3,7 +3,7 @@
 ## Entry criteria
 
 - Staging migration, smoke, load, and isolated backup restore are complete with recorded evidence.
-- `PAYMENT_MODE=PAY_AT_PICKUP` is set explicitly for the web service. No mock or card provider is enabled in production.
+- No bank, card-provider, commission, or online-refund configuration exists in the web service.
 - Every pilot venue confirms that it accepts payment on its own till and issues the fiscal receipt before completing the pickup code.
 - Telegram OTP webhook is healthy, S3/CDN health is green, required worker heartbeats are green, and alerts reach the on-call owner.
 - `main` requires the `production-gate` status check and disallows direct/force pushes.

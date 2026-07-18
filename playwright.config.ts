@@ -16,8 +16,7 @@ export default defineConfig({
     video: "retain-on-failure",
     ...devices["Desktop Chrome"],
   },
-  webServer: [
-    {
+  webServer: {
       command: "npm run start -- --hostname localhost --port 3100",
       url: "http://localhost:3100/api/health",
       reuseExistingServer: false,
@@ -29,18 +28,6 @@ export default defineConfig({
         FOODGOOD_E2E_DEV_OTP: "true",
       },
     },
-    {
-      command: "npm run worker:payments",
-      url: "http://localhost:3101/metrics",
-      reuseExistingServer: false,
-      timeout: 120_000,
-      env: {
-        DATABASE_URL: process.env.E2E_DATABASE_URL ?? process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "",
-        WORKER_METRICS_PORT: "3101",
-        FOODGOOD_E2E_DEV_OTP: "true",
-      },
-    },
-  ],
   projects: [
     { name: "mobile-chromium", use: { ...devices["Pixel 7"] } },
   ],

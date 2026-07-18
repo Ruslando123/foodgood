@@ -7,12 +7,8 @@ export async function resetDb() {
   await prisma.telegramLoginRequest.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.batchJob.deleteMany();
-  await prisma.outboxMessage.deleteMany();
   await prisma.review.deleteMany();
   await prisma.favorite.deleteMany();
-  await prisma.paymentEvent.deleteMany();
-  await prisma.paymentOperation.deleteMany();
-  await prisma.payment.deleteMany();
   await prisma.order.deleteMany();
   await prisma.orderIdempotencyKey.deleteMany();
   await prisma.bag.deleteMany();
