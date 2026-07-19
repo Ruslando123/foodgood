@@ -93,7 +93,7 @@ async function orderStatus(page: Page, orderId: string) {
   return (await response.json()).order.status as string;
 }
 
-test("клиент покупает, владелец выдаёт, клиент оставляет один отзыв", async ({ page, browser }) => {
+test("клиент покупает, владелец выдаёт, клиент оставляет приватный structured feedback", async ({ page, browser }) => {
   await page.addInitScript(() => localStorage.setItem("foodgood-location", JSON.stringify({ lat: 43.2389, lng: 76.8897, cityId: "almaty" })));
   await login(page, "+7 707 000 00 01", /\/$/);
   // This offer belongs to the merchant used below. Selecting the first card
@@ -127,11 +127,13 @@ test("клиент покупает, владелец выдаёт, клиент
   await expect.poll(() => orderStatus(page, orderId)).toBe("COMPLETED");
   await page.goto("/orders");
   await page.getByRole("button", { name: "История" }).click();
-  await page.getByRole("button", { name: "Оставить отзыв" }).click();
+  await page.getByRole("button", { name: "Оценить заказ приватно" }).click();
+  await page.getByLabel("Свежесть").selectOption("4");
+  await page.getByLabel("Выдача").selectOption("4");
   await page.getByPlaceholder("Что понравилось или можно улучшить?").fill("Всё прошло быстро и удобно");
-  await page.getByRole("button", { name: "Отправить", exact: true }).click();
-  await expect(page.getByText("Спасибо за отзыв!", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Оставить отзыв" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Сохранить", exact: true }).click();
+  await expect(page.getByText("Спасибо! Оценка сохранена приватно.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Оценить заказ приватно" })).toHaveCount(0);
 });
 
 test("клиент отправляет привязанную к заказу обратную связь в поддержку", async ({ page, browser }) => {
@@ -162,12 +164,18 @@ test("клиент отправляет привязанную к заказу �
   await expect(adminPage.getByText("Нужна помощь с окном выдачи", { exact: true })).toBeVisible();
   await adminPage.getByRole("button", { name: "Отметить первый контакт" }).click();
   await expect(adminPage.getByText(/Первый контакт отмечен/)).toBeVisible();
-  await adminPage.getByLabel("Ответ заведения").fill("Заведение подтвердило новое окно выдачи");
-  await adminPage.getByLabel("Итог для клиента").fill("Клиент согласовал получение в новое время");
+  await adminPage.getByLabel("Ответ партнёра").fill("Заведение подтвердило новое окно выдачи");
+  await adminPage.getByLabel("Решение для покупателя").fill("Клиент согласовал получение в новое время");
   await adminPage.getByRole("radio", { name: "Да" }).check();
-  await adminPage.getByRole("button", { name: "Закрыть обращение" }).click();
+  await adminPage.getByRole("button", { name: "Зафиксировать решение" }).click();
+  await expect(adminPage.getByText("Решено", { exact: true })).toBeVisible();
+  await adminPage.getByRole("button", { name: "Закрыть кейс" }).click();
   await expect(adminPage.getByText(orderId, { exact: false })).toHaveCount(0);
   await adminContext.close();
+
+  await page.reload();
+  await expect(page.getByRole("region", { name: "Статус обращения" })).toContainText("Закрыто");
+  await expect(page.getByRole("region", { name: "Статус обращения" })).toContainText("Клиент согласовал получение в новое время");
 });
 
 test("владелец публикует пакет", async ({ page }) => {

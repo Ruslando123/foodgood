@@ -13,6 +13,7 @@ export type Venue = {
   photo: string;
   rating?: number | null;
   reviewCount?: number;
+  publicRatingsEnabled?: boolean;
   reviews?: Array<{ id: string; rating: number; comment: string; createdAt: string; user: { name: string | null } }>;
 };
 
@@ -48,7 +49,12 @@ export type Order = {
   pickupCode: string;
   createdAt: string;
   bag: Bag;
-  review?: { id: string; rating: number; comment: string } | null;
+  feedback?: { id: string; quality: number; freshness: number; match: number; value: number; pickup: number; comment: string } | null;
+  complaints?: Array<{
+    id: string; category: string; status: string; note: string; partnerResponse: string; resolution: string; openedAt: string;
+    events: Array<{ id: string; type: string; status: string | null; message: string; createdAt: string }>;
+    attachments: Array<{ id: string; name: string; contentType: string; sizeBytes: number }>;
+  }>;
 };
 
 export type SessionUser = {

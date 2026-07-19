@@ -15,7 +15,7 @@ const links = [
   { href: "/admin/orders", label: "Заказы", icon: IconClipboardList },
   { href: "/admin/audit", label: "Аудит", icon: IconHistory },
   { href: "/admin/support", label: "Обращения", icon: IconMessageReport },
-  { href: "/admin/reviews", label: "Отзывы", icon: IconStar },
+  { href: "/admin/reviews", label: "Оценки", icon: IconStar },
 ];
 
 export default function AdminNav({ name }: { name: string | null }) {

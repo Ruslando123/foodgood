@@ -279,7 +279,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
             {bag.venue.name} →
           </Link>
           <p className="mt-0.5 text-[12px] text-muted">{bag.venue.address}</p>
-          <Link href={`/venue/${bag.venue.id}`} className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[12px] font-semibold text-amber-700">★ {bag.venue.rating != null ? bag.venue.rating.toFixed(1) : "Новый"} · {bag.venue.reviewCount ?? 0} отзывов</Link>
+          {bag.venue.publicRatingsEnabled && <Link href={`/venue/${bag.venue.id}`} className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[12px] font-semibold text-amber-700">★ {bag.venue.rating != null ? bag.venue.rating.toFixed(1) : "Новый"} · {bag.venue.reviewCount ?? 0} отзывов</Link>}
         </div>
 
         <div className="space-y-3 rounded-[17px] border border-black/[0.07] bg-white p-4 text-[13px] shadow-[0_2px_10px_rgba(20,40,28,0.04)]">
@@ -299,7 +299,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
           </a>
         </div>
 
-        {(bag.venue.reviews?.length ?? 0) > 0 && <section className="space-y-2 rounded-[17px] border border-black/[0.07] bg-white p-4"><div className="flex items-center justify-between"><h2 className="text-[14px] font-bold">Последние отзывы</h2><Link href={`/venue/${bag.venue.id}#reviews`} className="text-xs font-semibold text-primary">Все отзывы →</Link></div>{bag.venue.reviews?.map((review) => <div key={review.id} className="border-t border-black/[0.06] pt-2 first:border-0"><div className="flex justify-between text-xs"><span className="font-semibold">{review.user.name ?? "Покупатель"}</span><span className="text-amber-500">{"★".repeat(review.rating)}</span></div>{review.comment && <p className="mt-1 text-xs text-muted">{review.comment}</p>}</div>)}</section>}
+        {bag.venue.publicRatingsEnabled && (bag.venue.reviews?.length ?? 0) > 0 && <section className="space-y-2 rounded-[17px] border border-black/[0.07] bg-white p-4"><div className="flex items-center justify-between"><h2 className="text-[14px] font-bold">Последние отзывы</h2><Link href={`/venue/${bag.venue.id}#reviews`} className="text-xs font-semibold text-primary">Все отзывы →</Link></div>{bag.venue.reviews?.map((review) => <div key={review.id} className="border-t border-black/[0.06] pt-2 first:border-0"><div className="flex justify-between text-xs"><span className="font-semibold">{review.user.name ?? "Покупатель"}</span><span className="text-amber-500">{"★".repeat(review.rating)}</span></div>{review.comment && <p className="mt-1 text-xs text-muted">{review.comment}</p>}</div>)}</section>}
 
         <div className="space-y-2.5 rounded-[17px] border border-black/[0.07] bg-[#fafbfa] p-4 text-[12px]">
           <h2 className="text-[14px] font-bold">Важно перед покупкой</h2>

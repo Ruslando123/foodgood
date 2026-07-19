@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { apiRoute, ApiError, json } from "@/shared/server/api";
 import { publicVenueSelect, toPublicVenueDto } from "@/modules/api/dto";
 import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
+import { PUBLIC_RATINGS_ENABLED } from "@/lib/features";
 
 export async function GET(
   _req: NextRequest,
@@ -46,7 +47,7 @@ export async function GET(
           pickupStart: bag.pickupStart.toISOString(),
           pickupEnd: bag.pickupEnd.toISOString(),
         })),
-        reviews: venue.reviews.map((review) => ({
+        reviews: (PUBLIC_RATINGS_ENABLED ? venue.reviews : []).map((review) => ({
           ...review,
           createdAt: review.createdAt.toISOString(),
         })),

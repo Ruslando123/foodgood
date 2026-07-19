@@ -9,10 +9,11 @@ import BottomNav from "@/components/BottomNav";
 import NotificationBell from "@/components/NotificationBell";
 import QrCanvas from "@/components/QrCanvas";
 import OrderSupportButton from "@/components/OrderSupportButton";
-import OrderReviewForm from "@/components/OrderReviewForm";
+import OrderFeedbackForm from "@/components/OrderFeedbackForm";
 import { api, ApiError, Order, formatPrice, formatPickupWindow } from "@/lib/client/api";
 import { twoGisDirectionsUrl } from "@/lib/maps";
 import { trackProductEvent } from "@/lib/client/product-analytics";
+import { COMPLAINT_CATEGORY_LABELS, COMPLAINT_STATUS_LABELS, type ComplaintCategory, type ComplaintStatus } from "@/shared/support";
 
 const STATUS_LABEL: Record<Order["status"], string> = {
   RESERVED: "Забронирован · оплата в заведении",
@@ -230,11 +231,28 @@ function OrderCard({
           <Link href={`/bag/${order.bag.id}`} className="block rounded-xl bg-primary/10 px-3 py-2.5 text-center text-sm font-semibold text-primary">
             Заказать снова
           </Link>
-          {order.status === "COMPLETED" && (order.review ? <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-center text-sm font-semibold text-amber-700">Отзыв оставлен · {"★".repeat(order.review.rating)}</p> : <OrderReviewForm id={order.id} />)}
+          {order.status === "COMPLETED" && (order.feedback ? <p className="rounded-xl bg-emerald-50 px-3 py-2.5 text-center text-sm font-semibold text-emerald-700">Приватная оценка сохранена</p> : <OrderFeedbackForm id={order.id} />)}
         </div>
       )}
-      <OrderSupportButton id={order.id} />
+      {(order.complaints ?? []).map((complaint) => <ComplaintTimeline key={complaint.id} complaint={complaint} />)}
+      {!(order.complaints ?? []).some((complaint) => ["OPEN", "UNDER_REVIEW", "WAITING_FOR_PARTNER", "ESCALATED"].includes(complaint.status)) && <OrderSupportButton id={order.id} />}
     </article>
+  );
+}
+
+function ComplaintTimeline({ complaint }: { complaint: NonNullable<Order["complaints"]>[number] }) {
+  const category = complaint.category as ComplaintCategory;
+  const status = complaint.status as ComplaintStatus;
+  return (
+    <section aria-label="Статус обращения" className="space-y-2 rounded-xl border border-primary/15 bg-primary/[0.035] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-bold">{COMPLAINT_CATEGORY_LABELS[category] ?? "Обращение"}</p><span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-primary">{COMPLAINT_STATUS_LABELS[status] ?? complaint.status}</span></div>
+      <ol className="space-y-2 border-l border-primary/20 pl-3">
+        {complaint.events.map((event) => <li key={event.id} className="text-xs"><p className="font-semibold">{event.status ? COMPLAINT_STATUS_LABELS[event.status as ComplaintStatus] ?? event.status : "Обновление"}</p>{event.message && <p className="text-muted">{event.message}</p>}<time className="text-[10px] text-muted">{new Date(event.createdAt).toLocaleString("ru-RU")}</time></li>)}
+      </ol>
+      {complaint.partnerResponse && <div className="rounded-lg bg-white p-2 text-xs"><b>Ответ партнёра:</b> {complaint.partnerResponse}</div>}
+      {complaint.resolution && <div className="rounded-lg bg-emerald-50 p-2 text-xs text-emerald-900"><b>Решение:</b> {complaint.resolution}</div>}
+      {complaint.attachments.length > 0 && <div className="flex flex-wrap gap-2">{complaint.attachments.map((attachment) => <a key={attachment.id} href={`/api/complaint-attachments/${attachment.id}`} className="text-xs font-semibold text-primary underline">{attachment.name}</a>)}</div>}
+    </section>
   );
 }
 

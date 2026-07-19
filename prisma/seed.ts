@@ -24,6 +24,10 @@ async function main() {
   await prisma.telegramLoginRequest.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.batchJob.deleteMany();
+  await prisma.complaintAttachment.deleteMany();
+  await prisma.complaintEvent.deleteMany();
+  await prisma.complaint.deleteMany();
+  await prisma.postPickupFeedback.deleteMany();
   await prisma.review.deleteMany();
   await prisma.favorite.deleteMany();
   await prisma.notification.deleteMany();

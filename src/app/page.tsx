@@ -20,6 +20,7 @@ import NotificationBell from "@/components/NotificationBell";
 import { api, Bag, pluralRu } from "@/lib/client/api";
 import { VENUE_CATEGORIES } from "@/lib/config";
 import { isInKazakhstan, KAZAKHSTAN_CITIES, KazakhstanCity, nearestKazakhstanCity } from "@/lib/kazakhstan";
+import { PUBLIC_RATINGS_ENABLED } from "@/lib/features";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const LOCATION_STORAGE_KEY = "foodgood-location";
@@ -137,7 +138,7 @@ export default function HomePage() {
     if (category) query.set("category", category);
     if (maxPrice) query.set("maxPrice", maxPrice);
     if (minDiscount) query.set("minDiscount", minDiscount);
-    if (minRating) query.set("minRating", minRating);
+    if (PUBLIC_RATINGS_ENABLED && minRating) query.set("minRating", minRating);
     if (maxDistance && location) query.set("maxDistance", maxDistance);
     if (todayOnly) query.set("today", "1");
     query.set("sort", sort === "distance" && !location ? "soon" : sort);
@@ -268,9 +269,9 @@ export default function HomePage() {
             <FilterSelect label="Радиус" value={maxDistance} onChange={setMaxDistance} disabled={!location}>
               <option value="">Любой</option><option value="1">до 1 км</option><option value="3">до 3 км</option><option value="5">до 5 км</option><option value="10">до 10 км</option>
             </FilterSelect>
-            <FilterSelect label="Рейтинг" value={minRating} onChange={setMinRating}>
+            {PUBLIC_RATINGS_ENABLED && <FilterSelect label="Рейтинг" value={minRating} onChange={setMinRating}>
               <option value="">Любой</option><option value="4">от 4★</option><option value="4.5">от 4.5★</option>
-            </FilterSelect>
+            </FilterSelect>}
             <button onClick={resetFilters} className="col-span-2 py-1 font-semibold text-primary">Сбросить{activeFilters ? ` · ${activeFilters}` : ""}</button>
           </div>
         )}

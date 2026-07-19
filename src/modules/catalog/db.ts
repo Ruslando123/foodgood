@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { CatalogQuery, CatalogSort } from "./query";
 import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
+import { PUBLIC_RATINGS_ENABLED } from "@/lib/features";
 
 type CatalogRow = {
   id: string;
@@ -173,7 +174,8 @@ export async function queryCatalog(input: {
         twoGisUrl: row.venueTwoGisUrl,
         category: row.venueCategory,
         photo: row.venuePhoto,
-        rating: row.venueRating || null,
+        rating: PUBLIC_RATINGS_ENABLED ? row.venueRating || null : null,
+        publicRatingsEnabled: PUBLIC_RATINGS_ENABLED,
       },
     })),
     nextCursor: hasMore && last

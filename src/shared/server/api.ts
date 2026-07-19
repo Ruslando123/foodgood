@@ -30,7 +30,7 @@ const STATIC_API_SEGMENTS = new Set([
   "api", "admin", "business", "auth", "orders", "bags", "venues", "owners", "users",
   "reviews", "favorites", "notifications", "metrics", "health", "live", "ready", "deep", "internal",
   "redeem", "finance", "export", "stats", "phone", "verify", "logout", "logout-all", "me",
-  "support", "cancel", "review", "media",
+  "support", "complaints", "complaint-attachments", "feedback", "cancel", "review", "media",
   "analytics", "events",
   "partners", "onboarding",
 ]);
@@ -45,8 +45,8 @@ function routeLabel(request?: Request): string {
 
 export async function apiRoute(
   requestOrHandler: Request | (() => Promise<NextResponse>),
-  optionalHandler?: () => Promise<NextResponse>
-): Promise<NextResponse<ApiErrorBody | unknown>> {
+  optionalHandler?: () => Promise<Response>
+): Promise<Response> {
   const request = typeof requestOrHandler === "function" ? undefined : requestOrHandler;
   const handler = typeof requestOrHandler === "function" ? requestOrHandler : optionalHandler;
   if (!handler) throw new Error("API handler is required");

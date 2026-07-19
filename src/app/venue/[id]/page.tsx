@@ -50,7 +50,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
           <p className="text-[12px] text-white/80">{VENUE_CATEGORIES[venue.category] ?? "Заведение"}</p>
           <h1 className="mt-0.5 text-[24px] font-bold tracking-[-0.03em]">{venue.name}</h1>
           <p className="mt-1 text-[13px] text-white/85">{venue.address}</p>
-          <p className="mt-2 text-[13px] font-semibold text-amber-300">★ {venue.reviews.length ? (venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1) : "Новый"} · {venue.reviews.length} отзывов</p>
+          {venue.publicRatingsEnabled && <p className="mt-2 text-[13px] font-semibold text-amber-300">★ {venue.reviews.length ? (venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1) : "Новый"} · {venue.reviews.length} отзывов</p>}
         </div>
       </header>
 
@@ -80,7 +80,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
             </div>
           ) : bags.map((bag) => <BagCard key={bag.id} bag={bag} />)}
         </section>
-        <section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-[17px] font-bold">Отзывы</h2>{venue.reviews.length > 0 && <span className="text-sm font-semibold text-amber-500">★ {(venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1)}</span>}</div>{venue.reviews.length === 0 ? <p className="rounded-[17px] bg-[#f5f6f5] p-5 text-[13px] text-muted">Отзывов пока нет.</p> : venue.reviews.map((review) => <article key={review.id} className="rounded-[17px] border p-4"><div className="flex justify-between"><p className="text-sm font-semibold">{review.user.name ?? "Покупатель"}</p><p className="text-amber-500">{"★".repeat(review.rating)}</p></div>{review.comment && <p className="mt-2 text-sm">{review.comment}</p>}<p className="mt-2 text-xs text-muted">{new Date(review.createdAt).toLocaleDateString("ru-RU")}</p></article>)}</section>
+        {venue.publicRatingsEnabled && <section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-[17px] font-bold">Отзывы</h2>{venue.reviews.length > 0 && <span className="text-sm font-semibold text-amber-500">★ {(venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1)}</span>}</div>{venue.reviews.length === 0 ? <p className="rounded-[17px] bg-[#f5f6f5] p-5 text-[13px] text-muted">Отзывов пока нет.</p> : venue.reviews.map((review) => <article key={review.id} className="rounded-[17px] border p-4"><div className="flex justify-between"><p className="text-sm font-semibold">{review.user.name ?? "Покупатель"}</p><p className="text-amber-500">{"★".repeat(review.rating)}</p></div>{review.comment && <p className="mt-2 text-sm">{review.comment}</p>}<p className="mt-2 text-xs text-muted">{new Date(review.createdAt).toLocaleDateString("ru-RU")}</p></article>)}</section>}
       </main>
       <BottomNav />
     </div>

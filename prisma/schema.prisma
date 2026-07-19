@@ -32,10 +32,14 @@ model User {
   auditLogs          AuditLog[]
   notifications      Notification[]
   favorites          Favorite[]
-  reviews            Review[]
-  supportAssignments Order[]        @relation("OrderSupportOwner")
-  partnerBusiness    PartnerBusiness? @relation("PartnerBusinessOwner")
-  partnerAgreements  PartnerAgreementAcceptance[] @relation("PartnerAgreementAcceptor")
+  reviews                Review[]
+  feedback               PostPickupFeedback[]
+  complaints             Complaint[]           @relation("ComplaintCustomer")
+  complaintAssignments   Complaint[]           @relation("ComplaintOwner")
+  complaintEvents        ComplaintEvent[]
+  complaintAttachments   ComplaintAttachment[]
+  partnerBusiness        PartnerBusiness?       @relation("PartnerBusinessOwner")
+  partnerAgreements      PartnerAgreementAcceptance[] @relation("PartnerAgreementAcceptor")
 
   @@index([role, communicationsConsent])
 }
@@ -151,6 +155,7 @@ model Venue {
   bags      Bag[]
   favorites Favorite[]
   reviews   Review[]
+  feedback  PostPickupFeedback[]
 
   @@index([cityId, status])
   @@index([ownerId])
@@ -197,22 +202,13 @@ model Order {
   pickupCode               String    @unique
   createdAt                DateTime  @default(now())
   completedAt              DateTime?
-  supportStatus            String    @default("NONE") // NONE | OPEN | RESOLVED
-  supportCategory          String? // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | OTHER
-  supportNote              String    @default("")
-  supportOpenedAt          DateTime?
-  supportOwnerId           String?
-  supportFirstContactAt    DateTime?
-  supportVenueResponse     String    @default("")
-  supportCustomerConfirmed Boolean?
-  supportResolvedAt        DateTime?
-  supportResolution        String    @default("")
   idempotencyRecordId      String?   @unique
 
   bag               Bag                  @relation(fields: [bagId], references: [id])
   user              User                 @relation(fields: [userId], references: [id])
-  supportOwner      User?                @relation("OrderSupportOwner", fields: [supportOwnerId], references: [id], onDelete: SetNull)
   review            Review?
+  feedback          PostPickupFeedback?
+  complaints        Complaint[]
   idempotencyRecord OrderIdempotencyKey? @relation(fields: [idempotencyRecordId], references: [id], onDelete: SetNull)
   statusHistory     OrderStatusHistory[]
   pickupJournal     PickupJournal?
@@ -221,8 +217,99 @@ model Order {
   @@index([userId, status, createdAt(sort: Desc), id(sort: Desc)])
   @@index([bagId, status])
   @@index([createdAt])
-  @@index([supportStatus, supportOpenedAt])
-  @@index([supportOwnerId, supportStatus])
+}
+
+/// Operational complaint snapshot. All state changes are also appended to
+/// ComplaintEvent so customer-visible history and accountability are durable.
+model Complaint {
+  id                String    @id @default(cuid())
+  orderId           String
+  customerId        String
+  category          String // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | FOOD_SAFETY | OTHER
+  status            String    @default("OPEN") // OPEN | UNDER_REVIEW | WAITING_FOR_PARTNER | RESOLVED | ESCALATED | CLOSED
+  note              String    @default("")
+  ownerId           String?
+  firstContactAt    DateTime?
+  partnerResponse   String    @default("")
+  resolution        String    @default("")
+  customerConfirmed Boolean?
+  openedAt          DateTime  @default(now())
+  escalatedAt       DateTime?
+  resolvedAt        DateTime?
+  closedAt          DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  order       Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customer    User                  @relation("ComplaintCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  owner       User?                 @relation("ComplaintOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  events      ComplaintEvent[]
+  attachments ComplaintAttachment[]
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([status, openedAt])
+  @@index([ownerId, status])
+  @@index([orderId, createdAt(sort: Desc)])
+}
+
+/// Append-only complaint timeline. `visibleToCustomer` prevents internal
+/// operational notes from leaking while preserving the complete audit trail.
+model ComplaintEvent {
+  id                String   @id @default(cuid())
+  complaintId       String
+  actorId           String?
+  type              String
+  fromStatus        String?
+  toStatus          String?
+  message           String   @default("")
+  metadataJson      String   @default("{}")
+  visibleToCustomer Boolean  @default(true)
+  createdAt         DateTime @default(now())
+
+  complaint Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([complaintId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model ComplaintAttachment {
+  id           String   @id @default(cuid())
+  complaintId  String
+  uploaderId   String
+  storageKey   String   @unique
+  originalName String
+  contentType  String
+  sizeBytes    Int
+  createdAt    DateTime @default(now())
+
+  complaint Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  uploader  User      @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
+
+  @@index([complaintId, createdAt])
+}
+
+/// Private, structured post-pickup feedback. It is intentionally independent
+/// from the legacy public Review/rating aggregate.
+model PostPickupFeedback {
+  id        String   @id @default(cuid())
+  orderId   String   @unique
+  userId    String
+  venueId   String
+  quality   Int
+  freshness Int
+  match     Int
+  value     Int
+  pickup    Int
+  comment   String   @default("")
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Restrict)
+
+  @@index([venueId, createdAt])
+  @@index([userId, createdAt])
 }
 
 /// Immutable lifecycle journal. Rows are inserted in the same transaction as
