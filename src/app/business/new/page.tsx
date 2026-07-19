@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, Venue } from "@/lib/client/api";
+import SafetyAttestationChecklist, { allSafetyConfirmed, EMPTY_SAFETY_CHECKLIST } from "@/components/SafetyAttestationChecklist";
+import { isPilotCategoryAllowed } from "@/lib/config";
 
 /** Публикация пакета «в 2 клика»: разумные значения по умолчанию на вечер. */
 export default function NewBagPage() {
@@ -20,12 +22,14 @@ export default function NewBagPage() {
   const [endTime, setEndTime] = useState("22:00");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [safety, setSafety] = useState(EMPTY_SAFETY_CHECKLIST);
 
   useEffect(() => {
     api<{ venues: Venue[] }>("/api/business/venues")
       .then(({ venues }) => {
-        setVenues(venues);
-        if (venues[0]) setVenueId(venues[0].id);
+        const pilotVenues = venues.filter(({ category }) => isPilotCategoryAllowed(category));
+        setVenues(pilotVenues);
+        if (pilotVenues[0]) setVenueId(pilotVenues[0].id);
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -63,6 +67,7 @@ export default function NewBagPage() {
           quantity: Number(quantity),
           pickupStart,
           pickupEnd,
+          safetyAttestations: safety,
         }),
       });
       router.push("/business");
@@ -144,15 +149,17 @@ export default function NewBagPage() {
 
         {error && <p className="text-red-600 text-sm">{error}</p>}
 
+        <SafetyAttestationChecklist value={safety} onChange={setSafety} />
+
         <button
           onClick={publish}
-          disabled={busy || !venueId}
+          disabled={busy || !venueId || !allSafetyConfirmed(safety)}
           className="w-full py-3.5 rounded-2xl bg-primary text-white font-bold disabled:opacity-60"
         >
           {busy ? "Публикуем…" : `Опубликовать ${quantity || 0} шт. · ${startTime}–${endTime}`}
         </button>
         <p className="text-xs text-muted text-center">
-          Покупатель платит онлайн и забирает заказ по QR-коду в окно выдачи.
+          Покупатель бесплатно бронирует пакет и оплачивает его в заведении при получении.
         </p>
       </main>
 

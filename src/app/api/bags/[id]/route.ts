@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { apiRoute, ApiError, json } from "@/shared/server/api";
 import { publicVenueSelect, toPublicVenueDto } from "@/modules/api/dto";
+import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
 
 export async function GET(
   _req: NextRequest,
@@ -9,8 +10,21 @@ export async function GET(
 ) {
   return apiRoute(_req, async () => {
     const { id } = await params;
-    const bag = await prisma.bag.findUnique({
-      where: { id },
+    const bag = await prisma.bag.findFirst({
+      where: {
+        id,
+        status: { in: ["ACTIVE", "SOLD_OUT"] },
+        pickupEnd: { gt: new Date() },
+        suitableForSaleAttested: true,
+        storageCompliantAttested: true,
+        allergensCurrentAttested: true,
+        categoryAllowedAttested: true,
+        venue: {
+          status: "ACTIVE",
+          category: { in: [...PILOT_CATEGORY_ALLOWLIST] },
+          owner: { partnerBusiness: { is: { verificationStatus: "VERIFIED", agreements: { some: { agreementVersion: PARTNER_AGREEMENT_VERSION } } } } },
+        },
+      },
       select: {
         id: true, venueId: true, title: true, description: true, allergens: true, price: true,
         originalPrice: true, quantityTotal: true, quantityLeft: true,

@@ -200,6 +200,22 @@ describe("бесплатная бронь", () => {
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 2 });
   });
 
+  it("не создаёт бронь после приостановки юридического партнёра", async () => {
+    const { customer, partner, bag } = await createFixtures({ quantity: 2 });
+    await prisma.partnerBusiness.update({ where: { id: partner.id }, data: { verificationStatus: "SUSPENDED" } });
+
+    await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("Пакет недоступен");
+    await expect(prisma.order.count()).resolves.toBe(0);
+  });
+
+  it("не создаёт бронь без полного snapshot подтверждений безопасности", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 2 });
+    await prisma.bag.update({ where: { id: bag.id }, data: { allergensCurrentAttested: false } });
+
+    await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("Пакет недоступен");
+    await expect(prisma.order.count()).resolves.toBe(0);
+  });
+
   it("проверяет начало выдачи внутри транзакции отмены", async () => {
     const { customer, bag } = await createFixtures({ pickupStart: inMinutes(-1), pickupEnd: inMinutes(60) });
     const order = await createOrder(customer.id, bag.id, 1);

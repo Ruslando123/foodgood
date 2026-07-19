@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { VENUE_CATEGORIES } from "@/lib/config";
+import { VENUE_CATEGORIES, isPilotCategoryAllowed } from "@/lib/config";
 import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { normalizeTwoGisUrl } from "@/lib/maps";
@@ -36,8 +36,8 @@ export async function POST(req: NextRequest) {
     let twoGisUrl: string;
     try { twoGisUrl = normalizeTwoGisUrl(optionalString(body.twoGisUrl, "twoGisUrl", 1000)); }
     catch { throw new ApiError(400, "INVALID_TWO_GIS_URL", "Укажите ссылку на карточку заведения с сайта 2GIS"); }
-    if (!(cat in VENUE_CATEGORIES)) {
-      throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
+    if (!(cat in VENUE_CATEGORIES) || !isPilotCategoryAllowed(cat)) {
+      throw new ApiError(400, "CATEGORY_NOT_ALLOWED_IN_PILOT", "Категория пока не входит в закрытый пилот");
     }
     let photo: string;
     try { photo = await saveVenuePhoto(file); }

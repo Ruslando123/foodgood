@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { VENUE_CATEGORIES } from "@/lib/config";
+import { VENUE_CATEGORIES, isPilotCategoryAllowed } from "@/lib/config";
 import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { normalizeTwoGisUrl } from "@/lib/maps";
@@ -24,10 +24,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(req, async () => {
     const owner = await requireMerchant(); const { id } = await params;
-    await ownedVenue(owner.id, id);
+    const existing = await ownedVenue(owner.id, id);
     const body = await readJsonObject(req);
     const category = requiredString(body.category, "category", { max: 40 });
-    if (!(category in VENUE_CATEGORIES)) throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
+    if (!(category in VENUE_CATEGORIES) || (!isPilotCategoryAllowed(category) && category !== existing.category)) throw new ApiError(400, "CATEGORY_NOT_ALLOWED_IN_PILOT", "Категория пока не входит в закрытый пилот");
     const lat = finiteNumber(body.lat, "lat", { min: -90, max: 90 });
     const lng = finiteNumber(body.lng, "lng", { min: -180, max: 180 });
     let twoGisUrl: string;

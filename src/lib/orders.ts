@@ -4,6 +4,7 @@ import { prisma } from "./db";
 import { generatePickupCode } from "./qr";
 import { transitionBagOrders, transitionOrder } from "@/modules/orders/state-machine";
 import { normalizeClientSource } from "./product-analytics";
+import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "./config";
 
 export class OrderError extends Error {}
 
@@ -29,6 +30,7 @@ type ReservationFailure = {
   bagStatus: string;
   pickupEnded: boolean;
   venueStatus: string;
+  publicationEligible: boolean;
 };
 
 /** Expires ended offers and reservations in bounded, concurrency-safe batches. */
@@ -145,8 +147,20 @@ async function createReservedOrder(
       SELECT venue.id
       FROM "Venue" venue
       JOIN "Bag" candidate ON candidate."venueId" = venue.id
+      JOIN "PartnerBusiness" partner ON partner."ownerId" = venue."ownerId"
       WHERE candidate.id = ${input.bagId}
         AND venue.status = 'ACTIVE'
+        AND venue.category IN (${Prisma.join(PILOT_CATEGORY_ALLOWLIST)})
+        AND partner."verificationStatus" = 'VERIFIED'
+        AND candidate."suitableForSaleAttested" = true
+        AND candidate."storageCompliantAttested" = true
+        AND candidate."allergensCurrentAttested" = true
+        AND candidate."categoryAllowedAttested" = true
+        AND EXISTS (
+          SELECT 1 FROM "PartnerAgreementAcceptance" acceptance
+          WHERE acceptance."partnerBusinessId" = partner.id
+            AND acceptance."agreementVersion" = ${PARTNER_AGREEMENT_VERSION}
+        )
       FOR SHARE OF venue
     ),
     locked_bag AS MATERIALIZED (
@@ -234,7 +248,24 @@ async function diagnoseReservationFailure(tx: Prisma.TransactionClient, bagId: s
     SELECT
       bag.status AS "bagStatus",
       bag."pickupEnd" <= clock_timestamp() AS "pickupEnded",
-      venue.status AS "venueStatus"
+      venue.status AS "venueStatus",
+      (
+        venue.category IN (${Prisma.join(PILOT_CATEGORY_ALLOWLIST)})
+        AND bag."suitableForSaleAttested" = true
+        AND bag."storageCompliantAttested" = true
+        AND bag."allergensCurrentAttested" = true
+        AND bag."categoryAllowedAttested" = true
+        AND EXISTS (
+          SELECT 1 FROM "PartnerBusiness" partner
+          WHERE partner."ownerId" = venue."ownerId"
+            AND partner."verificationStatus" = 'VERIFIED'
+            AND EXISTS (
+              SELECT 1 FROM "PartnerAgreementAcceptance" acceptance
+              WHERE acceptance."partnerBusinessId" = partner.id
+                AND acceptance."agreementVersion" = ${PARTNER_AGREEMENT_VERSION}
+            )
+        )
+      ) AS "publicationEligible"
     FROM "Bag" bag
     JOIN "Venue" venue ON venue.id = bag."venueId"
     WHERE bag.id = ${bagId}
@@ -242,6 +273,7 @@ async function diagnoseReservationFailure(tx: Prisma.TransactionClient, bagId: s
   const state = rows[0];
   if (!state || state.bagStatus !== "ACTIVE") throw new OrderError("Пакет недоступен");
   if (state.venueStatus !== "ACTIVE") throw new OrderError("Заведение временно недоступно");
+  if (!state.publicationEligible) throw new OrderError("Пакет недоступен");
   if (state.pickupEnded) throw new OrderError("Окно выдачи уже закончилось");
   throw new OrderError("Столько пакетов уже не осталось");
 }

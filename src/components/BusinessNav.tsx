@@ -9,6 +9,7 @@ import {
   IconLogout,
   IconPackage,
   IconQrcode,
+  IconShieldCheck,
   IconWallet,
 } from "@tabler/icons-react";
 import { api } from "@/lib/client/api";
@@ -20,6 +21,7 @@ const links = [
   { href: "/business/finance", label: "Финансы", icon: IconWallet },
   { href: "/business/redeem", label: "Выдача", icon: IconQrcode },
   { href: "/business/venues", label: "Заведения", icon: IconBuildingStore },
+  { href: "/business/onboarding", label: "Проверка", icon: IconShieldCheck },
 ];
 
 const dailyLinks = links.filter(({ href }) => ["/business", "/business/orders", "/business/bags", "/business/redeem"].includes(href));

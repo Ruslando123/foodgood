@@ -22,6 +22,8 @@ import { otpSecretValue, sessionSecretValue } from "@/lib/secrets";
 import { isPilotInviteRequired, isValidPilotInviteCode } from "@/lib/pilot-invite";
 import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
 import { assertDisposableLoadDatabase } from "@/lib/load-safety";
+import { PARTNER_AGREEMENT_VERSION, isPilotCategoryAllowed } from "@/lib/config";
+import { assertPartnerCanPublish, normalizeBusinessIdentifier, parseSafetyAttestations } from "@/lib/partner-onboarding";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -227,6 +229,48 @@ describe("pilot invite gate", () => {
     expect(isValidPilotInviteCode("wrong-code")).toBe(false);
     expect(isValidPilotInviteCode("x".repeat(257))).toBe(false);
     vi.unstubAllEnvs();
+  });
+});
+
+describe("безопасная публикация партнёра", () => {
+  const verifiedPartner = {
+    id: "partner-1",
+    legalType: "IP",
+    legalName: "ИП Тест",
+    businessIdentifier: "900101300001",
+    contactName: "Представитель",
+    contactPhone: "+77010000001",
+    verificationStatus: "VERIFIED",
+    agreements: [{ agreementVersion: PARTNER_AGREEMENT_VERSION }],
+  };
+
+  it("нормализует БИН/ИИН и оставляет только 12 цифр", () => {
+    expect(normalizeBusinessIdentifier("900 101 300 001")).toBe("900101300001");
+    expect(normalizeBusinessIdentifier("123")).toBeNull();
+  });
+
+  it("требует каждое safety-подтверждение явно", () => {
+    expect(() => parseSafetyAttestations({ suitableForSaleAttested: true })).toThrow("все условия безопасности");
+    expect(parseSafetyAttestations({
+      suitableForSaleAttested: true,
+      storageCompliantAttested: true,
+      allergensCurrentAttested: true,
+      categoryAllowedAttested: true,
+    })).toEqual({
+      suitableForSaleAttested: true,
+      storageCompliantAttested: true,
+      allergensCurrentAttested: true,
+      categoryAllowedAttested: true,
+    });
+  });
+
+  it("допускает только проверенного партнёра с текущим договором и pilot-категорией", () => {
+    expect(() => assertPartnerCanPublish(verifiedPartner, "BAKERY")).not.toThrow();
+    expect(() => assertPartnerCanPublish({ ...verifiedPartner, verificationStatus: "PENDING" }, "BAKERY")).toThrow("после проверки");
+    expect(() => assertPartnerCanPublish({ ...verifiedPartner, agreements: [] }, "BAKERY")).toThrow("версию партнёрского договора");
+    expect(() => assertPartnerCanPublish(verifiedPartner, "SUPERMARKET")).toThrow("закрытый пилот");
+    expect(isPilotCategoryAllowed("CAFE")).toBe(true);
+    expect(isPilotCategoryAllowed("SUPERMARKET")).toBe(false);
   });
 });
 

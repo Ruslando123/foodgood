@@ -32,6 +32,7 @@ const STATIC_API_SEGMENTS = new Set([
   "redeem", "finance", "export", "stats", "phone", "verify", "logout", "logout-all", "me",
   "support", "cancel", "review", "media",
   "analytics", "events",
+  "partners", "onboarding",
 ]);
 
 function routeLabel(request?: Request): string {

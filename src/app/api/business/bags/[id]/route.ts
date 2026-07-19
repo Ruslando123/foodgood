@@ -5,6 +5,7 @@ import { cancelBag, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
+import { assertPartnerCanPublish, parseSafetyAttestations, safetyAttestationData } from "@/lib/partner-onboarding";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(_req, async () => {
@@ -18,15 +19,19 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(req, async () => {
     const user = await requireMerchant(); const { id } = await params;
+    const body = await readJsonObject(req);
+    const safety = parseSafetyAttestations(body.safetyAttestations);
     const source = await prisma.bag.findUnique({ where: { id }, include: { venue: true } });
     if (!source || source.venue.ownerId !== user.id) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
     if (source.venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено");
+    const partner = await prisma.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
+    assertPartnerCanPublish(partner, source.venue.category);
     const duration = source.pickupEnd.getTime() - source.pickupStart.getTime();
     const pickupStart = new Date(source.pickupStart); const now = new Date();
     do { pickupStart.setDate(pickupStart.getDate() + 1); } while (pickupStart <= now);
     const pickupEnd = new Date(pickupStart.getTime() + duration);
     const bag = await prisma.$transaction(async (tx) => {
-      const created = await tx.bag.create({ data: { venueId: source.venueId, title: source.title, description: source.description, allergens: source.allergens, price: source.price, originalPrice: source.originalPrice, quantityTotal: source.quantityTotal, quantityLeft: source.quantityTotal, pickupStart, pickupEnd }, include: { venue: true } });
+      const created = await tx.bag.create({ data: { venueId: source.venueId, title: source.title, description: source.description, allergens: source.allergens, price: source.price, originalPrice: source.originalPrice, quantityTotal: source.quantityTotal, quantityLeft: source.quantityTotal, pickupStart, pickupEnd, ...safetyAttestationData(safety, user.id) }, include: { venue: true } });
       await recordProductEvent(tx, {
         name: "partner_offer_created",
         userId: user.id,
@@ -38,6 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         dedupeKey: `partner_offer_created:${created.id}`,
         metadata: { repeatedFromBagId: source.id },
       });
+      await tx.auditLog.create({ data: { actorId: user.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: source.venueId, partnerBusinessId: partner!.id, repeatedFromBagId: source.id, safetyAttestations: true }) } });
       return created;
     });
     return json({ bag }, { status: 201 });
@@ -69,6 +75,7 @@ export async function PATCH(
 
     if (body.quantityLeft === undefined) {
       if (body.action !== "details") throw new ApiError(400, "NO_CHANGES", "Нечего изменять");
+      const safety = parseSafetyAttestations(body.safetyAttestations);
       const title = requiredString(body.title, "title", { max: 120 });
       const description = optionalString(body.description, "description", 1000);
       const allergens = optionalString(body.allergens, "allergens", 300);
@@ -84,6 +91,8 @@ export async function PATCH(
         if (!bag || bag.venue.ownerId !== user.id) {
           throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
         }
+        const partner = await tx.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
+        assertPartnerCanPublish(partner, bag.venue.category);
         if (bag.status !== "ACTIVE" && bag.status !== "SOLD_OUT") {
           throw new ApiError(409, "BAG_NOT_EDITABLE", "Закрытый пакет нельзя редактировать");
         }
@@ -95,7 +104,7 @@ export async function PATCH(
         }
         return tx.bag.update({
           where: { id },
-          data: { title, description, allergens, price, originalPrice, pickupStart, pickupEnd },
+          data: { title, description, allergens, price, originalPrice, pickupStart, pickupEnd, ...safetyAttestationData(safety, user.id) },
           include: { venue: true },
         });
       });

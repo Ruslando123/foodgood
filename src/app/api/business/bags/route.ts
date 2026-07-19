@@ -4,6 +4,7 @@ import { requireMerchant } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
+import { assertPartnerCanPublish, parseSafetyAttestations, safetyAttestationData } from "@/lib/partner-onboarding";
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest) {
   return apiRoute(req, async () => {
     const user = await requireMerchant();
     const body = await readJsonObject(req);
+    const safety = parseSafetyAttestations(body.safetyAttestations);
     const venueId = requiredString(body.venueId, "venueId", { max: 64 });
     const title = requiredString(body.title, "title", { max: 120 });
     const description = optionalString(body.description, "description", 1000);
@@ -49,6 +51,8 @@ export async function POST(req: NextRequest) {
       throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
     }
     if (venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
+    const partner = await prisma.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
+    assertPartnerCanPublish(partner, venue.category);
     if (end <= start || end <= new Date()) {
       throw new ApiError(400, "INVALID_PICKUP_WINDOW", "Некорректное окно выдачи");
     }
@@ -66,6 +70,7 @@ export async function POST(req: NextRequest) {
           quantityLeft: qty,
           pickupStart: start,
           pickupEnd: end,
+          ...safetyAttestationData(safety, user.id),
         },
         include: { venue: true },
       });
@@ -87,6 +92,9 @@ export async function POST(req: NextRequest) {
         quantity: created.quantityTotal,
         clientSource: clientSourceFromRequest(req),
         dedupeKey: `partner_offer_created:${created.id}`,
+      });
+      await tx.auditLog.create({
+        data: { actorId: user.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: venue.id, partnerBusinessId: partner!.id, safetyAttestations: true }) },
       });
       return created;
     });

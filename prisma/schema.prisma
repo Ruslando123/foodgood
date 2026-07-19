@@ -34,8 +34,47 @@ model User {
   favorites          Favorite[]
   reviews            Review[]
   supportAssignments Order[]        @relation("OrderSupportOwner")
+  partnerBusiness    PartnerBusiness? @relation("PartnerBusinessOwner")
+  partnerAgreements  PartnerAgreementAcceptance[] @relation("PartnerAgreementAcceptor")
 
   @@index([role, communicationsConsent])
+}
+
+/// Legal entity operating one or more pilot venues. Existing merchants are
+/// backfilled as PENDING and must be explicitly verified before publication.
+model PartnerBusiness {
+  id                 String   @id @default(cuid())
+  ownerId            String   @unique
+  legalType          String?  // IP | TOO
+  legalName          String?
+  businessIdentifier String?  @unique // IIN for IP, BIN for TOO
+  contactName        String?
+  contactPhone       String?
+  verificationStatus String   @default("PENDING") // PENDING | VERIFIED | REJECTED | SUSPENDED
+  verificationNote   String?
+  verifiedAt         DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  owner      User                         @relation("PartnerBusinessOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  agreements PartnerAgreementAcceptance[]
+
+  @@index([verificationStatus, updatedAt])
+}
+
+/// Append-only, versioned evidence that a partner accepted the current terms.
+model PartnerAgreementAcceptance {
+  id                String   @id @default(cuid())
+  partnerBusinessId String
+  agreementVersion  String
+  acceptedById      String
+  acceptedAt        DateTime @default(now())
+
+  partnerBusiness PartnerBusiness @relation(fields: [partnerBusinessId], references: [id], onDelete: Restrict)
+  acceptedBy      User            @relation("PartnerAgreementAcceptor", fields: [acceptedById], references: [id], onDelete: Restrict)
+
+  @@unique([partnerBusinessId, agreementVersion])
+  @@index([acceptedById, acceptedAt])
 }
 
 model SystemState {
@@ -120,19 +159,25 @@ model Venue {
 }
 
 model Bag {
-  id            String   @id @default(cuid())
-  venueId       String
-  title         String
-  description   String   @default("")
-  allergens     String   @default("") // possible allergens, free-text label shown to customers
-  price         Int // sale price, KZT
-  originalPrice Int // estimated original value, KZT
-  quantityTotal Int
-  quantityLeft  Int
-  pickupStart   DateTime
-  pickupEnd     DateTime
-  status        String   @default("ACTIVE") // ACTIVE | SOLD_OUT | EXPIRED | CANCELLED
-  createdAt     DateTime @default(now())
+  id                         String    @id @default(cuid())
+  venueId                    String
+  title                      String
+  description                String    @default("")
+  allergens                  String    @default("") // possible allergens, free-text label shown to customers
+  price                      Int // sale price, KZT
+  originalPrice              Int // estimated original value, KZT
+  quantityTotal              Int
+  quantityLeft               Int
+  pickupStart                DateTime
+  pickupEnd                  DateTime
+  status                     String    @default("ACTIVE") // ACTIVE | SOLD_OUT | EXPIRED | CANCELLED
+  suitableForSaleAttested    Boolean   @default(false)
+  storageCompliantAttested   Boolean   @default(false)
+  allergensCurrentAttested   Boolean   @default(false)
+  categoryAllowedAttested    Boolean   @default(false)
+  safetyAttestedAt           DateTime?
+  safetyAttestedById         String?
+  createdAt                  DateTime  @default(now())
 
   venue  Venue   @relation(fields: [venueId], references: [id])
   orders Order[]

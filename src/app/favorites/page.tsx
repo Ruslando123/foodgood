@@ -3,30 +3,39 @@ import { redirect } from "next/navigation";
 import { IconHeart } from "@tabler/icons-react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { VENUE_CATEGORIES } from "@/lib/config";
+import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST, VENUE_CATEGORIES } from "@/lib/config";
 import { kazakhstanCityById } from "@/lib/kazakhstan";
 import BottomNav from "@/components/BottomNav";
 import FavoriteVenueCard from "@/components/FavoriteVenueCard";
+import type { Prisma } from "@prisma/client";
 
 const PAGE_SIZE = 12;
 
 export default async function FavoritesPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   const user = await getSessionUser();
   if (!user) redirect("/login?next=/favorites");
+  const visibleWhere: Prisma.FavoriteWhereInput = {
+    userId: user.id,
+    venue: {
+      status: "ACTIVE",
+      category: { in: [...PILOT_CATEGORY_ALLOWLIST] },
+      owner: { partnerBusiness: { is: { verificationStatus: "VERIFIED", agreements: { some: { agreementVersion: PARTNER_AGREEMENT_VERSION } } } } },
+    },
+  };
   const requestedPage = Math.max(1, Number.parseInt((await searchParams).page ?? "1", 10) || 1);
-  const total = await prisma.favorite.count({ where: { userId: user.id } });
+  const total = await prisma.favorite.count({ where: visibleWhere });
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(requestedPage, pageCount);
   const favorites = await prisma.favorite.findMany({
-    where: { userId: user.id },
+    where: visibleWhere,
     include: {
       venue: {
         include: {
           _count: {
-            select: { bags: { where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() } } } },
+            select: { bags: { where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() }, suitableForSaleAttested: true, storageCompliantAttested: true, allergensCurrentAttested: true, categoryAllowedAttested: true } } },
           },
           bags: {
-            where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() } },
+            where: { status: "ACTIVE", quantityLeft: { gt: 0 }, pickupEnd: { gt: new Date() }, suitableForSaleAttested: true, storageCompliantAttested: true, allergensCurrentAttested: true, categoryAllowedAttested: true },
             orderBy: { price: "asc" },
             take: 100,
           },
