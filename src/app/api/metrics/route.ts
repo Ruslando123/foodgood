@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { metricsRegistry } from "@/lib/metrics";
 import { checkRedisHealth } from "@/lib/redis";
+import { readOperationalSignals } from "@/lib/operational-signals";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,7 @@ export async function GET(request: Request) {
   if (!secret && process.env.NODE_ENV === "production") return new Response("Metrics are not configured", { status: 503 });
   if (secret && request.headers.get("authorization") !== `Bearer ${secret}`) return new Response("Unauthorized", { status: 401 });
 
-  const [queueRows, poolRows, heartbeatRows] = await Promise.all([
+  const [queueRows, poolRows, heartbeatRows, , operationalSignals] = await Promise.all([
     prisma.$queryRaw<Array<{ queue: string; lag: number; depth: bigint; expiredLeases: bigint; failed: bigint }>>`
       WITH expected(queue) AS (VALUES ('notifications'))
       SELECT expected.queue,
@@ -36,6 +37,7 @@ export async function GET(request: Request) {
       LEFT JOIN "SystemState" state ON state.key = 'worker:' || expected.worker
     `,
     checkRedisHealth(),
+    readOperationalSignals(),
   ]);
   const base = await metricsRegistry.metrics();
   const queueMetrics = queueRows.map((row) => [
@@ -48,7 +50,21 @@ export async function GET(request: Request) {
   const pool = poolRows[0];
   const poolMetrics = pool ? `foodgood_db_pool_active ${pool.active}\nfoodgood_db_pool_connections ${pool.total}\nfoodgood_db_max_connections ${pool.maximum}` : "";
   const heartbeatMetrics = heartbeatRows.map((row) => `foodgood_worker_last_heartbeat_seconds{worker="${row.worker}"} ${row.timestamp}`).join("\n");
-  return new Response(`${base}${queueMetrics}\n${poolMetrics}\n${heartbeatMetrics}\n`, {
+  const operationalMetrics = [
+    "# HELP foodgood_inventory_mismatch_bags Bags with oversold inventory or a quantity/status inconsistency.",
+    "# TYPE foodgood_inventory_mismatch_bags gauge",
+    `foodgood_inventory_mismatch_bags ${operationalSignals.inventoryMismatchBags}`,
+    "# HELP foodgood_overdue_complaints Open complaints without first contact after the two-hour pilot SLA.",
+    "# TYPE foodgood_overdue_complaints gauge",
+    `foodgood_overdue_complaints ${operationalSignals.overdueComplaints}`,
+    "# HELP foodgood_delayed_reminders Pickup reminder jobs more than five minutes late.",
+    "# TYPE foodgood_delayed_reminders gauge",
+    `foodgood_delayed_reminders ${operationalSignals.delayedReminders}`,
+    "# HELP foodgood_suspicious_login_challenges Recent OTP challenges with at least three failed attempts.",
+    "# TYPE foodgood_suspicious_login_challenges gauge",
+    `foodgood_suspicious_login_challenges ${operationalSignals.suspiciousLoginChallenges}`,
+  ].join("\n");
+  return new Response(`${base}${queueMetrics}\n${poolMetrics}\n${heartbeatMetrics}\n${operationalMetrics}\n`, {
     headers: { "Content-Type": metricsRegistry.contentType, "Cache-Control": "no-store" },
   });
 }

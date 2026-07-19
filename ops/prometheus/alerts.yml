@@ -150,6 +150,40 @@ groups:
           summary: Redis rate limiting fell back to PostgreSQL
           runbook: docs/PRODUCTION_RUNBOOK.md#redis-unavailable
 
+  - name: foodgood-pilot-operations
+    rules:
+      - alert: FoodGoodInventoryMismatch
+        expr: foodgood_inventory_mismatch_bags > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $value }} FoodGood bags have an inventory mismatch"
+          runbook: docs/PRODUCTION_RUNBOOK.md#inventory-mismatch
+
+      - alert: FoodGoodComplaintFirstContactOverdue
+        expr: foodgood_overdue_complaints > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $value }} complaints have missed the two-hour first-contact SLA"
+          runbook: docs/PRODUCTION_RUNBOOK.md#overdue-or-mass-complaints
+
+      - alert: FoodGoodPickupReminderDelayed
+        expr: foodgood_delayed_reminders > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} pickup reminders are more than five minutes late"
+          runbook: docs/PRODUCTION_RUNBOOK.md#delayed-pickup-reminders
+
+      - alert: FoodGoodSuspiciousLoginChallenges
+        expr: foodgood_suspicious_login_challenges > 0
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} recent OTP challenges have at least three failed attempts"
+          runbook: docs/PRODUCTION_RUNBOOK.md#suspicious-logins
+
   - name: foodgood-staging-load
     rules:
       - alert: FoodGoodK6DroppedIterations

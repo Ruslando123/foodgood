@@ -41,6 +41,46 @@ Health endpoints have distinct contracts:
 3. Confirm expired leases return to zero, failed jobs are explicitly resolved, and queue depth/lag returns to baseline.
 4. Do not declare recovery based only on a fresh heartbeat: terminally failed jobs require investigation and an intentional retry or repair.
 
+## Delayed pickup reminders
+
+`foodgood_delayed_reminders` counts `PICKUP_REMINDER` jobs that are more than five minutes past `nextAttemptAt` and are still pending, retrying, or processing.
+
+1. Check notification-worker heartbeat, `foodgood_queue_oldest_age_seconds{queue="notifications"}`, failed jobs, expired leases, and PostgreSQL/PgBouncer saturation.
+2. Keep reservations and pickup windows available to venue/support staff; do not claim that a reminder was sent until the durable `Notification` record confirms it.
+3. Restart only the notifications worker if its heartbeat is stale. Let leases expire and be reclaimed; do not clear lease fields manually.
+4. If a pickup window is near, have the support owner contact the affected pilot customers through the approved channel and record the contact against the order without copying OTP data.
+5. Close only after `foodgood_delayed_reminders` is zero, the queue drains, failed jobs are resolved, and the affected orders are reviewed for missed pickup impact.
+
+## Inventory mismatch
+
+`foodgood_inventory_mismatch_bags` detects oversold quantities and `ACTIVE`/`SOLD_OUT` status inconsistencies. A merchant's intentional stock reduction is not a mismatch unless committed orders plus remaining inventory exceed the published total.
+
+1. Pause new reservations for every affected bag or venue; do not silently rewrite completed orders or till totals.
+2. Capture bag ID, venue, `quantityTotal`, `quantityLeft`, committed order quantities/statuses, recent audit entries, and reconciliation timestamp in restricted evidence.
+3. Compare FoodGood completed orders and pickup codes with the venue till/receipt report. The till is the source for money received; FoodGood is the source for reservation intent.
+4. Determine whether the cause is an in-flight reservation, staff action, data repair, or defect. Apply a reviewed, transaction-safe repair only after preserving the original values.
+5. Reopen only when the metric is zero, the venue/till discrepancy is resolved, and a second owner has reviewed the repair evidence.
+
+## Overdue or mass complaints
+
+`foodgood_overdue_complaints` counts open cases with no first contact two hours after `supportOpenedAt`. Treat three related complaints in 60 minutes, complaints affecting at least 20% of one pickup cycle, or any food-safety allegation as a mass-complaint incident even if the SLA metric is still zero.
+
+1. Assign an incident owner and a case owner for every order. Pause the affected bag/venue when complaints share a venue, batch, pickup window, or safety symptom.
+2. Preserve order, venue, complaint category/note, first-contact time, venue response, resolution, and customer confirmation. Keep personal data out of public channels.
+3. Contact every affected customer within two hours; use one coordinated message approved by the incident owner, but retain individual case accountability.
+4. For suspected food safety, follow [food incident](#food-incident). For personal-data exposure, follow [privacy breach](#privacy-breach).
+5. Close only after the complaint metric is zero, the cluster/root cause is documented, each case has a resolution, and the venue resume/stop decision has an approver.
+
+## Suspicious logins
+
+`foodgood_suspicious_login_challenges` counts OTP challenges created in the last 15 minutes with at least three failed code attempts. It intentionally exposes no phone or IP labels.
+
+1. Check the aggregate metric, OTP/rate-limit error rate, Redis availability, and structured application logs. Do not paste phone numbers, OTP hashes, bot tokens, or raw webhook payloads into incident chat.
+2. If activity is concentrated or rising, temporarily restrict the invite cohort and reduce traffic at the edge while retaining the PostgreSQL idempotency/rate-limit boundary.
+3. For a suspected account compromise, block the account, increment `sessionVersion` through the supported logout-all/block workflow, and preserve relevant audit evidence.
+4. Rotate a secret only when exposure is suspected; coordinate rollout so web and both workers keep matching `METRICS_SECRET`, and Telegram keeps its independently managed webhook/token credentials.
+5. Close after the signal returns to zero or is explained, affected accounts are reviewed, and any control change has an owner and rollback point.
+
 ## Redis unavailable
 
 1. Confirm `/api/health/ready` stays healthy while `/api/health/deep` reports Redis `unavailable`.
@@ -57,7 +97,7 @@ Use two distinct direct instance URLs plus the load-balanced URL. Keep all crede
    ```sh
    STAGING_BASE_URL=https://staging.example \
    STAGING_INSTANCE_URLS=https://web-1.example,https://web-2.example \
-   npm run staging:failover
+   npm run staging:failover:check
    ```
 
 2. Run `npm run staging:smoke`. Run k6 with an exported summary, then apply the non-negotiable p95, p99, error, check-rate, and zero-dropped-iteration gate:
@@ -74,7 +114,7 @@ Use two distinct direct instance URLs plus the load-balanced URL. Keep all crede
    STAGING_BASE_URL=https://staging.example \
    STAGING_INSTANCE_URLS=https://web-1.example,https://web-2.example \
    STAGING_EXPECT_DOWN_URL=https://web-1.example \
-   npm run staging:failover
+   npm run staging:failover:check
    ```
 
 4. Repeat the short k6 gate against the load balancer with one instance stopped. Restore the instance, wait for readiness, and repeat step 1.
@@ -87,6 +127,31 @@ Use two distinct direct instance URLs plus the load-balanced URL. Keep all crede
 3. Do not edit completed orders silently. Record the venue, order, discrepancy, owner, and resolution in support/audit notes.
 4. Pause the affected venue if staff completed pickup codes before receiving payment or if inventory cannot be reconciled.
 
+## Food incident
+
+1. Immediately suspend the affected bag/venue and stop pickup of the suspected batch. Do not delete orders, complaints, photos, or audit records.
+2. Assign an incident owner; record report time, reporter, venue, bag/pickup window, order IDs, symptoms/allegation, and product traceability supplied by the venue in a restricted record.
+3. Contact affected customers with approved safety guidance and a support route. Do not diagnose, minimize, or promise compensation through FoodGood; pilot payment remains with the venue till.
+4. Require the venue to isolate the food and provide its traceability/handling evidence. Escalate to the named safety/legal owner and relevant authority according to the approved notification matrix.
+5. Resume only with documented root cause, affected-scope decision, venue corrective action, customer follow-up, and explicit approval. If scope is uncertain, keep the venue suspended.
+
+## Privacy breach
+
+1. Contain access without destroying evidence: revoke exposed sessions/credentials, restrict the affected export/object/path, and pause the responsible feature if needed.
+2. Assign the privacy incident owner and record discovery time, data categories, likely subjects/records, systems, access window, and who received the data. Store evidence in the approved restricted location.
+3. Rotate only affected secrets and verify independent session, OTP, webhook, metrics, database, Redis, and S3 credentials remain distinct. Never include their values in tickets or logs.
+4. Ask the privacy/legal owner to assess notification duties and deadlines using the approved jurisdiction/contact matrix; do not claim regulatory notification is complete without evidence.
+5. Validate containment, session revocation, access logs, S3 permissions, exports, and deletion/return by unintended recipients where applicable. Close only with approver, impact record, corrective actions, and follow-up date.
+
+## Application rollback
+
+1. Stop the rollout and new migrations. Record release SHA/deployment ID, previous known-good artifact, incident owner, and rollback decision time.
+2. Confirm the previous application is compatible with the current database schema. Prisma migrations are forward-only operationally: do not delete `_prisma_migrations`, run `migrate resolve` blindly, or reverse SQL against production.
+3. Roll back web and both worker processes to the same compatible artifact. Keep only one migration deploy active and leave affected venues paused if data correctness is uncertain.
+4. Run live/ready/deep and authenticated web/worker metrics gates, then a reservation/cancellation/redeem smoke flow that uses venue till payment only.
+5. Compare inventory, reminder queue, complaint SLA, suspicious-login signals, 5xx, and latency to the pre-deploy baseline. Reopen traffic gradually and retain deployment/monitoring evidence.
+6. If rollback cannot restore data compatibility, follow the verified backup/PITR procedure into an isolated database, validate it, then switch services together.
+
 ## Backup restore drill
 
-Use an isolated, empty PostgreSQL 16 database. Run `npm run staging:restore` with `STAGING_DATABASE_URL`, `RESTORE_DATABASE_URL`, and `RESTORE_CONFIRM_EMPTY=true`. Keep the resulting counts, start/end time, RPO/RTO, operator, and S3 object verification as drill evidence. Never point `RESTORE_DATABASE_URL` at staging or production.
+Use an isolated, empty PostgreSQL 16 database and matching-major `pg_dump`/`pg_restore` clients; the script rejects older or newer client majors before changing the target. Run `npm run staging:restore` with `STAGING_DATABASE_URL`, `RESTORE_DATABASE_URL`, and `RESTORE_CONFIRM_EMPTY=true`. Record results in [the backup restore drill evidence template](evidence/BACKUP_RESTORE_DRILL_TEMPLATE.md), including source/restored database counts, start/end time, achieved RPO/RTO, owner, and object-level S3 verification. Never point `RESTORE_DATABASE_URL` at staging or production. A successful database script does not prove S3, alerting, Telegram, backup scheduling, or hosting recovery.

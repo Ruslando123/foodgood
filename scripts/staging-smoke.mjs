@@ -49,6 +49,10 @@ const requiredMetrics = [
   "foodgood_db_pool_connections",
   "foodgood_redis_configured",
   "foodgood_redis_available",
+  "foodgood_inventory_mismatch_bags",
+  "foodgood_overdue_complaints",
+  "foodgood_delayed_reminders",
+  "foodgood_suspicious_login_challenges",
 ];
 if (!metrics.ok || requiredMetrics.some((name) => !body.includes(name))) {
   throw new Error("Metrics endpoint is unavailable or incomplete");

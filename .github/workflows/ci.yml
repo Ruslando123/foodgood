@@ -39,9 +39,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run db:generate
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run lint
       - run: npx tsc --noEmit
+      - name: Deploy migrations to an empty CI database
+        run: npm run db:migrate:deploy
+      - name: Validate schema and applied migration history
+        run: npm run db:migrate:validate
       - run: npm test
       - run: npm run test:upgrade
       - run: npm run build

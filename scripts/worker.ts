@@ -24,6 +24,7 @@ if (metricsPort !== null && (!Number.isInteger(metricsPort) || metricsPort < 1 |
 const metricsServer = metricsPort === null ? null : createServer(async (request, response) => {
   if (request.url !== "/metrics") { response.writeHead(404).end(); return; }
   const secret = process.env.METRICS_SECRET;
+  if (!secret && process.env.NODE_ENV === "production") { response.writeHead(503).end("Metrics are not configured"); return; }
   if (secret && request.headers.authorization !== `Bearer ${secret}`) { response.writeHead(401).end(); return; }
   response.writeHead(200, { "Content-Type": metricsRegistry.contentType, "Cache-Control": "no-store" });
   response.end(await metricsRegistry.metrics());
