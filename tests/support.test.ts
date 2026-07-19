@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
-import { createOrder } from "@/modules/orders";
+import { createOrder, redeemOrder } from "@/modules/orders";
 import { createOrderComplaint } from "@/lib/order-support";
 import { recordFirstSupportContact, resolveOrderSupportCase } from "@/lib/order-support-admin";
 import { createFixtures, resetDb } from "./helpers";
@@ -8,6 +8,17 @@ import { createFixtures, resetDb } from "./helpers";
 beforeEach(() => resetDb());
 
 describe("учёт пилотных обращений", () => {
+  it("переводит завершённую выдачу в DISPUTED с атомарной историей", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    await redeemOrder(merchant.id, order.pickupCode, true);
+
+    await createOrderComplaint({ userId: customer.id, orderId: order.id, category: "POOR_QUALITY", note: "Качество не соответствует описанию" });
+
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "DISPUTED", supportStatus: "OPEN" });
+    await expect(prisma.orderStatusHistory.findFirstOrThrow({ where: { orderId: order.id, status: "DISPUTED" } })).resolves.toMatchObject({ actor: customer.id, actorRole: "CUSTOMER", reason: "CUSTOMER_COMPLAINT" });
+  });
+
   it("назначает администратора при первом контакте и закрывает только с полным результатом", async () => {
     const { customer, bag } = await createFixtures();
     const admin = await prisma.user.create({ data: { phone: "+77010007777", role: "ADMIN", name: "Дежурный" } });

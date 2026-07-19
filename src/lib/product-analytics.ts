@@ -242,8 +242,8 @@ export async function getProductAnalyticsSnapshot(options: { start?: Date; end?:
         SELECT o."clientSource" AS source,
           COUNT(*)::int AS orders,
           COUNT(*) FILTER (WHERE o.status = 'COMPLETED')::int AS completed,
-          COUNT(*) FILTER (WHERE o.status = 'CANCELLED')::int AS cancelled,
-          COUNT(*) FILTER (WHERE o.status = 'EXPIRED')::int AS expired,
+          COUNT(*) FILTER (WHERE o.status IN ('CANCELLED_BY_USER', 'CANCELLED_BY_PARTNER'))::int AS cancelled,
+          COUNT(*) FILTER (WHERE o.status = 'NO_SHOW')::int AS expired,
           COALESCE(SUM(o."totalPrice") FILTER (WHERE o.status = 'COMPLETED'), 0)::bigint AS gmv
         FROM "Order" o
         INNER JOIN "Bag" b ON b.id = o."bagId"
@@ -273,8 +273,8 @@ export async function getProductAnalyticsSnapshot(options: { start?: Date; end?:
         SELECT b."venueId" AS "venueId",
           COUNT(*)::int AS orders,
           COUNT(*) FILTER (WHERE o.status = 'COMPLETED')::int AS completed,
-          COUNT(*) FILTER (WHERE o.status = 'CANCELLED')::int AS cancelled,
-          COUNT(*) FILTER (WHERE o.status = 'EXPIRED')::int AS expired,
+          COUNT(*) FILTER (WHERE o.status IN ('CANCELLED_BY_USER', 'CANCELLED_BY_PARTNER'))::int AS cancelled,
+          COUNT(*) FILTER (WHERE o.status = 'NO_SHOW')::int AS expired,
           COALESCE(SUM(o."totalPrice") FILTER (WHERE o.status = 'COMPLETED'), 0)::bigint AS gmv
         FROM "Order" o
         INNER JOIN "Bag" b ON b.id = o."bagId"
@@ -300,11 +300,11 @@ export async function getProductAnalyticsSnapshot(options: { start?: Date; end?:
         COUNT(*)::int AS orders,
         COALESCE(SUM(o.quantity), 0)::int AS quantity,
         COUNT(*) FILTER (WHERE o.status = 'COMPLETED')::int AS completed,
-        COUNT(*) FILTER (WHERE o.status = 'CANCELLED')::int AS cancelled,
-        COUNT(*) FILTER (WHERE o.status = 'EXPIRED')::int AS expired,
+        COUNT(*) FILTER (WHERE o.status IN ('CANCELLED_BY_USER', 'CANCELLED_BY_PARTNER'))::int AS cancelled,
+        COUNT(*) FILTER (WHERE o.status = 'NO_SHOW')::int AS expired,
         COALESCE(SUM(o.quantity) FILTER (WHERE o.status = 'COMPLETED'), 0)::int AS "completedQuantity",
-        COALESCE(SUM(o.quantity) FILTER (WHERE o.status = 'CANCELLED'), 0)::int AS "cancelledQuantity",
-        COALESCE(SUM(o.quantity) FILTER (WHERE o.status = 'EXPIRED'), 0)::int AS "expiredQuantity",
+        COALESCE(SUM(o.quantity) FILTER (WHERE o.status IN ('CANCELLED_BY_USER', 'CANCELLED_BY_PARTNER')), 0)::int AS "cancelledQuantity",
+        COALESCE(SUM(o.quantity) FILTER (WHERE o.status = 'NO_SHOW'), 0)::int AS "expiredQuantity",
         COALESCE(SUM(o."totalPrice") FILTER (WHERE o.status = 'COMPLETED'), 0)::bigint AS gmv
       FROM "Order" o
       INNER JOIN "Bag" b ON b.id = o."bagId"

@@ -3,14 +3,17 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } fro
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const compose = ["compose", "-f", "docker-compose.test.yml"];
-const databaseUrl = "postgresql://foodgood:foodgood@localhost:55439/foodgood_upgrade?schema=public";
+const composeProject = process.env.TEST_COMPOSE_PROJECT ?? `foodgood-upgrade-${process.pid}`;
+const compose = ["compose", "-p", composeProject, "-f", "docker-compose.test.yml"];
+const testDbPort = process.env.TEST_DB_PORT ?? "55439";
+const databaseUrl = `postgresql://foodgood:foodgood@localhost:${testDbPort}/foodgood_upgrade?schema=public`;
 const env = { ...process.env, DATABASE_URL: databaseUrl, DIRECT_URL: databaseUrl };
 const temporary = mkdtempSync(path.join(tmpdir(), "foodgood-upgrade-"));
 const archive = path.join(temporary, "previous.tar");
 const reservationMigrationName = "20260717233000_reservation_only";
 const integrityMigrationName = "20260718100000_core_integrity_checks";
 const integrityValidationMigrationName = "20260718101000_validate_core_integrity_checks";
+const lifecycleMigrationName = "20260719120000_pay_at_venue_lifecycle";
 const reservationMigrationSql = readFileSync(
   path.join("prisma", "migrations", reservationMigrationName, "migration.sql"),
   "utf8"
@@ -26,7 +29,7 @@ function preparePreReservationMigrations() {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync("prisma/schema.prisma", path.join(prismaDir, "schema.prisma"));
   for (const entry of readdirSync("prisma/migrations")) {
-    if (entry === reservationMigrationName || entry === integrityMigrationName || entry === integrityValidationMigrationName) continue;
+    if ([reservationMigrationName, integrityMigrationName, integrityValidationMigrationName, lifecycleMigrationName].includes(entry)) continue;
     cpSync(path.join("prisma", "migrations", entry), path.join(migrationsDir, entry), { recursive: true });
   }
   return path.join(prismaDir, "schema.prisma");
@@ -114,6 +117,9 @@ try {
   const preserved = execFileSync("docker", [...compose, "exec", "-T", "postgres", "psql", "-U", "foodgood", "-d", "foodgood_upgrade", "-At", "-c",
     `SELECT "batchesProcessed" || ':' || "failureAttempts" FROM "BatchJob" WHERE id = 'upgrade-preserved';`], { env, encoding: "utf8" }).trim();
   if (preserved !== "7:0") throw new Error(`BatchJob counters were not preserved: ${preserved}`);
+  const lifecycleBackfill = execFileSync("docker", [...compose, "exec", "-T", "postgres", "psql", "-U", "foodgood", "-d", "foodgood_upgrade", "-At", "-c",
+    `SELECT o.status || ':' || h.status || ':' || h.reason FROM "Order" o JOIN "OrderStatusHistory" h ON h."orderId" = o.id WHERE o.id = 'migration-order';`], { env, encoding: "utf8" }).trim();
+  if (lifecycleBackfill !== "CANCELLED_BY_USER:CANCELLED_BY_USER:LEGACY_BACKFILL") throw new Error(`Lifecycle backfill failed: ${lifecycleBackfill}`);
 
   const validatedConstraints = Number(execFileSync("docker", [...compose, "exec", "-T", "postgres", "psql", "-U", "foodgood", "-d", "foodgood_upgrade", "-At", "-c",
     `SELECT count(*) FROM pg_constraint WHERE connamespace = 'public'::regnamespace AND contype = 'c' AND convalidated;`], { env, encoding: "utf8" }).trim());

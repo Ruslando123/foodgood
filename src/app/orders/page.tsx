@@ -18,8 +18,10 @@ const STATUS_LABEL: Record<Order["status"], string> = {
   RESERVED: "Забронирован · оплата в заведении",
   READY_FOR_PICKUP: "Готов к выдаче",
   COMPLETED: "Выдан",
-  CANCELLED: "Бронь отменена",
-  EXPIRED: "Не забран",
+  CANCELLED_BY_USER: "Отменено вами",
+  CANCELLED_BY_PARTNER: "Отменено заведением",
+  NO_SHOW: "Не забран",
+  DISPUTED: "Есть спор",
 };
 
 type OrderScope = "active" | "history";

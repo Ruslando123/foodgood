@@ -193,7 +193,7 @@ model Order {
   quantity                 Int       @default(1)
   totalPrice               Int // KZT
   clientSource             String    @default("direct") // first-touch source captured at checkout
-  status                   String    @default("RESERVED") // RESERVED | READY_FOR_PICKUP | COMPLETED | CANCELLED | EXPIRED
+  status                   String    @default("RESERVED") // RESERVED | READY_FOR_PICKUP | COMPLETED | CANCELLED_BY_USER | CANCELLED_BY_PARTNER | NO_SHOW | DISPUTED
   pickupCode               String    @unique
   createdAt                DateTime  @default(now())
   completedAt              DateTime?
@@ -214,6 +214,8 @@ model Order {
   supportOwner      User?                @relation("OrderSupportOwner", fields: [supportOwnerId], references: [id], onDelete: SetNull)
   review            Review?
   idempotencyRecord OrderIdempotencyKey? @relation(fields: [idempotencyRecordId], references: [id], onDelete: SetNull)
+  statusHistory     OrderStatusHistory[]
+  pickupJournal     PickupJournal?
 
   @@index([userId, status])
   @@index([userId, status, createdAt(sort: Desc), id(sort: Desc)])
@@ -221,6 +223,41 @@ model Order {
   @@index([createdAt])
   @@index([supportStatus, supportOpenedAt])
   @@index([supportOwnerId, supportStatus])
+}
+
+/// Immutable lifecycle journal. Rows are inserted in the same transaction as
+/// the corresponding Order.status change and protected from UPDATE/DELETE by
+/// a database trigger.
+model OrderStatusHistory {
+  id           String   @id @default(cuid())
+  orderId      String
+  status       String
+  actor        String
+  actorRole    String
+  reason       String
+  metadataJson String   @default("{}")
+  timestamp    DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, timestamp])
+  @@index([status, timestamp])
+}
+
+/// One immutable hand-off receipt per order. The unique orderId is the final
+/// database-level guard against recording a second pickup.
+model PickupJournal {
+  id               String   @id @default(cuid())
+  orderId          String   @unique
+  actor            String
+  actorRole        String
+  pickupCodeSuffix String
+  metadataJson     String   @default("{}")
+  timestamp        DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([timestamp])
 }
 
 /// Append-only product analytics used by the internal funnel dashboard.

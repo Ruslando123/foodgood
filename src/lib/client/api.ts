@@ -41,8 +41,10 @@ export type Order = {
     | "RESERVED"
     | "READY_FOR_PICKUP"
     | "COMPLETED"
-    | "CANCELLED"
-    | "EXPIRED";
+    | "CANCELLED_BY_USER"
+    | "CANCELLED_BY_PARTNER"
+    | "NO_SHOW"
+    | "DISPUTED";
   pickupCode: string;
   createdAt: string;
   bag: Bag;

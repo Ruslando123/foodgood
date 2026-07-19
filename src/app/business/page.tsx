@@ -6,7 +6,7 @@ import BusinessRepeatBagButton from "@/components/BusinessRepeatBagButton";
 import { PARTNER_AGREEMENT_VERSION } from "@/lib/partner-onboarding";
 
 const ORDER_LABELS: Record<string, string> = {
-  RESERVED: "Забронирован", READY_FOR_PICKUP: "Готов к выдаче", COMPLETED: "Выдан", CANCELLED: "Отменён", EXPIRED: "Истёк",
+  RESERVED: "Забронирован", READY_FOR_PICKUP: "Готов к выдаче", COMPLETED: "Выдан", CANCELLED_BY_USER: "Отменён клиентом", CANCELLED_BY_PARTNER: "Отменён заведением", NO_SHOW: "Неявка", DISPUTED: "Спор",
 };
 
 function price(value: number) { return `${value.toLocaleString("ru-RU")} ₸`; }

@@ -66,7 +66,8 @@ export async function PATCH(
 
     if (body.status === "CANCELLED") {
       try {
-      const bag = await cancelBag(user.id, id);
+        const reason = requiredString(body.reason, "reason", { min: 3, max: 500 });
+        const bag = await cancelBag(user.id, id, reason);
         return json({ bag });
       } catch (error) {
         throwOrderApiError(error);

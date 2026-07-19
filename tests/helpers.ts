@@ -2,6 +2,9 @@ import { prisma } from "@/lib/db";
 import { PARTNER_AGREEMENT_VERSION } from "@/lib/config";
 
 export async function resetDb() {
+  // Append-only journal triggers intentionally reject DELETE. TRUNCATE is
+  // reserved for isolated test cleanup and does not fire row-level triggers.
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "OrderStatusHistory", "PickupJournal"');
   await prisma.productEvent.deleteMany();
   await prisma.systemState.deleteMany();
   await prisma.otpChallenge.deleteMany();

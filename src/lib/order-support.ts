@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { recordProductEvent } from "@/lib/product-analytics";
 import { ApiError } from "@/shared/server/api";
 import type { ComplaintCategory } from "@/shared/support";
+import { isOrderStatus, transitionOrder } from "@/modules/orders/state-machine";
 
 export async function createOrderComplaint(input: {
   userId: string;
@@ -17,8 +18,24 @@ export async function createOrderComplaint(input: {
     throw new ApiError(404, "ORDER_NOT_FOUND", "Заказ не найден");
   }
 
-  const openedAt = new Date();
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${order.id} FOR UPDATE`;
+    const current = await tx.order.findUniqueOrThrow({ where: { id: order.id } });
+    if (!isOrderStatus(current.status)) throw new ApiError(409, "INVALID_ORDER_STATUS", "Статус заказа повреждён");
+    const openedAt = new Date();
+    if (!["RESERVED", "READY_FOR_PICKUP", "DISPUTED"].includes(current.status)) {
+      const disputed = await transitionOrder(tx, {
+        id: order.id,
+        from: current.status,
+        to: "DISPUTED",
+        actor: input.userId,
+        actorRole: "CUSTOMER",
+        reason: "CUSTOMER_COMPLAINT",
+        metadata: { category: input.category },
+        timestamp: openedAt,
+      });
+      if (!disputed) throw new ApiError(409, "ORDER_CHANGED", "Статус заказа изменился, повторите действие");
+    }
     const result = await tx.order.update({
       where: { id: order.id },
       data: {
