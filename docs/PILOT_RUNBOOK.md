@@ -17,8 +17,15 @@ Choose 3–5 venues with a named owner, predictable pickup window, fewer than 10
 
 1. Create a new random invite code for each cohort. Store only its SHA-256 digest in `PILOT_INVITE_CODE_HASH`; never put the plaintext code in Git, logs, screenshots, or analytics.
 2. Send the plaintext code only to the named cohort. Existing accounts can continue signing in after the hash is rotated; only new accounts need the current code.
-3. Every new customer must accept the displayed, versioned privacy policy. News and special offers use a separate optional switch in Settings and remain off by default.
+3. Every new customer must separately accept the displayed, versioned terms and privacy policy. Each acceptance is written to the audit log. News and special offers use a third, optional switch in Settings and remain off by default.
 4. Use the admin CSV only for the stated pilot communication. It contains only active customers with current privacy acceptance and active communications consent. Access is recorded in the audit log.
+5. Account deletion requests immediately deactivate login, revoke all sessions and optional communications, and enter the retention queue. Do not manually delete orders, support cases or audit rows that must be retained for legal/accountability review.
+
+## Server-enforced pilot scope
+
+The pilot runs only in `PAY_AT_VENUE` mode. Configure the city, district centre/radius, allowed categories and caps with the `FOODGOOD_PILOT_*` variables documented in `.env.example`. Public reviews are off by default. Before each cohort, verify that direct API requests for another city or disabled category are rejected and that venue, offer and customer reservation caps cannot be exceeded.
+
+Do not enable delivery, PREPAID, loyalty or AI in the pilot. The customer pays the actual venue seller at its cash desk and receives that seller's fiscal receipt; FoodGood never initiates an automatic refund.
 5. Store the downloaded CSV in an approved encrypted location, do not upload it to third-party mailing tools, and delete working copies after the communication is completed. Revoked contacts disappear from subsequent exports.
 
 ## Daily operating loop

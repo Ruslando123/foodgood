@@ -9,6 +9,8 @@ function describe(action: string): string {
     OWNER_REMOVED: "Удалён доступ владельца",
     OPERATION_RETRY_REQUESTED: "Запрошен повтор операции",
     PRIVACY_POLICY_ACCEPTED: "Принята политика конфиденциальности",
+    TERMS_ACCEPTED: "Приняты условия использования",
+    ACCOUNT_DELETION_REQUESTED: "Запрошено удаление аккаунта",
     COMMUNICATIONS_CONSENT_GRANTED: "Дано согласие на предложения",
     COMMUNICATIONS_CONSENT_REVOKED: "Отозвано согласие на предложения",
     CUSTOMER_CONTACT_EXPORT_STARTED: "Выгружена согласованная клиентская база",

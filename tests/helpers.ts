@@ -25,6 +25,7 @@ export async function resetDb() {
   await prisma.partnerBusiness.deleteMany();
   await prisma.notification.deleteMany();
   await prisma.auditLog.deleteMany();
+  await prisma.accountDeletionRequest.deleteMany();
   await prisma.user.deleteMany();
 }
 

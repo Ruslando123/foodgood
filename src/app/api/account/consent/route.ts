@@ -1,11 +1,14 @@
 import { prisma } from "@/lib/db";
 import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
+import { hasAcceptedCurrentTerms, TERMS_VERSION } from "@/lib/legal";
 import { requireUser } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 
 function consentResponse(account: {
   privacyPolicyVersion: string | null;
   privacyAcceptedAt: Date | null;
+  termsVersion: string | null;
+  termsAcceptedAt: Date | null;
   communicationsConsent: boolean;
   communicationsConsentUpdatedAt: Date | null;
 }) {
@@ -15,6 +18,12 @@ function consentResponse(account: {
       version: account.privacyPolicyVersion,
       acceptedAt: account.privacyAcceptedAt?.toISOString() ?? null,
       currentVersion: PRIVACY_POLICY_VERSION,
+    },
+    terms: {
+      accepted: hasAcceptedCurrentTerms(account),
+      version: account.termsVersion,
+      acceptedAt: account.termsAcceptedAt?.toISOString() ?? null,
+      currentVersion: TERMS_VERSION,
     },
     communications: {
       consented: account.communicationsConsent,
@@ -26,6 +35,8 @@ function consentResponse(account: {
 const select = {
   privacyPolicyVersion: true,
   privacyAcceptedAt: true,
+  termsVersion: true,
+  termsAcceptedAt: true,
   communicationsConsent: true,
   communicationsConsentUpdatedAt: true,
 } as const;
@@ -43,8 +54,9 @@ export async function PATCH(request: Request) {
     const user = await requireUser();
     const body = await readJsonObject(request);
     const acceptsPrivacy = body.acceptPrivacy === true;
+    const acceptsTerms = body.acceptTerms === true;
     const changesCommunications = typeof body.communicationsConsent === "boolean";
-    if (!acceptsPrivacy && !changesCommunications) {
+    if (!acceptsPrivacy && !acceptsTerms && !changesCommunications) {
       throw new ApiError(400, "INVALID_CONSENT", "Укажите настройку согласия");
     }
     const current = await prisma.user.findUniqueOrThrow({ where: { id: user.id }, select });
@@ -59,6 +71,7 @@ export async function PATCH(request: Request) {
         where: { id: user.id },
         data: {
           ...(acceptsPrivacy ? { privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: now } : {}),
+          ...(acceptsTerms ? { termsVersion: TERMS_VERSION, termsAcceptedAt: now } : {}),
           ...(communicationsChanged ? {
             communicationsConsent: body.communicationsConsent as boolean,
             communicationsConsentUpdatedAt: now,
@@ -73,7 +86,14 @@ export async function PATCH(request: Request) {
         action: "PRIVACY_POLICY_ACCEPTED",
         entityType: "User",
         entityId: user.id,
-        metadataJson: JSON.stringify({ version: PRIVACY_POLICY_VERSION }),
+        metadataJson: JSON.stringify({ version: PRIVACY_POLICY_VERSION, source: "settings", userAgent: request.headers.get("user-agent") }),
+      });
+      if (acceptsTerms) auditRows.push({
+        actorId: user.id,
+        action: "TERMS_ACCEPTED",
+        entityType: "User",
+        entityId: user.id,
+        metadataJson: JSON.stringify({ version: TERMS_VERSION, source: "settings", userAgent: request.headers.get("user-agent") }),
       });
       if (communicationsChanged) auditRows.push({
         actorId: user.id,

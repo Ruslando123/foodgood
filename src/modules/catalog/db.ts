@@ -2,14 +2,17 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { CatalogQuery, CatalogSort } from "./query";
 import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
-import { PUBLIC_RATINGS_ENABLED } from "@/lib/features";
+import { getPilotConfig } from "@/lib/pilot";
 
 type CatalogRow = {
   id: string;
   venueId: string;
   title: string;
   description: string;
+  composition: string;
   allergens: string;
+  storage: string;
+  examplePhoto: string;
   price: number;
   originalPrice: number;
   quantityTotal: number;
@@ -59,6 +62,7 @@ export async function queryCatalog(input: {
   limit: number;
 }) {
   const { query, cityId, lat, lng, limit } = input;
+  const pilot = getPilotConfig();
   const hasLocation = lat !== undefined && lng !== undefined;
   const effectiveSort: CatalogSort = query.sort === "distance" && !hasLocation ? "soon" : query.sort;
   const cursor = decodeCursor(input.cursor ?? null, effectiveSort);
@@ -92,6 +96,13 @@ export async function queryCatalog(input: {
       SELECT 1 FROM "PartnerAgreementAcceptance" acceptance
       WHERE acceptance."partnerBusinessId" = partner.id
         AND acceptance."agreementVersion" = ${PARTNER_AGREEMENT_VERSION}
+    )`,
+    Prisma.sql`venue."cityId" = ${pilot.cityId}`,
+    Prisma.sql`venue.category IN (${Prisma.join(pilot.allowedCategories)})`,
+    Prisma.sql`ST_DWithin(
+      ST_SetSRID(ST_MakePoint(venue.lng, venue.lat), 4326)::geography,
+      ST_SetSRID(ST_MakePoint(${pilot.district.centerLng}, ${pilot.district.centerLat}), 4326)::geography,
+      ${pilot.district.radiusKm * 1000}
     )`,
   ];
   if (cityId) filters.push(Prisma.sql`venue."cityId" = ${cityId}`);
@@ -129,8 +140,7 @@ export async function queryCatalog(input: {
 
   const rows = await prisma.$queryRaw<CatalogRow[]>(Prisma.sql`
     SELECT
-      bag.id, bag."venueId", bag.title, bag.description, bag.allergens, bag.price, bag."originalPrice",
-      bag."quantityTotal", bag."quantityLeft", bag."pickupStart", bag."pickupEnd", bag.status, bag."createdAt",
+      bag.id, bag."venueId", bag.title, bag.description, bag.composition, bag.allergens, bag.storage, bag."examplePhoto", bag.price, bag."originalPrice",
       venue.name AS "venueName", venue.description AS "venueDescription", venue.address AS "venueAddress",
       venue.lat AS "venueLat", venue.lng AS "venueLng", venue."cityId" AS "venueCityId",
       venue."twoGisUrl" AS "venueTwoGisUrl",
@@ -153,7 +163,10 @@ export async function queryCatalog(input: {
       venueId: row.venueId,
       title: row.title,
       description: row.description,
+      composition: row.composition,
       allergens: row.allergens,
+      storage: row.storage,
+      examplePhoto: row.examplePhoto,
       price: row.price,
       originalPrice: row.originalPrice,
       quantityTotal: row.quantityTotal,
@@ -174,8 +187,8 @@ export async function queryCatalog(input: {
         twoGisUrl: row.venueTwoGisUrl,
         category: row.venueCategory,
         photo: row.venuePhoto,
-        rating: PUBLIC_RATINGS_ENABLED ? row.venueRating || null : null,
-        publicRatingsEnabled: PUBLIC_RATINGS_ENABLED,
+        rating: pilot.features.publicReviews ? row.venueRating || null : null,
+        publicRatingsEnabled: pilot.features.publicReviews,
       },
     })),
     nextCursor: hasMore && last

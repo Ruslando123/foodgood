@@ -1,2 +1,4 @@
-/** Public reviews remain opt-in while structured feedback is private. */
-export const PUBLIC_RATINGS_ENABLED = process.env.NEXT_PUBLIC_PUBLIC_RATINGS_ENABLED === "true";
+import { getPilotConfig } from "@/lib/pilot";
+
+/** Compatibility export; the server-enforced pilot config is the source of truth. */
+export const PUBLIC_RATINGS_ENABLED = getPilotConfig().features.publicReviews;

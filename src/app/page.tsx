@@ -17,10 +17,9 @@ import BagCard from "@/components/BagCard";
 import BottomNav from "@/components/BottomNav";
 import BrandMark from "@/components/BrandMark";
 import NotificationBell from "@/components/NotificationBell";
-import { api, Bag, pluralRu } from "@/lib/client/api";
+import { api, Bag, pluralRu, PublicPilotConfig } from "@/lib/client/api";
 import { VENUE_CATEGORIES } from "@/lib/config";
 import { isInKazakhstan, KAZAKHSTAN_CITIES, KazakhstanCity, nearestKazakhstanCity } from "@/lib/kazakhstan";
-import { PUBLIC_RATINGS_ENABLED } from "@/lib/features";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const LOCATION_STORAGE_KEY = "foodgood-location";
@@ -48,8 +47,16 @@ export default function HomePage() {
   const [todayOnly, setTodayOnly] = useState(false);
   const [sort, setSort] = useState<Sort>("soon");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [pilot, setPilot] = useState<PublicPilotConfig | null>(null);
+
+  useEffect(() => {
+    api<{ pilot: PublicPilotConfig }>("/api/pilot/config")
+      .then(({ pilot }) => setPilot(pilot))
+      .catch((reason) => setError(reason instanceof Error ? reason.message : "Не удалось загрузить настройки пилота"));
+  }, []);
 
   const requestLocation = useCallback(() => {
+    if (!pilot) return;
     if (!navigator.geolocation) {
       setGeoState("unavailable");
       return;
@@ -65,6 +72,12 @@ export default function HomePage() {
           return;
         }
         const nearestCity = nearestKazakhstanCity(point.lat, point.lng);
+        if (nearestCity.id !== pilot.cityId) {
+          setLocation(null);
+          setCity(KAZAKHSTAN_CITIES.find((item) => item.id === pilot.cityId) ?? null);
+          setGeoState("outside");
+          return;
+        }
         setLocation(point);
         setCity(nearestCity);
         setGeoState("ready");
@@ -75,16 +88,19 @@ export default function HomePage() {
       () => setGeoState("denied"),
       { enableHighAccuracy: false, timeout: 10000, maximumAge: 5 * 60 * 1000 }
     );
-  }, []);
+  }, [pilot]);
 
   useEffect(() => {
+    if (!pilot) return;
     const saved = window.localStorage.getItem(LOCATION_STORAGE_KEY);
     if (saved) {
       try {
         const value = JSON.parse(saved) as { lat?: number; lng?: number; cityId?: string };
         if (typeof value.lat === "number" && typeof value.lng === "number" && isInKazakhstan(value.lat, value.lng)) {
           setLocation({ lat: value.lat, lng: value.lng });
-          setCity(KAZAKHSTAN_CITIES.find((item) => item.id === value.cityId) ?? nearestKazakhstanCity(value.lat, value.lng));
+          const savedCity = KAZAKHSTAN_CITIES.find((item) => item.id === value.cityId);
+          if (savedCity?.id !== pilot.cityId) throw new Error("outside pilot city");
+          setCity(savedCity);
           setGeoState("manual");
           setSort("distance");
         }
@@ -93,11 +109,11 @@ export default function HomePage() {
       }
     }
     requestLocation();
-  }, [requestLocation]);
+  }, [pilot, requestLocation]);
 
   function selectCity(cityId: string) {
     const selected = KAZAKHSTAN_CITIES.find((item) => item.id === cityId);
-    if (!selected) return;
+    if (!selected || selected.id !== pilot?.cityId) return;
     const point = { lat: selected.lat, lng: selected.lng };
     setLocation(point);
     setCity(selected);
@@ -133,19 +149,20 @@ export default function HomePage() {
       query.set("lat", String(location.lat));
       query.set("lng", String(location.lng));
     }
-    if (city) query.set("city", city.id);
+    if (pilot) query.set("city", pilot.cityId);
     if (search.trim()) query.set("q", search.trim());
     if (category) query.set("category", category);
     if (maxPrice) query.set("maxPrice", maxPrice);
     if (minDiscount) query.set("minDiscount", minDiscount);
-    if (PUBLIC_RATINGS_ENABLED && minRating) query.set("minRating", minRating);
+    if (pilot?.features.publicReviews && minRating) query.set("minRating", minRating);
     if (maxDistance && location) query.set("maxDistance", maxDistance);
     if (todayOnly) query.set("today", "1");
     query.set("sort", sort === "distance" && !location ? "soon" : sort);
     return query.toString();
-  }, [category, city, location, maxDistance, maxPrice, minDiscount, minRating, search, sort, todayOnly]);
+  }, [category, location, maxDistance, maxPrice, minDiscount, minRating, pilot, search, sort, todayOnly]);
 
   useEffect(() => {
+    if (!pilot) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setLoading(true);
@@ -164,7 +181,7 @@ export default function HomePage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [queryString, reloadKey, search]);
+  }, [pilot, queryString, reloadKey, search]);
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
@@ -221,7 +238,7 @@ export default function HomePage() {
               <span className="mb-1 block text-[10px] text-muted">Или выберите город Казахстана</span>
               <select value={geoState === "manual" ? city?.id ?? "" : ""} onChange={(event) => selectCity(event.target.value)} className="w-full rounded-[11px] border border-black/[0.09] bg-white px-3 py-2.5 text-[12px] outline-none">
                 <option value="">Выберите город</option>
-                {KAZAKHSTAN_CITIES.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                {KAZAKHSTAN_CITIES.filter((item) => item.id === pilot?.cityId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </label>
             {city && <button type="button" onClick={clearLocation} className="w-full py-1 text-[11px] font-semibold text-muted">Сбросить выбранный город</button>}
@@ -255,7 +272,7 @@ export default function HomePage() {
           <div className="grid grid-cols-2 gap-2 rounded-[15px] border border-black/[0.07] bg-[#fafbfa] p-3 text-[12px] shadow-sm">
             <FilterSelect label="Категория" value={category} onChange={setCategory}>
               <option value="">Все кухни</option>
-              {Object.entries(VENUE_CATEGORIES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              {Object.entries(VENUE_CATEGORIES).filter(([value]) => pilot?.allowedCategories.includes(value)).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </FilterSelect>
             <FilterSelect label="Сортировка" value={sort} onChange={(value) => setSort(value as Sort)}>
               <option value="soon">Скоро закончится</option>
@@ -269,7 +286,7 @@ export default function HomePage() {
             <FilterSelect label="Радиус" value={maxDistance} onChange={setMaxDistance} disabled={!location}>
               <option value="">Любой</option><option value="1">до 1 км</option><option value="3">до 3 км</option><option value="5">до 5 км</option><option value="10">до 10 км</option>
             </FilterSelect>
-            {PUBLIC_RATINGS_ENABLED && <FilterSelect label="Рейтинг" value={minRating} onChange={setMinRating}>
+            {pilot?.features.publicReviews && <FilterSelect label="Рейтинг" value={minRating} onChange={setMinRating}>
               <option value="">Любой</option><option value="4">от 4★</option><option value="4.5">от 4.5★</option>
             </FilterSelect>}
             <button onClick={resetFilters} className="col-span-2 py-1 font-semibold text-primary">Сбросить{activeFilters ? ` · ${activeFilters}` : ""}</button>
@@ -293,6 +310,7 @@ export default function HomePage() {
         </div>
       ) : (
         <main className="min-w-0 space-y-2.5 px-4">
+          {pilot && <div role="status" className="rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-900"><b>Пилот PAY_AT_VENUE:</b> {pilot.cityName}, {pilot.district.name}. Бронь бесплатна; оплата и кассовый чек — у продавца при получении.</div>}
           {bags && bags.length > 0 && (
             <div className="rounded-[10px] bg-[#edf7f1] px-3 py-2 text-[11px] font-medium text-[#226442]">
               Найдено {bags.length} {pluralRu(bags.length, "пакет", "пакета", "пакетов")} {location ? "с учётом местоположения" : "по Казахстану"} · можно сэкономить до {totalSaved.toLocaleString("ru-RU")} ₸

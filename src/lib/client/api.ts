@@ -11,6 +11,8 @@ export type Venue = {
   twoGisUrl: string;
   category: string;
   photo: string;
+  contactPhone: string;
+  openingHours: string;
   rating?: number | null;
   reviewCount?: number;
   publicRatingsEnabled?: boolean;
@@ -22,7 +24,10 @@ export type Bag = {
   venueId: string;
   title: string;
   description: string;
+  composition: string;
   allergens: string;
+  storage: string;
+  examplePhoto: string;
   price: number;
   originalPrice: number;
   quantityTotal: number;
@@ -63,6 +68,16 @@ export type SessionUser = {
   name: string | null;
   role: string;
   status?: string;
+};
+
+export type PublicPilotConfig = {
+  mode: "PAY_AT_VENUE";
+  cityId: string;
+  cityName: string;
+  district: { name: string; radiusKm: number };
+  limits: { venues: number; activeBagsPerVenue: number; quantityPerBag: number; quantityPerOrder: number; activeOrdersPerCustomer: number; pickupWindowHours: number };
+  features: { publicReviews: boolean; delivery: false; prepaid: false; loyalty: false; ai: false };
+  allowedCategories: string[];
 };
 
 export class ApiError extends Error {

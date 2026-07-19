@@ -21,6 +21,10 @@ async function login(page: Page, phone: string, expectedPath: RegExp) {
   await page.getByLabel("Номер телефона").fill(phone);
   await page.getByRole("button", { name: "Продолжить" }).click();
   await page.getByRole("button", { name: /Использовать демо-код/ }).click();
+  const privacy = page.getByRole("checkbox", { name: /Принимаю политику конфиденциальности/ });
+  if (await privacy.isVisible().catch(() => false)) await privacy.check();
+  const terms = page.getByRole("checkbox", { name: /Принимаю условия использования/ });
+  if (await terms.isVisible().catch(() => false)) await terms.check();
   await Promise.all([
     page.waitForURL(expectedPath),
     page.getByRole("button", { name: "Войти" }).click(),
@@ -28,7 +32,7 @@ async function login(page: Page, phone: string, expectedPath: RegExp) {
   await expect(page).toHaveURL(expectedPath);
 }
 
-test("новый покупатель явно принимает политику перед первым входом", async ({ page }) => {
+test("новый покупатель отдельно принимает privacy и terms перед первым входом", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Номер телефона").fill("+7 707 000 00 05");
   await page.getByRole("button", { name: "Продолжить" }).click();
@@ -37,8 +41,11 @@ test("новый покупатель явно принимает политик
   await page.getByRole("button", { name: "Продолжить" }).click();
   await page.getByRole("button", { name: /Использовать демо-код/ }).click();
   const acceptance = page.getByRole("checkbox", { name: /Принимаю политику конфиденциальности/ });
+  const termsAcceptance = page.getByRole("checkbox", { name: /Принимаю условия использования/ });
   await expect(acceptance).toBeVisible();
+  await expect(termsAcceptance).toBeVisible();
   await acceptance.check();
+  await termsAcceptance.check();
   await Promise.all([
     page.waitForURL(/\/$/),
     page.getByRole("button", { name: "Войти" }).click(),
@@ -48,13 +55,13 @@ test("новый покупатель явно принимает политик
 test("новый Telegram-покупатель также проходит invite-gate", async ({ request }) => {
   const initData = telegramInitData(770700005);
   const rejected = await request.post("/api/auth/telegram", {
-    data: { initData, privacyAccepted: true },
+    data: { initData, privacyAccepted: true, termsAccepted: true },
   });
   expect(rejected.status()).toBe(403);
   expect(await rejected.json()).toMatchObject({ error: { code: "PILOT_INVITE_REQUIRED" } });
 
   const accepted = await request.post("/api/auth/telegram", {
-    data: { initData, inviteCode: "pilot-e2e", privacyAccepted: true },
+    data: { initData, inviteCode: "pilot-e2e", privacyAccepted: true, termsAccepted: true },
   });
   expect(accepted.ok()).toBeTruthy();
 });
@@ -93,12 +100,12 @@ async function orderStatus(page: Page, orderId: string) {
   return (await response.json()).order.status as string;
 }
 
-test("клиент покупает, владелец выдаёт, клиент оставляет приватный structured feedback", async ({ page, browser }) => {
+test("клиент бронирует PAY_AT_VENUE пакет, владелец выдаёт и получает приватный feedback", async ({ page, browser }) => {
   await page.addInitScript(() => localStorage.setItem("foodgood-location", JSON.stringify({ lat: 43.2389, lng: 76.8897, cityId: "almaty" })));
   await login(page, "+7 707 000 00 01", /\/$/);
   // This offer belongs to the merchant used below. Selecting the first card
   // made the redeem flow depend on database/catalog ordering.
-  const merchantBag = page.getByRole("link", { name: /Magnum Cash&Carry.*Ужин-сюрприз/ });
+  const merchantBag = page.getByRole("link", { name: /Coffee Boom.*Пакет-сюрприз/ });
   await expect(merchantBag).toBeVisible();
   await merchantBag.click();
   await page.getByRole("button", { name: "Добавить в избранное" }).click();
@@ -113,7 +120,7 @@ test("клиент покупает, владелец выдаёт, клиент
 
   const merchantContext = await browser.newContext();
   const merchantPage = await merchantContext.newPage();
-  await login(merchantPage, "+7 701 000 00 02", /\/$/);
+  await login(merchantPage, "+7 701 000 00 01", /\/$/);
   await merchantPage.goto("/business/redeem");
   await merchantPage.getByPlaceholder("Например: K7M2ZQ").fill(code);
   merchantPage.once("dialog", async (dialog) => {
@@ -134,6 +141,18 @@ test("клиент покупает, владелец выдаёт, клиент
   await page.getByRole("button", { name: "Сохранить", exact: true }).click();
   await expect(page.getByText("Спасибо! Оценка сохранена приватно.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Оценить заказ приватно" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Оставить отзыв" })).toHaveCount(0);
+  const rejectedReview = await page.request.post(`/api/orders/${orderId}/review`, { data: { rating: 5, comment: "Тест" } });
+  expect(rejectedReview.status()).toBe(403);
+});
+
+test("сервер отклоняет непилотный город и категорию", async ({ request }) => {
+  const outsideCity = await request.get("/api/bags?city=astana");
+  expect(outsideCity.status()).toBe(409);
+  expect(await outsideCity.json()).toMatchObject({ error: { code: "OUTSIDE_PILOT_CITY" } });
+  const disabledCategory = await request.get("/api/bags?city=almaty&category=SUPERMARKET");
+  expect(disabledCategory.status()).toBe(409);
+  expect(await disabledCategory.json()).toMatchObject({ error: { code: "CATEGORY_DISABLED_FOR_PILOT" } });
 });
 
 test("клиент отправляет привязанную к заказу обратную связь в поддержку", async ({ page, browser }) => {
@@ -235,10 +254,29 @@ test("повторяет бронирование тем же ключом по�
   expect(retriedOrderId).toBe(firstOrderId);
 });
 
-test("каталог не смешивает города", async ({ request }) => {
+test("каталог принудительно ограничен пилотным городом", async ({ request }) => {
   const astana = await request.get("/api/bags?city=astana");
-  expect(astana.ok()).toBeTruthy();
-  expect((await astana.json()).bags).toHaveLength(0);
+  expect(astana.status()).toBe(409);
   const almaty = await request.get("/api/bags?city=almaty");
-  expect((await almaty.json()).bags.length).toBeGreaterThan(0);
+  const bags = (await almaty.json()).bags as Array<{ venue: { cityId: string; category: string } }>;
+  expect(bags.length).toBeGreaterThan(0);
+  expect(bags.every((bag) => bag.venue.cityId === "almaty" && ["CAFE", "BAKERY"].includes(bag.venue.category))).toBe(true);
+});
+
+test("запрос удаления деактивирует аккаунт и завершает сессию", async ({ page }) => {
+  const initData = telegramInitData(770700099);
+  const signup = await page.request.post("/api/auth/telegram", {
+    data: { initData, inviteCode: "pilot-e2e", privacyAccepted: true, termsAccepted: true },
+  });
+  expect(signup.ok()).toBeTruthy();
+  await page.goto("/settings");
+  await page.getByRole("button", { name: "Запросить удаление" }).click();
+  await page.getByLabel(/Введите УДАЛИТЬ АККАУНТ/).fill("УДАЛИТЬ АККАУНТ");
+  await page.getByRole("button", { name: "Деактивировать" }).click();
+  await expect(page).toHaveURL(/\/login\?account=deactivated/);
+  const me = await page.request.get("/api/auth/me");
+  expect(await me.json()).toMatchObject({ user: null });
+  const relogin = await page.request.post("/api/auth/telegram", { data: { initData } });
+  expect(relogin.status()).toBe(403);
+  expect(await relogin.json()).toMatchObject({ error: { code: "ACCOUNT_DEACTIVATED" } });
 });

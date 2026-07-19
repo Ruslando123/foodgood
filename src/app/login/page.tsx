@@ -48,6 +48,8 @@ function LoginContent() {
   const [inviteCode, setInviteCode] = useState("");
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [privacyAcceptanceRequired, setPrivacyAcceptanceRequired] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [termsAcceptanceRequired, setTermsAcceptanceRequired] = useState(false);
   const [code, setCode] = useState("");
   const [codeLength, setCodeLength] = useState(4);
   const [devCode, setDevCode] = useState<string | null>(null);
@@ -92,7 +94,7 @@ function LoginContent() {
     setBusy(true);
     setError(null);
     try {
-      const result = await api<{ phone: string; codeLength: number; privacyAcceptanceRequired: boolean; devCode?: string; telegramUrl?: string; botUsername?: string }>("/api/auth/phone", { method: "POST", body: JSON.stringify({ phone, inviteCode }) });
+      const result = await api<{ phone: string; codeLength: number; privacyAcceptanceRequired: boolean; termsAcceptanceRequired: boolean; devCode?: string; telegramUrl?: string; botUsername?: string }>("/api/auth/phone", { method: "POST", body: JSON.stringify({ phone, inviteCode }) });
       setPhone(formatKazakhstanPhone(result.phone));
       setCode("");
       setCodeLength(result.codeLength);
@@ -100,7 +102,9 @@ function LoginContent() {
       setTelegramUrl(result.telegramUrl ?? null);
       setBotUsername(result.botUsername ?? null);
       setPrivacyAcceptanceRequired(result.privacyAcceptanceRequired);
+      setTermsAcceptanceRequired(result.termsAcceptanceRequired);
       if (!result.privacyAcceptanceRequired) setPrivacyAccepted(false);
+      if (!result.termsAcceptanceRequired) setTermsAccepted(false);
       setStep("code");
       setCooldown(60);
     } catch (e) {
@@ -114,7 +118,7 @@ function LoginContent() {
     setBusy(true);
     setError(null);
     try {
-      const { user } = await api<{ user: SessionUser }>("/api/auth/verify", { method: "POST", body: JSON.stringify({ phone, code, privacyAccepted }) });
+      const { user } = await api<{ user: SessionUser }>("/api/auth/verify", { method: "POST", body: JSON.stringify({ phone, code, privacyAccepted, termsAccepted }) });
       setUser(user);
       // Администратор всегда попадает в рабочий кабинет, даже если ранее
       // открывал профиль или пришёл с параметром next.
@@ -268,13 +272,14 @@ function LoginContent() {
           <label className="block"><span className="mb-1.5 block text-center text-[12px] font-semibold text-[#4f5d55]">Код подтверждения</span><input aria-label="Код подтверждения" autoFocus autoComplete="one-time-code" type="text" inputMode="numeric" value={code} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "").slice(0, codeLength)); setError(null); }} placeholder={"•".repeat(codeLength)} maxLength={codeLength} className="h-16 w-full rounded-[14px] border border-black/[0.12] bg-[#fafbfa] px-4 text-center text-[26px] font-bold tracking-[0.55em] outline-none transition placeholder:tracking-[0.45em] focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" /></label>
           {devCode && <button type="button" onClick={() => setCode(devCode)} className="w-full rounded-xl bg-amber-50 px-3 py-2.5 text-[12px] font-semibold text-amber-800">Использовать демо-код {devCode}</button>}
           {error && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-[12px] text-red-700">{error}</p>}
-          {privacyAcceptanceRequired && <label className="flex cursor-pointer items-start gap-2 rounded-xl bg-[#edf7f1] p-3 text-[12px] leading-4 text-[#315d47]"><input type="checkbox" checked={privacyAccepted} onChange={(event) => setPrivacyAccepted(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#1a7f4e]" /><span>Принимаю <Link href="/legal/privacy" target="_blank" className="font-semibold underline">политику конфиденциальности</Link> FoodGood.</span></label>}
-          <button type="submit" disabled={busy || code.length !== codeLength || (privacyAcceptanceRequired && !privacyAccepted)} className="w-full rounded-[14px] bg-primary py-3.5 text-[15px] font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Проверяем…" : "Войти"}</button>
+          {privacyAcceptanceRequired && <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-[#edf7f1] p-3 text-[12px] leading-4 text-[#315d47]"><input aria-label="Принимаю политику конфиденциальности" type="checkbox" checked={privacyAccepted} onChange={(event) => setPrivacyAccepted(event.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-[#1a7f4e]" /><span>Отдельно принимаю <Link href="/legal/privacy" target="_blank" className="font-semibold underline">политику конфиденциальности</Link> FoodGood.</span></label>}
+          {termsAcceptanceRequired && <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-[#f5f5f3] p-3 text-[12px] leading-4 text-[#3f4742]"><input aria-label="Принимаю условия использования" type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-[#1a7f4e]" /><span>Отдельно принимаю <Link href="/legal/terms" target="_blank" className="font-semibold underline">условия использования</Link> FoodGood.</span></label>}
+          <button type="submit" disabled={busy || code.length !== codeLength || (privacyAcceptanceRequired && !privacyAccepted) || (termsAcceptanceRequired && !termsAccepted)} className="w-full rounded-[14px] bg-primary py-3.5 text-[15px] font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Проверяем…" : "Войти"}</button>
           <div className="flex items-center justify-between gap-3"><button type="button" onClick={() => { setStep("phone"); setCode(""); setTelegramUrl(null); setError(null); }} className="inline-flex items-center gap-1 text-[12px] font-semibold text-muted"><IconArrowLeft size={15} />Изменить номер</button><button type="button" onClick={requestCode} disabled={busy || cooldown > 0} className="text-right text-[12px] font-semibold text-primary disabled:text-muted">{cooldown > 0 ? `Повторить через ${cooldown} сек` : "Получить новую ссылку"}</button></div>
         </form>
       )}
       {next !== "/" && <p className="mt-4 text-center text-[12px] text-muted">После входа вернём вас на нужную страницу.</p>}
-      <p className="mt-3 text-center text-[10px] leading-4 text-muted">Продолжая, вы принимаете <Link href="/legal/terms" className="underline">условия использования</Link> и <Link href="/legal/privacy" className="underline">политику конфиденциальности</Link>.</p>
+      <p className="mt-3 text-center text-[10px] leading-4 text-muted">Документы доступны заранее: <Link href="/legal/terms" className="underline">условия использования</Link> и <Link href="/legal/privacy" className="underline">политика конфиденциальности</Link>. Обязательные согласия запрашиваются отдельными флажками.</p>
     </main>
   );
 }

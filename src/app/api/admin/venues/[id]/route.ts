@@ -6,6 +6,7 @@ import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { requireAdmin } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
+import { assertVenueInPilotScope, enforcePilotVenueCapacity } from "@/lib/pilot";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(_request, async () => {
@@ -33,15 +34,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const suspensionReason = status === "SUSPENDED"
         ? requiredString(body.suspensionReason, "suspensionReason", { max: 500 })
         : null;
-      const venue = await prisma.venue.update({ where: { id }, data: { status, suspensionReason } });
-      await prisma.auditLog.create({
-        data: {
-          actorId: admin.id,
-          action: status === "ACTIVE" ? "VENUE_ACTIVATED" : "VENUE_SUSPENDED",
-          entityType: "Venue",
-          entityId: id,
-          metadataJson: JSON.stringify({ suspensionReason }),
-        },
+      if (status === "ACTIVE") assertVenueInPilotScope(existing);
+      const venue = await prisma.$transaction(async (tx) => {
+        if (status === "ACTIVE") await enforcePilotVenueCapacity(tx, id);
+        const updated = await tx.venue.update({ where: { id }, data: { status, suspensionReason } });
+        await tx.auditLog.create({
+          data: {
+            actorId: admin.id,
+            action: status === "ACTIVE" ? "VENUE_ACTIVATED" : "VENUE_SUSPENDED",
+            entityType: "Venue",
+            entityId: id,
+            metadataJson: JSON.stringify({ suspensionReason }),
+          },
+        });
+        return updated;
       });
       return json({ venue });
     }
@@ -56,9 +62,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (owner.role === "ADMIN") throw new ApiError(409, "ADMIN_CANNOT_BE_OWNER", "Администратора нельзя назначить владельцем");
     const lat = finiteNumber(body.lat, "lat", { min: -90, max: 90 });
     const lng = finiteNumber(body.lng, "lng", { min: -180, max: 180 });
+    const cityId = nearestKazakhstanCity(lat, lng).id;
+    assertVenueInPilotScope({ cityId, category, lat, lng });
 
-    const [venue] = await prisma.$transaction([
-      prisma.venue.update({
+    const venue = await prisma.$transaction(async (tx) => {
+      if (existing.status === "ACTIVE") await enforcePilotVenueCapacity(tx, id);
+      const updated = await tx.venue.update({
         where: { id },
         data: {
           name,
@@ -67,14 +76,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           ownerId: owner.id,
           lat,
           lng,
-          cityId: nearestKazakhstanCity(lat, lng).id,
+          cityId,
           description: optionalString(body.description, "description", 1000),
           photo: optionalString(body.photo, "photo", 200) || "🍽️",
         },
-      }),
-      ...(owner.role === "CUSTOMER" ? [prisma.user.update({ where: { id: owner.id }, data: { role: "MERCHANT" } })] : []),
-      prisma.auditLog.create({ data: { actorId: admin.id, action: "VENUE_UPDATED", entityType: "Venue", entityId: id, metadataJson: JSON.stringify({ ownerId: owner.id }) } }),
-    ]);
+      });
+      if (owner.role === "CUSTOMER") await tx.user.update({ where: { id: owner.id }, data: { role: "MERCHANT" } });
+      await tx.auditLog.create({ data: { actorId: admin.id, action: "VENUE_UPDATED", entityType: "Venue", entityId: id, metadataJson: JSON.stringify({ ownerId: owner.id }) } });
+      return updated;
+    });
     return json({ venue });
   });
 }

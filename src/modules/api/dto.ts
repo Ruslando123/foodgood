@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { PUBLIC_RATINGS_ENABLED } from "@/lib/features";
+import { getPilotConfig } from "@/lib/pilot";
 
 export type PublicVenueDto = {
   id: string;
@@ -24,7 +24,10 @@ export type PublicBagDto = {
   venueId: string;
   title: string;
   description: string;
+  composition: string;
   allergens: string;
+  storage: string;
+  examplePhoto: string;
   price: number;
   originalPrice: number;
   quantityTotal: number;
@@ -84,7 +87,10 @@ const publicBagSelect = {
   venueId: true,
   title: true,
   description: true,
+  composition: true,
   allergens: true,
+  storage: true,
+  examplePhoto: true,
   price: true,
   originalPrice: true,
   quantityTotal: true,
@@ -147,6 +153,7 @@ export function toPublicVenueDto(
   venue: PublicVenueSource,
   overrides: { rating?: number | null; reviewCount?: number } = {}
 ): PublicVenueDto {
+  const reviewsEnabled = getPilotConfig().features.publicReviews;
   return {
     id: venue.id,
     name: venue.name,
@@ -160,9 +167,9 @@ export function toPublicVenueDto(
     photo: venue.photo,
     contactPhone: venue.contactPhone,
     openingHours: venue.openingHours,
-    rating: PUBLIC_RATINGS_ENABLED ? (overrides.rating ?? (venue.ratingCount > 0 ? venue.ratingAverage : null)) : null,
-    ...(overrides.reviewCount === undefined ? {} : { reviewCount: PUBLIC_RATINGS_ENABLED ? overrides.reviewCount : 0 }),
-    publicRatingsEnabled: PUBLIC_RATINGS_ENABLED,
+    rating: reviewsEnabled ? (overrides.rating ?? (venue.ratingCount > 0 ? venue.ratingAverage : null)) : null,
+    ...(overrides.reviewCount === undefined ? {} : { reviewCount: reviewsEnabled ? overrides.reviewCount : 0 }),
+    publicRatingsEnabled: reviewsEnabled,
   };
 }
 
@@ -172,7 +179,10 @@ function toPublicBagDto(bag: CustomerOrderMappable["bag"]): PublicBagDto {
     venueId: bag.venueId,
     title: bag.title,
     description: bag.description,
+    composition: bag.composition,
     allergens: bag.allergens,
+    storage: bag.storage,
+    examplePhoto: bag.examplePhoto,
     price: bag.price,
     originalPrice: bag.originalPrice,
     quantityTotal: bag.quantityTotal,

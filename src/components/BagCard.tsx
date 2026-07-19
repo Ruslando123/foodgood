@@ -5,6 +5,7 @@ import { IconAlertTriangle, IconClock, IconMapPin } from "@tabler/icons-react";
 import { Bag, discountPct, formatPickupWindow, formatPrice } from "@/lib/client/api";
 import { formatDistance } from "@/lib/geo";
 import VenuePhoto from "@/components/VenuePhoto";
+import { VENUE_CATEGORIES } from "@/lib/config";
 
 export default function BagCard({ bag }: { bag: Bag }) {
   return (
@@ -18,6 +19,7 @@ export default function BagCard({ bag }: { bag: Bag }) {
           <div className="min-w-0 flex-1">
             <h3 className="truncate text-[15px] font-bold leading-5 tracking-[-0.01em]">{bag.venue.name}</h3>
             <p className="truncate text-[12px] text-muted">{bag.title}</p>
+            <p className="truncate text-[10px] font-medium text-primary">{VENUE_CATEGORIES[bag.venue.category] ?? "Заведение"}</p>
             {bag.venue.rating != null && <p className="text-[11px] font-semibold text-amber-500">★ {bag.venue.rating.toFixed(1)}</p>}
           </div>
           <span className="shrink-0 rounded-full bg-primary px-2 py-1 text-[11px] font-bold leading-none text-white">
@@ -43,7 +45,7 @@ export default function BagCard({ bag }: { bag: Bag }) {
             <span className="block whitespace-nowrap text-[9px] text-muted">обычно от <span className="line-through">{formatPrice(bag.originalPrice)}</span></span>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1.5">
-            <span className="rounded-full bg-[#edf7f1] px-2 py-1 text-[10px] text-[#327354]">Осталось {bag.quantityLeft} шт</span>
+            <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${bag.quantityLeft <= 2 ? "bg-amber-100 text-amber-900" : "bg-[#edf7f1] text-[#327354]"}`}>{bag.quantityLeft <= 2 ? `Почти закончилось · ${bag.quantityLeft} шт` : `Осталось ${bag.quantityLeft} шт`}</span>
             <span className="rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm">
               Забронировать
             </span>

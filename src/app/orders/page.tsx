@@ -50,7 +50,7 @@ function OrdersContent() {
     try {
       const query = new URLSearchParams({ scope });
       if (cursor) query.set("cursor", cursor);
-      const data = await api<{ orders: Order[]; nextCursor: string | null }>(`/api/orders?${query}`, { signal: controller.signal });
+      const data = await api<{ orders: Order[]; nextCursor: string | null; features: { publicReviews: boolean } }>(`/api/orders?${query}`, { signal: controller.signal });
       if (sequence !== requestState.sequence) return;
       setPages((current) => ({
         ...current,
@@ -209,7 +209,8 @@ function OrderCard({
             <QrCanvas value={order.pickupCode} size={170} />
             <p className="font-mono text-xl font-bold tracking-widest">{order.pickupCode}</p>
             <p className="text-xs text-muted">Покажите QR или код сотруднику</p>
-            <p className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">К оплате в заведении: {formatPrice(order.totalPrice)}</p>
+            <p className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">К оплате на кассе продавца: {formatPrice(order.totalPrice)}</p>
+            <p className="px-3 text-center text-[11px] leading-4 text-muted">Продавец принимает оплату и выдаёт кассовый чек. FoodGood не списывает деньги.</p>
           </div>
           <div className="grid grid-cols-2 gap-2 text-center text-[13px] font-semibold">
             <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="rounded-[11px] bg-[#edf7f1] px-3 py-2.5 text-primary">Маршрут в 2GIS ↗</a>

@@ -21,6 +21,8 @@ import { zonedDayBounds } from "@/lib/timezone";
 import { otpSecretValue, sessionSecretValue } from "@/lib/secrets";
 import { isPilotInviteRequired, isValidPilotInviteCode } from "@/lib/pilot-invite";
 import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
+import { hasAcceptedCurrentTerms, TERMS_VERSION } from "@/lib/legal";
+import { getPilotConfig, isVenueInPilotScope } from "@/lib/pilot";
 import { assertDisposableLoadDatabase } from "@/lib/load-safety";
 import { PARTNER_AGREEMENT_VERSION, isPilotCategoryAllowed } from "@/lib/config";
 import { assertPartnerCanPublish, normalizeBusinessIdentifier, parseSafetyAttestations } from "@/lib/partner-onboarding";
@@ -211,6 +213,31 @@ describe("customer consent", () => {
     expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: new Date() })).toBe(true);
     expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: null })).toBe(false);
     expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: "old-version", privacyAcceptedAt: new Date() })).toBe(false);
+  });
+
+  it("версионирует terms независимо от privacy", () => {
+    expect(hasAcceptedCurrentTerms({ termsVersion: TERMS_VERSION, termsAcceptedAt: new Date() })).toBe(true);
+    expect(hasAcceptedCurrentTerms({ termsVersion: TERMS_VERSION, termsAcceptedAt: null })).toBe(false);
+    expect(hasAcceptedCurrentTerms({ termsVersion: "old", termsAcceptedAt: new Date() })).toBe(false);
+  });
+});
+
+describe("PAY_AT_VENUE pilot scope", () => {
+  it("закрывает непилотный город, район и категорию", () => {
+    vi.stubEnv("FOODGOOD_PILOT_CITY_ID", "almaty");
+    vi.stubEnv("FOODGOOD_PILOT_CATEGORIES", "CAFE,BAKERY");
+    vi.stubEnv("FOODGOOD_PILOT_RADIUS_KM", "10");
+    try {
+      const config = getPilotConfig();
+      expect(config.mode).toBe("PAY_AT_VENUE");
+      expect(config.features).toMatchObject({ publicReviews: false, delivery: false, prepaid: false, loyalty: false, ai: false });
+      expect(isVenueInPilotScope({ cityId: "almaty", category: "CAFE", lat: 43.24, lng: 76.89 })).toBe(true);
+      expect(isVenueInPilotScope({ cityId: "astana", category: "CAFE", lat: 51.17, lng: 71.45 })).toBe(false);
+      expect(isVenueInPilotScope({ cityId: "almaty", category: "RESTAURANT", lat: 43.24, lng: 76.89 })).toBe(false);
+      expect(isVenueInPilotScope({ cityId: "almaty", category: "CAFE", lat: 43.6, lng: 77.3 })).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

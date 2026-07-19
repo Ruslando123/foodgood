@@ -16,9 +16,11 @@ import {
   formatPrice,
   formatPickupWindow,
   discountPct,
+  PublicPilotConfig,
 } from "@/lib/client/api";
 import { twoGisDirectionsUrl } from "@/lib/maps";
 import { trackProductEvent } from "@/lib/client/product-analytics";
+import { VENUE_CATEGORIES } from "@/lib/config";
 
 export default function BagPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -34,6 +36,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const viewedBagId = useRef<string | null>(null);
   const bagRequest = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 });
   const [similar, setSimilar] = useState<Bag[]>([]);
+  const [pilot, setPilot] = useState<PublicPilotConfig | null>(null);
 
   const checkoutStorageKey = `foodgood:checkout:${id}`;
 
@@ -135,11 +138,12 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       const sequence = ++request.sequence;
       request.controller = controller;
       try {
-        const data = await api<{ bag: Bag }>(`/api/bags/${id}`, { signal: controller.signal });
+        const data = await api<{ bag: Bag; pilot: PublicPilotConfig }>(`/api/bags/${id}`, { signal: controller.signal });
         if (!mounted || sequence !== request.sequence) return;
         setBag(data.bag);
+        setPilot(data.pilot);
         if (!checkoutKey.current) {
-          changeQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1)));
+          changeQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1, data.pilot.limits.quantityPerOrder)));
         }
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
@@ -190,9 +194,10 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
     try {
       const [{ user }, latestResponse] = await Promise.all([
         api<{ user: SessionUser | null }>("/api/auth/me"),
-        api<{ bag: Bag }>(`/api/bags/${id}`),
+        api<{ bag: Bag; pilot: PublicPilotConfig }>(`/api/bags/${id}`),
       ]);
       const latest = latestResponse.bag;
+      setPilot(latestResponse.pilot);
       setBag(latest);
       if (!user) {
         router.push(`/login?next=/bag/${id}`);
@@ -203,7 +208,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         return;
       }
       if (latest.status !== "ACTIVE" || latest.quantityLeft < quantity) {
-        changeQuantity((current) => Math.max(1, Math.min(current, latest.quantityLeft || 1)));
+        changeQuantity((current) => Math.max(1, Math.min(current, latest.quantityLeft || 1, latestResponse.pilot.limits.quantityPerOrder)));
         setError("Остаток изменился. Проверьте количество и попробуйте снова.");
         return;
       }
@@ -258,7 +263,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   return (
     <div className="mx-auto min-h-dvh max-w-md bg-white pb-28">
       <div className="relative h-[250px] overflow-hidden bg-[#eef1ee]">
-        <VenuePhoto category={bag.venue.category} photo={bag.venue.photo} alt={bag.venue.name} />
+        <VenuePhoto category={bag.venue.category} photo={bag.examplePhoto || bag.venue.photo} alt={`Фото-пример пакета «${bag.title}»`} />
         <div className="absolute inset-x-0 top-0 h-24 bg-black/20" />
         <Link
           href="/"
@@ -270,30 +275,34 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         <span className="absolute bottom-4 right-4 rounded-full bg-primary px-3 py-1.5 text-[12px] font-bold text-white shadow-sm">
           −{discountPct(bag)}%
         </span>
+        <span className="absolute bottom-4 left-4 rounded-full bg-black/65 px-2.5 py-1 text-[10px] font-semibold text-white">Фото-пример · состав может отличаться</span>
       </div>
 
       <main className="space-y-4 px-4 pt-5">
         <div>
           <h1 className="text-[22px] font-bold leading-7 tracking-[-0.03em]">{bag.title}</h1>
+          <p className="mt-1 text-[12px] font-semibold text-primary">{VENUE_CATEGORIES[bag.venue.category] ?? "Заведение"}</p>
           <Link href={`/venue/${bag.venue.id}`} className="mt-1 inline-block text-[14px] font-semibold text-primary">
             {bag.venue.name} →
           </Link>
           <p className="mt-0.5 text-[12px] text-muted">{bag.venue.address}</p>
-          {bag.venue.publicRatingsEnabled && <Link href={`/venue/${bag.venue.id}`} className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[12px] font-semibold text-amber-700">★ {bag.venue.rating != null ? bag.venue.rating.toFixed(1) : "Новый"} · {bag.venue.reviewCount ?? 0} отзывов</Link>}
+          {pilot?.features.publicReviews && <Link href={`/venue/${bag.venue.id}`} className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[12px] font-semibold text-amber-700">★ {bag.venue.rating != null ? bag.venue.rating.toFixed(1) : "Новый"} · {bag.venue.reviewCount ?? 0} отзывов</Link>}
         </div>
 
         <div className="space-y-3 rounded-[17px] border border-black/[0.07] bg-white p-4 text-[13px] shadow-[0_2px_10px_rgba(20,40,28,0.04)]">
           <p className="flex gap-2"><IconGift size={19} className="shrink-0 text-primary" /><span><b>Что внутри?</b> {bag.description || "Сюрприз из свежей еды на витрине."}</span></p>
+          <p className="pl-7"><b>Минимальный состав:</b> {bag.composition || bag.description || "уточняется продавцом до оплаты"}</p>
           <p className="pl-7 text-[12px] text-muted">
             Заведение гарантирует: ценность содержимого минимум{" "}
             {formatPrice(bag.originalPrice)} — вы платите {formatPrice(bag.price)}.
           </p>
           <p className="flex gap-2"><IconAlertTriangle size={19} className="shrink-0 text-amber-600" /><span><b>Возможные аллергены:</b> {bag.allergens || "состав меняется — уточните у заведения перед получением"}.</span></p>
+          <p className="pl-7"><b>Хранение:</b> {bag.storage || "уточните у продавца при получении и употребите в тот же день"}</p>
           <p className="flex items-center gap-2"><IconClock size={19} className="text-primary" />Забрать: <b>{formatPickupWindow(bag.pickupStart, bag.pickupEnd)}</b></p>
           <p className="pl-7 text-[12px] text-muted">
             {pickupEnded ? "Окно выдачи завершено" : pickupStarted ? "Уже можно забирать" : "Выдача начнётся в указанное время"}
           </p>
-          <p className="flex items-center gap-2"><IconPackage size={19} className="text-primary" />Осталось: <b>{bag.quantityLeft} шт</b></p>
+          <p className={`flex items-center gap-2 ${bag.quantityLeft <= 2 ? "font-semibold text-amber-800" : ""}`}><IconPackage size={19} className="text-primary" />{bag.quantityLeft <= 2 ? "Почти закончилось:" : "Осталось:"} <b>{bag.quantityLeft} шт</b></p>
           <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 font-semibold text-primary">
             <IconMapPin size={19} />Маршрут в 2GIS ↗
           </a>
@@ -305,7 +314,9 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
           <h2 className="text-[14px] font-bold">Важно перед покупкой</h2>
           <p className="flex gap-2"><IconGift size={17} className="shrink-0 text-primary" />Указан примерный состав. Фактический состав может отличаться и зависит от оставшейся свежей еды.</p>
           <p className="flex gap-2"><IconReceipt size={17} className="shrink-0 text-primary" />Покажите QR-код или шестизначный код сотруднику и оплатите заказ в заведении.</p>
+          <p className="flex gap-2"><IconShieldCheck size={17} className="shrink-0 text-primary" /><span><b>Фактический продавец:</b> {bag.venue.name}, {bag.venue.address}. Продавец принимает оплату на кассе и выдаёт кассовый чек.</span></p>
           <p className="flex gap-2"><IconShieldCheck size={17} className="shrink-0 text-primary" />Бесплатная отмена доступна до начала окна выдачи.</p>
+          <p><b>Поддержка:</b> <Link href="/help" className="font-semibold text-primary underline">обратиться по заказу</Link>{bag.venue.contactPhone ? <> · продавец: <a href={`tel:${bag.venue.contactPhone}`} className="font-semibold text-primary underline">{bag.venue.contactPhone}</a></> : null}</p>
         </div>
 
         <section className="space-y-2.5 rounded-[17px] border border-black/[0.07] bg-white p-4 text-[12px]">
@@ -322,14 +333,16 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
             <div className="flex items-center gap-3">
               <button
                 onClick={() => changeQuantity((q) => Math.max(1, q - 1))}
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f2f4f2]"
+                aria-label="Уменьшить количество"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-[#f2f4f2]"
               >
                 <IconMinus size={18} />
               </button>
               <span className="font-bold w-5 text-center">{quantity}</span>
               <button
-                onClick={() => changeQuantity((q) => Math.min(bag.quantityLeft, q + 1))}
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f2f4f2]"
+                onClick={() => changeQuantity((q) => Math.min(bag.quantityLeft, pilot?.limits.quantityPerOrder ?? 1, q + 1))}
+                aria-label="Увеличить количество"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-[#f2f4f2]"
               >
                 <IconPlus size={18} />
               </button>
@@ -340,7 +353,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         {error && <p className="text-red-600 text-sm">{error}</p>}
       </main>
 
-      <div className="fixed inset-x-0 bottom-[68px] z-10 mx-auto max-w-md border-t border-black/[0.05] bg-white/95 px-4 py-3 backdrop-blur-xl">
+      <div className="fixed inset-x-0 bottom-[calc(68px+env(safe-area-inset-bottom))] z-10 mx-auto max-w-md border-t border-black/[0.05] bg-white/95 px-4 py-3 backdrop-blur-xl">
         <button
           onClick={startCheckout}
           disabled={!canCheckout || processing}
@@ -362,18 +375,21 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       )}
 
       {paying && (
-        <div className="fixed inset-0 z-30 bg-black/50 flex items-end justify-center" onClick={cancelCheckout}>
+        <div className="fixed inset-0 z-30 flex items-end justify-center bg-black/50" onClick={cancelCheckout}>
           <div
-            className="w-full max-w-md space-y-4 rounded-t-[24px] bg-white p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="checkout-title"
+            className="w-full max-w-md space-y-4 rounded-t-[24px] bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="font-bold text-lg">Бронирование</h2>
+            <h2 id="checkout-title" className="font-bold text-lg">Бронирование без онлайн-оплаты</h2>
             <div className="text-sm space-y-1">
               <div className="flex justify-between"><span className="text-muted">{bag.title} × {quantity}</span><span>{formatPrice(total)}</span></div>
               <div className="flex justify-between font-bold text-base pt-2 border-t border-black/5"><span>Итого</span><span>{formatPrice(total)}</span></div>
             </div>
             <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">
-              Оплатите {formatPrice(total)} непосредственно заведению при получении. Заведение выдаст кассовый чек. FoodGood не принимает деньги за эту бронь.
+              Оплатите {formatPrice(total)} продавцу {bag.venue.name} на кассе при получении. Продавец обязан выдать кассовый чек. FoodGood не принимает деньги, не хранит карту и не делает автоматический возврат.
             </p>
             <button
               onClick={confirmOrder}

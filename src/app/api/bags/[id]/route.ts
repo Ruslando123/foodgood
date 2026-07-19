@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { apiRoute, ApiError, json } from "@/shared/server/api";
 import { publicVenueSelect, toPublicVenueDto } from "@/modules/api/dto";
 import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
-import { PUBLIC_RATINGS_ENABLED } from "@/lib/features";
+import { getPilotConfig, isVenueInPilotScope, publicPilotConfig } from "@/lib/pilot";
 
 export async function GET(
   _req: NextRequest,
@@ -27,30 +27,33 @@ export async function GET(
         },
       },
       select: {
-        id: true, venueId: true, title: true, description: true, allergens: true, price: true,
+        id: true, venueId: true, title: true, description: true, composition: true, allergens: true, storage: true, examplePhoto: true, price: true,
         originalPrice: true, quantityTotal: true, quantityLeft: true,
         pickupStart: true, pickupEnd: true, status: true,
         venue: {
           select: {
             ...publicVenueSelect,
-            reviews: {
+            ...(getPilotConfig().features.publicReviews ? { reviews: {
               where: { moderationStatus: "PUBLISHED" },
               select: { id: true, rating: true, comment: true, createdAt: true, user: { select: { name: true } } },
               orderBy: { createdAt: "desc" },
               take: 3,
-            },
+            } } : {}),
           },
         },
       },
     });
-    if (!bag) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
+    if (!bag || !isVenueInPilotScope(bag.venue)) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
     return json({
       bag: {
         id: bag.id,
         venueId: bag.venueId,
         title: bag.title,
         description: bag.description,
+        composition: bag.composition,
         allergens: bag.allergens,
+        storage: bag.storage,
+        examplePhoto: bag.examplePhoto,
         price: bag.price,
         originalPrice: bag.originalPrice,
         quantityTotal: bag.quantityTotal,
@@ -60,12 +63,13 @@ export async function GET(
         status: bag.status,
         venue: {
           ...toPublicVenueDto(bag.venue, { reviewCount: bag.venue.ratingCount }),
-          reviews: (PUBLIC_RATINGS_ENABLED ? bag.venue.reviews : []).map((review) => ({
+          reviews: ("reviews" in bag.venue ? bag.venue.reviews : []).map((review) => ({
             ...review,
             createdAt: review.createdAt.toISOString(),
           })),
         },
       },
+      pilot: publicPilotConfig(),
     }, { headers: { "Cache-Control": "public, s-maxage=5, stale-while-revalidate=15" } });
   });
 }

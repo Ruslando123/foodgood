@@ -9,6 +9,7 @@ import {
 } from "@/modules/orders/state-machine";
 import { normalizeClientSource } from "./product-analytics";
 import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "./config";
+import { getPilotConfig } from "./pilot";
 
 export class OrderError extends Error {}
 
@@ -69,7 +70,26 @@ export async function expireStale(limit = 250): Promise<number> {
         actorRole: "SYSTEM",
         reason: "PICKUP_WINDOW_EXPIRED",
         timestamp: now,
-      })) noShows += 1;
+      })) {
+        noShows += 1;
+        const expired = await tx.order.findUnique({ where: { id: order.id }, select: { userId: true } });
+        if (expired) {
+          await tx.notification.upsert({
+            where: { dedupeKey: `order-expired:${order.id}` },
+            update: {},
+            create: {
+              userId: expired.userId,
+              channel: "IN_APP",
+              recipient: expired.userId,
+              type: "ORDER_EXPIRED",
+              status: "SENT",
+              sentAt: now,
+              dedupeKey: `order-expired:${order.id}`,
+              payloadJson: JSON.stringify({ orderId: order.id }),
+            },
+          });
+        }
+      }
     }
     return expiredBags.length + noShows;
   });
@@ -84,7 +104,8 @@ export async function createOrder(
   idempotencyOwnerToken?: string,
   clientSource = "direct"
 ) {
-  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+  const pilot = getPilotConfig();
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > pilot.limits.quantityPerOrder) {
     throw new OrderError("Некорректное количество");
   }
 
@@ -146,9 +167,18 @@ async function createReservedOrder(
     idempotencyRecordId?: string;
   }
 ): Promise<string> {
+  const pilot = getPilotConfig();
+  await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${input.userId} FOR UPDATE`;
+  const activeOrders = await tx.order.count({
+    where: { userId: input.userId, status: { in: ACTIVE_PICKUP_ORDER_STATUSES }, bag: { pickupEnd: { gt: new Date() } } },
+  });
+  if (activeOrders >= pilot.limits.activeOrdersPerCustomer) {
+    throw new OrderError(`В пилоте доступно не более ${pilot.limits.activeOrdersPerCustomer} активных броней`);
+  }
   const orderId = randomUUID();
   const pickupCode = generatePickupCode();
   const reminderId = randomUUID();
+  const reservedNotificationId = randomUUID();
   const eventId = randomUUID();
   const reminderDedupeKey = `pickup-reminder:${orderId}`;
   const eventDedupeKey = `order_created:${orderId}`;
@@ -169,6 +199,13 @@ async function createReservedOrder(
       WHERE candidate.id = ${input.bagId}
         AND venue.status = 'ACTIVE'
         AND venue.category IN (${Prisma.join(PILOT_CATEGORY_ALLOWLIST)})
+        AND venue."cityId" = ${pilot.cityId}
+        AND venue.category IN (${Prisma.join(pilot.allowedCategories)})
+        AND ST_DWithin(
+          ST_SetSRID(ST_MakePoint(venue.lng, venue.lat), 4326)::geography,
+          ST_SetSRID(ST_MakePoint(${pilot.district.centerLng}, ${pilot.district.centerLat}), 4326)::geography,
+          ${pilot.district.radiusKm * 1000}
+        )
         AND partner."verificationStatus" = 'VERIFIED'
         AND candidate."suitableForSaleAttested" = true
         AND candidate."storageCompliantAttested" = true
@@ -241,6 +278,19 @@ async function createReservedOrder(
       FROM created_order
       RETURNING id
     ),
+    order_notification AS (
+      INSERT INTO "Notification" (
+        id, "userId", channel, recipient, type, status, "sentAt", "dedupeKey", "payloadJson"
+      )
+      SELECT
+        ${reservedNotificationId}, ${input.userId}, 'IN_APP', ${input.userId},
+        'ORDER_RESERVED', 'SENT', now(), 'order-reserved:' || created_order.id,
+        json_build_object('orderId', created_order.id, 'bagId', reserved."bagId")::text
+      FROM created_order
+      CROSS JOIN reserved
+      ON CONFLICT ("dedupeKey") DO NOTHING
+      RETURNING id
+    ),
     product_event AS (
       INSERT INTO "ProductEvent" (
         id, name, "userId", "venueId", "bagId", "orderId", amount,
@@ -272,6 +322,7 @@ async function createReservedOrder(
 }
 
 async function diagnoseReservationFailure(tx: Prisma.TransactionClient, bagId: string): Promise<never> {
+  const pilot = getPilotConfig();
   const rows = await tx.$queryRaw<ReservationFailure[]>`
     SELECT
       bag.status AS "bagStatus",
@@ -279,6 +330,13 @@ async function diagnoseReservationFailure(tx: Prisma.TransactionClient, bagId: s
       venue.status AS "venueStatus",
       (
         venue.category IN (${Prisma.join(PILOT_CATEGORY_ALLOWLIST)})
+        AND venue."cityId" = ${pilot.cityId}
+        AND venue.category IN (${Prisma.join(pilot.allowedCategories)})
+        AND ST_DWithin(
+          ST_SetSRID(ST_MakePoint(venue.lng, venue.lat), 4326)::geography,
+          ST_SetSRID(ST_MakePoint(${pilot.district.centerLng}, ${pilot.district.centerLat}), 4326)::geography,
+          ${pilot.district.radiusKm * 1000}
+        )
         AND bag."suitableForSaleAttested" = true
         AND bag."storageCompliantAttested" = true
         AND bag."allergensCurrentAttested" = true
@@ -333,6 +391,15 @@ export async function cancelOrder(userId: string, orderId: string) {
     });
     if (!cancelled) throw new OrderError("Заказ уже обрабатывается");
     await restoreReservedInventory(tx, current.bagId, current.quantity, now);
+    await tx.notification.upsert({
+      where: { dedupeKey: `order-cancelled:${orderId}` },
+      update: {},
+      create: {
+        userId, channel: "IN_APP", recipient: userId, type: "ORDER_CANCELLED", status: "SENT", sentAt: now,
+        dedupeKey: `order-cancelled:${orderId}`,
+        payloadJson: JSON.stringify({ orderId, title: current.bag.title, reason: "customer" }),
+      },
+    });
     return tx.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
   });
 }
@@ -379,6 +446,15 @@ export async function redeemOrder(merchantId: string, pickupCode: string, cashRe
         pickupCodeSuffix: code.slice(-2),
         metadataJson: JSON.stringify({ cashReceivedConfirmed: true }),
         timestamp: now,
+      },
+    });
+    await tx.notification.upsert({
+      where: { dedupeKey: `order-completed:${order.id}` },
+      update: {},
+      create: {
+        userId: order.userId, channel: "IN_APP", recipient: order.userId, type: "ORDER_COMPLETED", status: "SENT", sentAt: now,
+        dedupeKey: `order-completed:${order.id}`,
+        payloadJson: JSON.stringify({ orderId: order.id, venueName: order.bag.venue.name, title: order.bag.title }),
       },
     });
     return tx.order.findUniqueOrThrow({

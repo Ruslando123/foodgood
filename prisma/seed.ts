@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { PRIVACY_POLICY_VERSION } from "../src/lib/privacy";
 import { PARTNER_AGREEMENT_VERSION, isPilotCategoryAllowed } from "../src/lib/config";
+import { TERMS_VERSION } from "../src/lib/legal";
 
 const prisma = new PrismaClient();
 
@@ -37,6 +38,7 @@ async function main() {
   await prisma.partnerAgreementAcceptance.deleteMany();
   await prisma.partnerBusiness.deleteMany();
   await prisma.auditLog.deleteMany();
+  await prisma.accountDeletionRequest.deleteMany();
   await prisma.user.deleteMany();
   await prisma.systemState.deleteMany();
 
@@ -57,9 +59,9 @@ async function main() {
   const acceptedAt = new Date();
   await prisma.user.createMany({
     data: [
-      { phone: "+77070000001", name: "Демо-покупатель", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt },
-      { phone: "+77070000002", name: "E2E покупатель 2", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt },
-      { phone: "+77070000004", name: "E2E покупатель 4", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt },
+      { phone: "+77070000001", name: "Демо-покупатель", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt, termsVersion: TERMS_VERSION, termsAcceptedAt: acceptedAt },
+      { phone: "+77070000002", name: "E2E покупатель 2", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt, termsVersion: TERMS_VERSION, termsAcceptedAt: acceptedAt },
+      { phone: "+77070000004", name: "E2E покупатель 4", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt, termsVersion: TERMS_VERSION, termsAcceptedAt: acceptedAt },
     ],
   });
   await prisma.user.create({ data: { phone: "+77010000003", name: "Демо-админ", role: "ADMIN" } });
@@ -226,6 +228,9 @@ async function main() {
     const venue = venues.find(({ id }) => id === bag.venueId)!;
     await prisma.bag.create({ data: {
       ...bag,
+      composition: `Минимум 2 позиции. Возможный состав: ${bag.description}`,
+      storage: "Забрать в окно выдачи, соблюдать рекомендации продавца и употребить в тот же день",
+      examplePhoto: bag.title.includes("Хлеб") ? "/images/food-bread.jpg" : bag.title.includes("выпеч") ? "/images/food-coffee.jpg" : "/images/food-bowl.jpg",
       suitableForSaleAttested: true,
       storageCompliantAttested: true,
       allergensCurrentAttested: true,

@@ -37,6 +37,34 @@ function notificationCopy(notification: NotificationItem): Copy {
     href: "/orders",
     tone: "green",
   };
+  if (type === "ORDER_RESERVED") return {
+    title: "Бронь подтверждена",
+    text: "Пакет зарезервирован. Оплатите его на кассе заведения при получении — FoodGood деньги не списывает.",
+    action: "Показать код",
+    href: "/orders",
+    tone: "green",
+  };
+  if (type === "ORDER_COMPLETED") return {
+    title: "Заказ выдан",
+    text: `«${payload.title ?? "Пакет"}» получен. Кассовый чек и расчёты предоставляет ${payload.venueName ?? "заведение"}.`,
+    action: "Открыть историю",
+    href: "/orders",
+    tone: "green",
+  };
+  if (type === "ORDER_CANCELLED") return {
+    title: "Бронь отменена",
+    text: "FoodGood не списывал деньги. Если вы уже рассчитались на кассе, возврат оформляет заведение по своему чеку.",
+    action: "Открыть заказы",
+    href: "/orders",
+    tone: "rose",
+  };
+  if (type === "ORDER_EXPIRED") return {
+    title: "Окно выдачи закончилось",
+    text: "Бронь закрыта как не полученная. Онлайн-списания и автоматического возврата в FoodGood нет.",
+    action: "Открыть историю",
+    href: "/orders",
+    tone: "amber",
+  };
   if (type === "PICKUP_REMINDER") return {
     title: "Скоро начнётся выдача",
     text: `Не забудьте забрать «${payload.title ?? "пакет"}» в ${payload.venueName ?? "заведении"}.`,

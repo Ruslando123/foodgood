@@ -13,18 +13,24 @@ model User {
   telegramId                     String?   @unique
   name                           String?
   role                           String    @default("CUSTOMER") // CUSTOMER | MERCHANT | ADMIN
-  status                         String    @default("ACTIVE") // ACTIVE | BLOCKED
+  status                         String    @default("ACTIVE") // ACTIVE | BLOCKED | DEACTIVATED
   notificationReminders          Boolean   @default(true)
   notificationOffers             Boolean   @default(true)
   /// Versioned acceptance of the privacy policy. Both fields are retained so
   /// the pilot can demonstrate exactly which text a customer accepted and when.
   privacyPolicyVersion           String?
   privacyAcceptedAt              DateTime?
+  /// Terms are accepted independently from the privacy policy.  Keeping both
+  /// snapshots on the account makes the current gate cheap, while AuditLog is
+  /// the append-only history of every acceptance event.
+  termsVersion                   String?
+  termsAcceptedAt                DateTime?
   /// Optional marketing/communications permission. The offers preference is
   /// kept in sync with it; delivery also requires the current privacy version.
   communicationsConsent          Boolean   @default(false)
   communicationsConsentUpdatedAt DateTime?
   sessionVersion                 Int       @default(0)
+  deactivatedAt                  DateTime?
   createdAt                      DateTime  @default(now())
 
   venues             Venue[]
@@ -40,6 +46,7 @@ model User {
   complaintAttachments   ComplaintAttachment[]
   partnerBusiness        PartnerBusiness?       @relation("PartnerBusinessOwner")
   partnerAgreements      PartnerAgreementAcceptance[] @relation("PartnerAgreementAcceptor")
+  deletionRequests       AccountDeletionRequest[]
 
   @@index([role, communicationsConsent])
 }
@@ -168,7 +175,10 @@ model Bag {
   venueId                    String
   title                      String
   description                String    @default("")
+  composition                String    @default("") // minimum guaranteed contents or food groups
   allergens                  String    @default("") // possible allergens, free-text label shown to customers
+  storage                    String    @default("") // storage instructions before consumption
+  examplePhoto               String    @default("") // illustrative photo URL; actual contents may differ
   price                      Int // sale price, KZT
   originalPrice              Int // estimated original value, KZT
   quantityTotal              Int
@@ -189,6 +199,23 @@ model Bag {
 
   @@index([status, pickupEnd])
   @@index([venueId, createdAt(sort: Desc)])
+}
+
+/// A customer-initiated erasure request.  The account is deactivated and all
+/// sessions are revoked immediately; legally required order, receipt-support
+/// and audit history remains linked until the retention review is completed.
+model AccountDeletionRequest {
+  id              String    @id @default(cuid())
+  userId          String
+  status          String    @default("PENDING") // PENDING | COMPLETED | REJECTED
+  requestedAt     DateTime  @default(now())
+  processedAt     DateTime?
+  retentionReason String    @default("")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, requestedAt(sort: Desc)])
+  @@index([status, requestedAt])
 }
 
 model Order {

@@ -14,7 +14,10 @@ export default function NewBagPage() {
   const [venueId, setVenueId] = useState("");
   const [title, setTitle] = useState("Пакет-сюрприз");
   const [description, setDescription] = useState("");
+  const [composition, setComposition] = useState("Не менее 2 единиц свежей еды из указанного ассортимента");
   const [allergens, setAllergens] = useState("");
+  const [storage, setStorage] = useState("Забрать в окно выдачи и употребить в тот же день; уточнить у продавца");
+  const [examplePhoto, setExamplePhoto] = useState("");
   const [price, setPrice] = useState("1500");
   const [originalPrice, setOriginalPrice] = useState("4500");
   const [quantity, setQuantity] = useState("5");
@@ -61,7 +64,10 @@ export default function NewBagPage() {
           venueId,
           title,
           description,
+          composition,
           allergens,
+          storage,
+          examplePhoto,
           price: Number(price),
           originalPrice: Number(originalPrice),
           quantity: Number(quantity),
@@ -116,6 +122,10 @@ export default function NewBagPage() {
           />
         </Field>
 
+        <Field label="Минимальный гарантированный состав">
+          <textarea value={composition} onChange={(e) => setComposition(e.target.value)} rows={2} required className="w-full bg-card border border-black/10 rounded-xl px-3 py-3" />
+        </Field>
+
         <Field label="Возможные аллергены (необязательно)">
           <input
             value={allergens}
@@ -124,6 +134,15 @@ export default function NewBagPage() {
             className="w-full bg-card border border-black/10 rounded-xl px-3 py-3"
           />
           <p className="mt-1 text-[11px] font-normal text-muted">Укажите всё возможное — поле сохранится при повторе пакета.</p>
+        </Field>
+
+        <Field label="Хранение и срок употребления">
+          <textarea value={storage} onChange={(e) => setStorage(e.target.value)} rows={2} required className="w-full bg-card border border-black/10 rounded-xl px-3 py-3" />
+        </Field>
+
+        <Field label="Ссылка на фото-пример (необязательно)">
+          <input type="url" value={examplePhoto} onChange={(e) => setExamplePhoto(e.target.value)} placeholder="https://…" className="w-full bg-card border border-black/10 rounded-xl px-3 py-3" />
+          <p className="mt-1 text-[11px] font-normal text-muted">Фото иллюстрирует возможный вид; фактический состав задаётся отдельно.</p>
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
@@ -159,7 +178,7 @@ export default function NewBagPage() {
           {busy ? "Публикуем…" : `Опубликовать ${quantity || 0} шт. · ${startTime}–${endTime}`}
         </button>
         <p className="text-xs text-muted text-center">
-          Покупатель бесплатно бронирует пакет и оплачивает его в заведении при получении.
+          FoodGood создаёт бесплатную бронь. Покупатель платит продавцу на кассе при получении, а продавец выдаёт кассовый чек.
         </p>
       </main>
 

@@ -71,6 +71,7 @@ describe("бесплатная бронь", () => {
         timestamp: expect.any(Date),
       }),
     ]);
+    await expect(prisma.notification.findUnique({ where: { dedupeKey: `order-reserved:${order.id}` } })).resolves.toMatchObject({ type: "ORDER_RESERVED" });
   });
 
   it("не позволяет продать последний пакет двум клиентам", async () => {
@@ -203,6 +204,7 @@ describe("бесплатная бронь", () => {
       { status: "RESERVED" },
       { status: "CANCELLED_BY_USER", actor: customer.id, actorRole: "CUSTOMER", reason: "CUSTOMER_REQUEST" },
     ]);
+    await expect(prisma.notification.findUnique({ where: { dedupeKey: `order-cancelled:${order.id}` } })).resolves.toMatchObject({ type: "ORDER_CANCELLED" });
   });
 
   it("не создаёт новую бронь у приостановленного заведения", async () => {
@@ -251,6 +253,7 @@ describe("выдача в заведении", () => {
 
     expect(completed.status).toBe("COMPLETED");
     expect(completed.completedAt).toBeInstanceOf(Date);
+    await expect(prisma.notification.findUnique({ where: { dedupeKey: `order-completed:${order.id}` } })).resolves.toMatchObject({ type: "ORDER_COMPLETED" });
     await expect(redeemOrder(merchant.id, order.pickupCode, true)).rejects.toThrow("уже выдан");
     await expect(prisma.pickupJournal.findUniqueOrThrow({ where: { orderId: order.id } })).resolves.toMatchObject({
       actor: merchant.id,
@@ -454,6 +457,7 @@ describe("жизненный цикл броней", () => {
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ status: "EXPIRED" });
     await expect(prisma.order.findUniqueOrThrow({ where: { pickupCode: "EXPIRE" } })).resolves.toMatchObject({ status: "NO_SHOW" });
     await expect(prisma.orderStatusHistory.findFirstOrThrow({ where: { orderId: expiring.id, status: "NO_SHOW" } })).resolves.toMatchObject({ actor: "SYSTEM", actorRole: "SYSTEM", reason: "PICKUP_WINDOW_EXPIRED" });
+    await expect(prisma.notification.findUnique({ where: { dedupeKey: `order-expired:${expiring.id}` } })).resolves.toMatchObject({ type: "ORDER_EXPIRED" });
   });
 });
 
