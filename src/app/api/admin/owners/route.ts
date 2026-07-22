@@ -36,18 +36,36 @@ export async function POST(req: NextRequest) {
     const phone = normalizePhone(requiredString(body.phone, "phone", { max: 30 }));
     if (!phone) throw new ApiError(400, "INVALID_OWNER_PHONE", "Некорректный номер телефона");
 
-    const existing = await prisma.user.findUnique({ where: { phone } });
-    if (existing?.role === "ADMIN") throw new ApiError(409, "ADMIN_CANNOT_BE_OWNER", "Администратора нельзя назначить владельцем");
-    if (existing?.role === "MERCHANT") throw new ApiError(409, "OWNER_EXISTS", "Этот номер уже добавлен как владелец");
-
-    const [owner] = await prisma.$transaction([
-      prisma.user.upsert({
+    const owner = await prisma.$transaction(async (tx) => {
+      const existing = await tx.user.findUnique({
         where: { phone },
-        update: { role: "MERCHANT" },
+        select: { id: true, role: true },
+      });
+      if (existing?.role === "MERCHANT") {
+        throw new ApiError(409, "OWNER_EXISTS", "Этот номер уже добавлен как владелец");
+      }
+
+      const updated = await tx.user.upsert({
+        where: { phone },
+        update: {
+          role: "MERCHANT",
+          // Immediately revoke sessions that still carry the previous role.
+          sessionVersion: { increment: 1 },
+        },
         create: { phone, role: "MERCHANT" },
-      }),
-      prisma.auditLog.create({ data: { actorId: admin.id, action: "OWNER_GRANTED", entityType: "User", metadataJson: JSON.stringify({ phone }) } }),
-    ]);
+        select: { id: true, phone: true, name: true, role: true, createdAt: true },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: admin.id,
+          action: "OWNER_GRANTED",
+          entityType: "User",
+          entityId: updated.id,
+          metadataJson: JSON.stringify({ phone, previousRole: existing?.role ?? null }),
+        },
+      });
+      return updated;
+    });
     return json({ owner }, { status: 201 });
   });
 }
