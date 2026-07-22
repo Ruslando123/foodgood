@@ -170,6 +170,19 @@ model Venue {
   @@index([location], type: Gist, map: "Venue_location_gist_idx")
 }
 
+/// Optimized public venue photos stored in PostgreSQL when object storage is
+/// unavailable. The Venue.photo field references these assets through the
+/// immutable /api/media/venues/:filename route.
+model VenuePhotoAsset {
+  filename    String   @id
+  bytes       Bytes
+  contentType String
+  sizeBytes   Int
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 model Bag {
   id                         String    @id @default(cuid())
   venueId                    String

@@ -3,11 +3,13 @@ import { constants } from "fs";
 import { access, mkdir, readFile, unlink, writeFile } from "fs/promises";
 import path from "path";
 import { DeleteObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { prisma } from "./db";
 
 export const MAX_VENUE_PHOTO_BYTES = 5 * 1024 * 1024;
 export const MAX_VENUE_PHOTO_PIXELS = 36_000_000;
 export const MIN_VENUE_PHOTO_WIDTH = 240;
 export const MIN_VENUE_PHOTO_HEIGHT = 160;
+const STORED_VENUE_PHOTO_MAX_EDGE = 1920;
 
 const root = () => path.resolve(process.env.VENUE_UPLOAD_DIR ?? path.join(process.cwd(), "data", "uploads", "venues"));
 
@@ -49,6 +51,7 @@ export async function saveVenuePhoto(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const extension = detectedExtension(bytes);
   if (!extension) throw new Error("PHOTO_FORMAT");
+  let storedBytes: Buffer;
   try {
     // Keep the native dependency out of routes that only check storage health.
     // Vercel loads the matching Linux binary only for photo-processing routes.
@@ -59,26 +62,47 @@ export async function saveVenuePhoto(file: File): Promise<string> {
     if (!metadata.width || !metadata.height || metadata.width < MIN_VENUE_PHOTO_WIDTH || metadata.height < MIN_VENUE_PHOTO_HEIGHT || metadata.width * metadata.height > MAX_VENUE_PHOTO_PIXELS) {
       throw new Error("PHOTO_DIMENSIONS");
     }
+    // Normalize camera orientation and keep public responses comfortably below
+    // serverless response limits while preserving enough detail for catalog cards.
+    storedBytes = await sharp(bytes, { limitInputPixels: MAX_VENUE_PHOTO_PIXELS })
+      .rotate()
+      .resize({ width: STORED_VENUE_PHOTO_MAX_EDGE, height: STORED_VENUE_PHOTO_MAX_EDGE, fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 82, effort: 4 })
+      .toBuffer();
+    if (storedBytes.byteLength <= 0 || storedBytes.byteLength > MAX_VENUE_PHOTO_BYTES) throw new Error("PHOTO_SIZE");
   } catch (error) {
-    if (error instanceof Error && ["PHOTO_FORMAT", "PHOTO_DIMENSIONS"].includes(error.message)) throw error;
+    if (error instanceof Error && ["PHOTO_FORMAT", "PHOTO_DIMENSIONS", "PHOTO_SIZE"].includes(error.message)) throw error;
     throw new Error("PHOTO_FORMAT");
   }
-  const filename = `${randomUUID()}.${extension}`;
+  const filename = `${randomUUID()}.webp`;
   const storage = objectStorage();
   if (storage) {
     const key = `venues/${filename}`;
-    await storage.client.send(new PutObjectCommand({
-      Bucket: storage.bucket,
-      Key: key,
-      Body: bytes,
-      ContentType: extension === "jpg" ? "image/jpeg" : `image/${extension}`,
-      CacheControl: "public, max-age=31536000, immutable",
-    }));
-    return `${storage.publicBaseUrl}/${key}`;
+    try {
+      await storage.client.send(new PutObjectCommand({
+        Bucket: storage.bucket,
+        Key: key,
+        Body: storedBytes,
+        ContentType: "image/webp",
+        CacheControl: "public, max-age=31536000, immutable",
+      }));
+      return `${storage.publicBaseUrl}/${key}`;
+    } catch {
+      // Production can continue through the database-backed fallback below.
+    }
   }
-  if (process.env.NODE_ENV === "production") throw new Error("PHOTO_STORAGE_CONFIG");
+  if (process.env.NODE_ENV === "production") {
+    try {
+      await prisma.venuePhotoAsset.create({
+        data: { filename, bytes: new Uint8Array(storedBytes), contentType: "image/webp", sizeBytes: storedBytes.byteLength },
+      });
+      return `/api/media/venues/${filename}`;
+    } catch {
+      throw new Error("PHOTO_STORAGE_UNAVAILABLE");
+    }
+  }
   await mkdir(root(), { recursive: true });
-  await writeFile(path.join(root(), filename), bytes, { flag: "wx" });
+  await writeFile(path.join(root(), filename), storedBytes, { flag: "wx" });
   return `/api/media/venues/${filename}`;
 }
 
@@ -92,7 +116,14 @@ export async function checkVenuePhotoStorage(): Promise<boolean> {
       return false;
     }
   }
-  if (process.env.NODE_ENV === "production") return false;
+  if (process.env.NODE_ENV === "production") {
+    try {
+      await prisma.venuePhotoAsset.findFirst({ select: { filename: true } });
+      return true;
+    } catch {
+      return false;
+    }
+  }
   try {
     await mkdir(root(), { recursive: true });
     await access(root(), constants.R_OK | constants.W_OK);
@@ -103,8 +134,14 @@ export async function checkVenuePhotoStorage(): Promise<boolean> {
 }
 
 export async function readVenuePhoto(filename: string): Promise<{ bytes: Buffer; type: string } | null> {
-  if (process.env.NODE_ENV === "production") return null;
   if (!/^[a-f0-9-]+\.(jpg|png|webp)$/.test(filename)) return null;
+  try {
+    const asset = await prisma.venuePhotoAsset.findUnique({ where: { filename } });
+    if (asset) return { bytes: Buffer.from(asset.bytes), type: asset.contentType };
+  } catch {
+    if (process.env.NODE_ENV === "production") return null;
+  }
+  if (process.env.NODE_ENV === "production") return null;
   try {
     const bytes = await readFile(path.join(root(), filename));
     const extension = path.extname(filename).slice(1);
@@ -119,8 +156,9 @@ export async function removeVenuePhoto(photo: string): Promise<void> {
     await storage.client.send(new DeleteObjectCommand({ Bucket: storage.bucket, Key: key })).catch(() => undefined);
     return;
   }
-  if (process.env.NODE_ENV === "production") return;
   const match = photo.match(/^\/api\/media\/venues\/([a-f0-9-]+\.(?:jpg|png|webp))$/);
   if (!match) return;
+  await prisma.venuePhotoAsset.deleteMany({ where: { filename: match[1] } }).catch(() => undefined);
+  if (process.env.NODE_ENV === "production") return;
   await unlink(path.join(root(), match[1])).catch(() => undefined);
 }

@@ -178,14 +178,18 @@ describe("venue photos", () => {
       const png = new Uint8Array(await sharp({ create: { width: 320, height: 180, channels: 3, background: "#2f855a" } }).png().toBuffer());
       const url = await saveVenuePhoto(new File([png], "venue.png", { type: "image/png" }));
       const filename = url.split("/").at(-1)!;
-      await expect(readVenuePhoto(filename)).resolves.toMatchObject({ type: "image/png" });
+      await expect(readVenuePhoto(filename)).resolves.toMatchObject({ type: "image/webp" });
       await expect(saveVenuePhoto(new File(["not an image"], "venue.txt"))).rejects.toThrow("PHOTO_FORMAT");
       const tiny = new Uint8Array(await sharp({ create: { width: 20, height: 20, channels: 3, background: "#fff" } }).png().toBuffer());
       await expect(saveVenuePhoto(new File([tiny], "tiny.png"))).rejects.toThrow("PHOTO_DIMENSIONS");
       await removeVenuePhoto(url);
       await expect(readVenuePhoto(filename)).resolves.toBeNull();
       vi.stubEnv("NODE_ENV", "production");
-      await expect(saveVenuePhoto(new File([png], "venue.png", { type: "image/png" }))).rejects.toThrow("PHOTO_STORAGE_CONFIG");
+      const productionUrl = await saveVenuePhoto(new File([png], "venue.png", { type: "image/png" }));
+      const productionFilename = productionUrl.split("/").at(-1)!;
+      await expect(readVenuePhoto(productionFilename)).resolves.toMatchObject({ type: "image/webp" });
+      await removeVenuePhoto(productionUrl);
+      await expect(readVenuePhoto(productionFilename)).resolves.toBeNull();
     } finally {
       vi.unstubAllEnvs();
       await rm(directory, { recursive: true, force: true });

@@ -21,6 +21,7 @@ export async function resetDb() {
   await prisma.orderIdempotencyKey.deleteMany();
   await prisma.bag.deleteMany();
   await prisma.venue.deleteMany();
+  await prisma.venuePhotoAsset.deleteMany();
   await prisma.partnerAgreementAcceptance.deleteMany();
   await prisma.partnerBusiness.deleteMany();
   await prisma.notification.deleteMany();
