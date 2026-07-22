@@ -23,8 +23,7 @@ import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/p
 import { hasAcceptedCurrentTerms, TERMS_VERSION } from "@/lib/legal";
 import { getPilotConfig, isVenueInPilotScope } from "@/lib/pilot";
 import { assertDisposableLoadDatabase } from "@/lib/load-safety";
-import { PARTNER_AGREEMENT_VERSION, isPilotCategoryAllowed } from "@/lib/config";
-import { assertPartnerCanPublish, normalizeBusinessIdentifier, parseSafetyAttestations } from "@/lib/partner-onboarding";
+import { parseSafetyAttestations } from "@/lib/publication-safety";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -244,23 +243,7 @@ describe("PAY_AT_VENUE pilot scope", () => {
   });
 });
 
-describe("безопасная публикация партнёра", () => {
-  const verifiedPartner = {
-    id: "partner-1",
-    legalType: "IP",
-    legalName: "ИП Тест",
-    businessIdentifier: "900101300001",
-    contactName: "Представитель",
-    contactPhone: "+77010000001",
-    verificationStatus: "VERIFIED",
-    agreements: [{ agreementVersion: PARTNER_AGREEMENT_VERSION }],
-  };
-
-  it("нормализует БИН/ИИН и оставляет только 12 цифр", () => {
-    expect(normalizeBusinessIdentifier("900 101 300 001")).toBe("900101300001");
-    expect(normalizeBusinessIdentifier("123")).toBeNull();
-  });
-
+describe("безопасная публикация пакета", () => {
   it("требует каждое safety-подтверждение явно", () => {
     expect(() => parseSafetyAttestations({ suitableForSaleAttested: true })).toThrow("все условия безопасности");
     expect(parseSafetyAttestations({
@@ -274,15 +257,6 @@ describe("безопасная публикация партнёра", () => {
       allergensCurrentAttested: true,
       categoryAllowedAttested: true,
     });
-  });
-
-  it("допускает только проверенного партнёра с текущим договором и pilot-категорией", () => {
-    expect(() => assertPartnerCanPublish(verifiedPartner, "BAKERY")).not.toThrow();
-    expect(() => assertPartnerCanPublish({ ...verifiedPartner, verificationStatus: "PENDING" }, "BAKERY")).toThrow("после проверки");
-    expect(() => assertPartnerCanPublish({ ...verifiedPartner, agreements: [] }, "BAKERY")).toThrow("версию партнёрского договора");
-    expect(() => assertPartnerCanPublish(verifiedPartner, "SUPERMARKET")).toThrow("закрытый пилот");
-    expect(isPilotCategoryAllowed("CAFE")).toBe(true);
-    expect(isPilotCategoryAllowed("SUPERMARKET")).toBe(false);
   });
 });
 

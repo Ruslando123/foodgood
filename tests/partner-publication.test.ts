@@ -9,12 +9,10 @@ beforeEach(() => resetDb());
 describe("публичная граница закрытого пилота", () => {
   const query = parseCatalogQuery(new URLSearchParams());
 
-  it("скрывает пакет при потере верификации партнёра", async () => {
-    const { partner, bag } = await createFixtures();
+  it("показывает пакет без профиля, договора и проверки партнёра", async () => {
+    const { bag } = await createFixtures();
+    await expect(prisma.partnerBusiness.count()).resolves.toBe(0);
     await expect(queryCatalog({ query, cityId: "almaty", limit: 10 })).resolves.toMatchObject({ bags: [{ id: bag.id }] });
-
-    await prisma.partnerBusiness.update({ where: { id: partner.id }, data: { verificationStatus: "SUSPENDED" } });
-    await expect(queryCatalog({ query, cityId: "almaty", limit: 10 })).resolves.toMatchObject({ bags: [] });
   });
 
   it("скрывает пакет без любого из обязательных attestations", async () => {

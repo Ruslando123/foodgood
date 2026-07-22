@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { CatalogQuery, CatalogSort } from "./query";
-import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
+import { PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
 import { getPilotConfig } from "@/lib/pilot";
 
 type CatalogRow = {
@@ -88,17 +88,11 @@ export async function queryCatalog(input: {
     Prisma.sql`bag."quantityLeft" > 0`,
     Prisma.sql`bag."pickupEnd" > now()`,
     Prisma.sql`venue.status = 'ACTIVE'`,
-    Prisma.sql`partner."verificationStatus" = 'VERIFIED'`,
     Prisma.sql`bag."suitableForSaleAttested" = true`,
     Prisma.sql`bag."storageCompliantAttested" = true`,
     Prisma.sql`bag."allergensCurrentAttested" = true`,
     Prisma.sql`bag."categoryAllowedAttested" = true`,
     Prisma.sql`venue.category IN (${Prisma.join(PILOT_CATEGORY_ALLOWLIST)})`,
-    Prisma.sql`EXISTS (
-      SELECT 1 FROM "PartnerAgreementAcceptance" acceptance
-      WHERE acceptance."partnerBusinessId" = partner.id
-        AND acceptance."agreementVersion" = ${PARTNER_AGREEMENT_VERSION}
-    )`,
     Prisma.sql`venue."cityId" = ${pilot.cityId}`,
     Prisma.sql`venue.category IN (${Prisma.join(pilot.allowedCategories)})`,
     Prisma.sql`ST_DWithin(
@@ -148,12 +142,11 @@ export async function queryCatalog(input: {
       venue.lat AS "venueLat", venue.lng AS "venueLng", venue."cityId" AS "venueCityId",
       venue."twoGisUrl" AS "venueTwoGisUrl",
       venue.category AS "venueCategory", venue.photo AS "venuePhoto",
-      venue."ratingAverage" AS "venueRating", partner."legalName" AS "sellerLegalName",
-      partner."legalType" AS "sellerLegalType", ${distance} AS "distanceKm",
+      venue."ratingAverage" AS "venueRating", venue.name AS "sellerLegalName",
+      NULL::text AS "sellerLegalType", ${distance} AS "distanceKm",
       ${sortExpression} AS "sortValue"
     FROM "Bag" bag
     JOIN "Venue" venue ON venue.id = bag."venueId"
-    JOIN "PartnerBusiness" partner ON partner."ownerId" = venue."ownerId"
     WHERE ${Prisma.join(filters, " AND ")}
     ORDER BY ${sortExpression} ${direction}, bag.id ASC
     LIMIT ${limit + 1}

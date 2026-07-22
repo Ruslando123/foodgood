@@ -5,7 +5,7 @@ import { cancelBag, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
-import { assertPartnerCanPublish, parseSafetyAttestations, safetyAttestationData } from "@/lib/partner-onboarding";
+import { parseSafetyAttestations, safetyAttestationData } from "@/lib/publication-safety";
 import { assertVenueInPilotScope, getPilotConfig } from "@/lib/pilot";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -25,8 +25,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const source = await prisma.bag.findUnique({ where: { id }, include: { venue: true } });
     if (!source || source.venue.ownerId !== user.id) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
     if (source.venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено");
-    const partner = await prisma.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
-    assertPartnerCanPublish(partner, source.venue.category);
     assertVenueInPilotScope(source.venue);
     const pilot = getPilotConfig();
     const duration = source.pickupEnd.getTime() - source.pickupStart.getTime();
@@ -39,9 +37,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (!lockedVenue || lockedVenue.ownerId !== user.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
       if (lockedVenue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено");
       assertVenueInPilotScope(lockedVenue);
-      await tx.$queryRaw`SELECT id FROM "PartnerBusiness" WHERE "ownerId" = ${user.id} FOR SHARE`;
-      const lockedPartner = await tx.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
-      assertPartnerCanPublish(lockedPartner, lockedVenue.category);
       const activeBagCount = await tx.bag.count({ where: { venueId: source.venueId, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } } });
       if (activeBagCount >= pilot.limits.activeBagsPerVenue) throw new ApiError(409, "PILOT_BAG_LIMIT", `Для заведения доступно не более ${pilot.limits.activeBagsPerVenue} активных пакетов`);
       const created = await tx.bag.create({ data: { venueId: source.venueId, title: source.title, description: source.description, composition: source.composition || source.description, allergens: source.allergens, storage: source.storage || "Уточнить у продавца при получении", examplePhoto: source.examplePhoto, price: source.price, originalPrice: source.originalPrice, quantityTotal: source.quantityTotal, quantityLeft: source.quantityTotal, pickupStart, pickupEnd, ...safetyAttestationData(safety, user.id) }, include: { venue: true } });
@@ -56,7 +51,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         dedupeKey: `partner_offer_created:${created.id}`,
         metadata: { repeatedFromBagId: source.id },
       });
-      await tx.auditLog.create({ data: { actorId: user.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: source.venueId, partnerBusinessId: lockedPartner!.id, repeatedFromBagId: source.id, safetyAttestations: true }) } });
+      await tx.auditLog.create({ data: { actorId: user.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: source.venueId, repeatedFromBagId: source.id, safetyAttestations: true }) } });
       return created;
     });
     return json({ bag }, { status: 201 });
@@ -108,9 +103,6 @@ export async function PATCH(
         if (!bag || bag.venue.ownerId !== user.id) {
           throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
         }
-        await tx.$queryRaw`SELECT id FROM "PartnerBusiness" WHERE "ownerId" = ${user.id} FOR SHARE`;
-        const partner = await tx.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
-        assertPartnerCanPublish(partner, bag.venue.category);
         if (bag.status !== "ACTIVE" && bag.status !== "SOLD_OUT") {
           throw new ApiError(409, "BAG_NOT_EDITABLE", "Закрытый пакет нельзя редактировать");
         }

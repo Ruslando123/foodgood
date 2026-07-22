@@ -8,7 +8,7 @@ import {
   transitionOrder,
 } from "@/modules/orders/state-machine";
 import { normalizeClientSource } from "./product-analytics";
-import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "./config";
+import { PILOT_CATEGORY_ALLOWLIST } from "./config";
 import { getPilotConfig } from "./pilot";
 
 export class OrderError extends Error {}
@@ -27,7 +27,7 @@ export function customerOrderScopeWhere(
 }
 
 const orderInclude = {
-  bag: { include: { venue: { include: { owner: { include: { partnerBusiness: true } } } } } },
+  bag: { include: { venue: true } },
 } as const;
 
 class PickupCodeCollisionError extends Error {}
@@ -195,10 +195,9 @@ async function createReservedOrder(
   const rows = await tx.$queryRaw<ReservationResult[]>`
     WITH eligible_venue AS MATERIALIZED (
       SELECT venue.id, venue.name AS "venueName", venue.address AS "venueAddress",
-        partner."legalName" AS "sellerLegalName", partner."legalType" AS "sellerLegalType"
+        venue.name AS "sellerLegalName", ''::text AS "sellerLegalType"
       FROM "Venue" venue
       JOIN "Bag" candidate ON candidate."venueId" = venue.id
-      JOIN "PartnerBusiness" partner ON partner."ownerId" = venue."ownerId"
       WHERE candidate.id = ${input.bagId}
         AND venue.status = 'ACTIVE'
         AND venue.category IN (${Prisma.join(PILOT_CATEGORY_ALLOWLIST)})
@@ -209,17 +208,11 @@ async function createReservedOrder(
           ST_SetSRID(ST_MakePoint(${pilot.district.centerLng}, ${pilot.district.centerLat}), 4326)::geography,
           ${pilot.district.radiusKm * 1000}
         )
-        AND partner."verificationStatus" = 'VERIFIED'
         AND candidate."suitableForSaleAttested" = true
         AND candidate."storageCompliantAttested" = true
         AND candidate."allergensCurrentAttested" = true
         AND candidate."categoryAllowedAttested" = true
-        AND EXISTS (
-          SELECT 1 FROM "PartnerAgreementAcceptance" acceptance
-          WHERE acceptance."partnerBusinessId" = partner.id
-            AND acceptance."agreementVersion" = ${PARTNER_AGREEMENT_VERSION}
-        )
-      FOR SHARE OF venue, partner
+      FOR SHARE OF venue
     ),
     locked_bag AS MATERIALIZED (
       SELECT
@@ -366,16 +359,6 @@ async function diagnoseReservationFailure(tx: Prisma.TransactionClient, bagId: s
         AND bag."storageCompliantAttested" = true
         AND bag."allergensCurrentAttested" = true
         AND bag."categoryAllowedAttested" = true
-        AND EXISTS (
-          SELECT 1 FROM "PartnerBusiness" partner
-          WHERE partner."ownerId" = venue."ownerId"
-            AND partner."verificationStatus" = 'VERIFIED'
-            AND EXISTS (
-              SELECT 1 FROM "PartnerAgreementAcceptance" acceptance
-              WHERE acceptance."partnerBusinessId" = partner.id
-                AND acceptance."agreementVersion" = ${PARTNER_AGREEMENT_VERSION}
-            )
-        )
       ) AS "publicationEligible"
     FROM "Bag" bag
     JOIN "Venue" venue ON venue.id = bag."venueId"

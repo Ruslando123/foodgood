@@ -1,5 +1,4 @@
 export const CURRENCY = "₸";
-export const PARTNER_AGREEMENT_VERSION = "PAY_AT_VENUE_PARTNER_2026-07-19";
 
 export const VENUE_CATEGORIES: Record<string, string> = {
   CAFE: "Кофейня",

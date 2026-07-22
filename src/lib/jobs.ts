@@ -3,7 +3,7 @@ import { prisma } from "./db";
 import { PRIVACY_POLICY_VERSION } from "./privacy";
 import { startLeaseHeartbeat } from "./lease-heartbeat";
 import { workerClaims, workerFailures, workerJobDuration, workerLeaseLost, workerSuccesses } from "./metrics";
-import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "./config";
+import { PILOT_CATEGORY_ALLOWLIST } from "./config";
 
 export type BatchQueue = "notifications";
 type BatchJobType = "FANOUT_NEW_BAG" | "PICKUP_REMINDER";
@@ -202,7 +202,6 @@ async function fanoutNewBag(bagId: string, cursor: string | undefined, batchSize
       venue: {
         status: "ACTIVE",
         category: { in: [...PILOT_CATEGORY_ALLOWLIST] },
-        owner: { partnerBusiness: { is: { verificationStatus: "VERIFIED", agreements: { some: { agreementVersion: PARTNER_AGREEMENT_VERSION } } } } },
       },
     },
     include: { venue: true },
