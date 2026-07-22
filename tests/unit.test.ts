@@ -24,6 +24,7 @@ import { hasAcceptedCurrentTerms, TERMS_VERSION } from "@/lib/legal";
 import { getPilotConfig, isVenueInPilotScope } from "@/lib/pilot";
 import { assertDisposableLoadDatabase } from "@/lib/load-safety";
 import { parseSafetyAttestations } from "@/lib/publication-safety";
+import { canAccessBusiness } from "@/modules/auth/policy";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -257,6 +258,14 @@ describe("безопасная публикация пакета", () => {
       allergensCurrentAttested: true,
       categoryAllowedAttested: true,
     });
+  });
+});
+
+describe("доступ к кабинету владельца", () => {
+  it("разрешает владельцу и администратору без смены роли", () => {
+    expect(canAccessBusiness("MERCHANT")).toBe(true);
+    expect(canAccessBusiness("ADMIN")).toBe(true);
+    expect(canAccessBusiness("CUSTOMER")).toBe(false);
   });
 });
 

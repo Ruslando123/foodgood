@@ -1,5 +1,6 @@
 import { getSessionUser, type SessionUser } from "@/lib/auth";
 import { ApiError } from "@/shared/server/api";
+import { canAccessBusiness } from "./policy";
 
 export async function requireUser(): Promise<SessionUser> {
   const user = await getSessionUser({ includeBlocked: true });
@@ -11,8 +12,8 @@ export async function requireUser(): Promise<SessionUser> {
 
 export async function requireMerchant(): Promise<SessionUser> {
   const user = await requireUser();
-  if (user.role !== "MERCHANT") {
-    throw new ApiError(403, "MERCHANT_REQUIRED", "Доступно только заведению");
+  if (!canAccessBusiness(user.role)) {
+    throw new ApiError(403, "MERCHANT_REQUIRED", "Доступно только владельцу или администратору");
   }
   return user;
 }
