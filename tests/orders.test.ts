@@ -498,6 +498,10 @@ describe("идемпотентность и безопасные DTO", () => {
     const { customer, bag } = await createFixtures();
     await prisma.user.update({ where: { id: customer.id }, data: { telegramId: "secret", sessionVersion: 7 } });
     const order = await createOrder(customer.id, bag.id, 1);
+    await prisma.bag.update({
+      where: { id: bag.id },
+      data: { title: "Изменённое после брони", composition: "Новый состав", allergens: "Новые аллергены" },
+    });
     const customerView = await prisma.order.findUniqueOrThrow({
       where: { id: order.id },
       select: customerOrderSelect,
@@ -516,7 +520,7 @@ describe("идемпотентность и безопасные DTO", () => {
     expect(json).not.toContain("idempotencyRecordId");
     expect(json).not.toContain("payment");
     expect(JSON.parse(json)).toMatchObject({
-      customer: { status: "RESERVED", totalPrice: bag.price },
+      customer: { status: "RESERVED", totalPrice: bag.price, bag: { title: bag.title, composition: bag.composition, allergens: bag.allergens } },
       merchant: { user: { phone: customer.phone } },
     });
   });

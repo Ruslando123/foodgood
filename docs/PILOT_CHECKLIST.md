@@ -7,6 +7,7 @@ Copy this file for each phase and link every checked item to timestamped evidenc
 - [ ] Owner, date/time, release SHA, application deployment ID, and database target are recorded.
 - [ ] `production-gate` passed, including explicit migration deploy and migration status validation.
 - [ ] `npm run production:env:check` passed against the exact deployed environment; no secret values are copied into evidence.
+- [ ] Every `FOODGOOD_PILOT_*` value from `.env.example` is explicitly configured; production does not rely on fallback scope or limits.
 - [ ] `npm run production:health:check` output identifies healthy live/ready/deep endpoints and both worker metrics targets.
 - [ ] Alert-routing test reached the named on-call owner; attach alert and receipt timestamps.
 - [ ] Telegram OTP contact-match, expiry, single-use, and lockout evidence is attached.
@@ -17,9 +18,10 @@ Copy this file for each phase and link every checked item to timestamped evidenc
 
 ## Phase A — 1–2 venues
 
+- [ ] Every active venue belongs to a `VERIFIED` partner with the current agreement; create/publish/repeat/edit safety attestations were rehearsed.
 - [ ] Each venue has an ID, named venue owner, FoodGood owner, support contact, daily bag cap, and pickup window.
 - [ ] Staff rehearsed: accept till payment, issue venue receipt, then complete the FoodGood pickup code.
-- [ ] A named internal customer cohort and invite-code owner are recorded.
+- [ ] A named internal customer cohort and acquisition owner are recorded.
 - [ ] At least one reservation → till payment/receipt → completion flow passed per venue.
 - [ ] At least one cancellation restored inventory per venue; no refund workflow was invoked.
 - [ ] One order-linked complaint reached `/admin/support`, received first contact within two hours, and has a recorded resolution.

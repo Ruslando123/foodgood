@@ -36,9 +36,6 @@ test("новый покупатель отдельно принимает privac
   await page.goto("/login");
   await page.getByLabel("Номер телефона").fill("+7 707 000 00 05");
   await page.getByRole("button", { name: "Продолжить" }).click();
-  await expect(page.getByText("Для входа в пилот нужен действующий код приглашения", { exact: true })).toBeVisible();
-  await page.getByLabel("Код приглашения").fill("pilot-e2e");
-  await page.getByRole("button", { name: "Продолжить" }).click();
   await page.getByRole("button", { name: /Использовать демо-код/ }).click();
   const acceptance = page.getByRole("checkbox", { name: /Принимаю политику конфиденциальности/ });
   const termsAcceptance = page.getByRole("checkbox", { name: /Принимаю условия использования/ });
@@ -52,16 +49,10 @@ test("новый покупатель отдельно принимает privac
   ]);
 });
 
-test("новый Telegram-покупатель также проходит invite-gate", async ({ request }) => {
+test("новый Telegram-покупатель может зарегистрироваться", async ({ request }) => {
   const initData = telegramInitData(770700005);
-  const rejected = await request.post("/api/auth/telegram", {
-    data: { initData, privacyAccepted: true, termsAccepted: true },
-  });
-  expect(rejected.status()).toBe(403);
-  expect(await rejected.json()).toMatchObject({ error: { code: "PILOT_INVITE_REQUIRED" } });
-
   const accepted = await request.post("/api/auth/telegram", {
-    data: { initData, inviteCode: "pilot-e2e", privacyAccepted: true, termsAccepted: true },
+    data: { initData, privacyAccepted: true, termsAccepted: true },
   });
   expect(accepted.ok()).toBeTruthy();
 });
@@ -266,7 +257,7 @@ test("каталог принудительно ограничен пилотн�
 test("запрос удаления деактивирует аккаунт и завершает сессию", async ({ page }) => {
   const initData = telegramInitData(770700099);
   const signup = await page.request.post("/api/auth/telegram", {
-    data: { initData, inviteCode: "pilot-e2e", privacyAccepted: true, termsAccepted: true },
+    data: { initData, privacyAccepted: true, termsAccepted: true },
   });
   expect(signup.ok()).toBeTruthy();
   await page.goto("/settings");

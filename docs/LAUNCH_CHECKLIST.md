@@ -26,7 +26,6 @@ REDIS_URL=rediss://...
 REDIS_REQUIRED=true
 SESSION_SECRET=<at least 32 random bytes>
 OTP_SECRET=<different random secret>
-PILOT_INVITE_CODE_HASH=<required SHA-256 hex digest for closed-pilot customer invites>
 ADMIN_PHONE=+7...
 APP_BASE_URL=https://foodgood.example.kz
 TELEGRAM_OTP_ENABLED=true

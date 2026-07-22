@@ -126,6 +126,7 @@ export async function escalateComplaint(input: {
     const venueId = complaint.order.bag.venueId;
     let suspendedOffers = 0;
     let cancelledReservations = 0;
+    const cancelledOrders: Array<{ id: string; userId: string }> = [];
     if (foodSafety && input.suspendVenue) {
       await tx.venue.update({
         where: { id: venueId },
@@ -158,7 +159,23 @@ export async function escalateComplaint(input: {
             timestamp: escalatedAt,
           });
           cancelledReservations += cancelled.length;
+          cancelledOrders.push(...cancelled.map(({ id, userId }) => ({ id, userId })));
         }
+      }
+      if (cancelledOrders.length) {
+        await tx.notification.createMany({
+          data: cancelledOrders.map((order) => ({
+            userId: order.userId,
+            channel: "IN_APP",
+            recipient: order.userId,
+            type: "ORDER_CANCELLED_BY_PARTNER",
+            status: "SENT",
+            sentAt: escalatedAt,
+            dedupeKey: `food-safety-cancelled:${order.id}`,
+            payloadJson: JSON.stringify({ orderId: order.id, reason: "Заведение временно приостановлено для проверки безопасности" }),
+          })),
+          skipDuplicates: true,
+        });
       }
       await tx.auditLog.create({
         data: {

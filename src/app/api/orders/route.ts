@@ -15,10 +15,6 @@ import { hasAcceptedCurrentTerms } from "@/lib/legal";
 export async function GET(request: NextRequest) {
   return apiRoute(request, async () => {
     const user = await requireUser();
-    const legal = await prisma.user.findUniqueOrThrow({ where: { id: user.id }, select: { privacyPolicyVersion: true, privacyAcceptedAt: true, termsVersion: true, termsAcceptedAt: true } });
-    if (!hasAcceptedCurrentPrivacyPolicy(legal) || !hasAcceptedCurrentTerms(legal)) {
-      throw new ApiError(409, "LEGAL_ACCEPTANCE_REQUIRED", "Перед бронированием примите текущие условия и политику в настройках");
-    }
     const params = request.nextUrl.searchParams;
     const scope = params.get("scope") === "history" ? "history" : "active";
     const cursor = params.get("cursor") || undefined;
@@ -39,6 +35,10 @@ export async function GET(request: NextRequest) {
 export async function POST(req: NextRequest) {
   return apiRoute(req, async () => {
     const user = await requireUser();
+    const legal = await prisma.user.findUniqueOrThrow({ where: { id: user.id }, select: { privacyPolicyVersion: true, privacyAcceptedAt: true, termsVersion: true, termsAcceptedAt: true } });
+    if (!hasAcceptedCurrentPrivacyPolicy(legal) || !hasAcceptedCurrentTerms(legal)) {
+      throw new ApiError(409, "LEGAL_ACCEPTANCE_REQUIRED", "Перед бронированием примите текущие условия и политику в настройках");
+    }
     await consumeRateLimit(`order:create:${user.id}`, { limit: 10, windowMs: 60 * 1000 });
     const body = await readJsonObject(req);
     const bagId = requiredString(body.bagId, "bagId", { max: 64 });

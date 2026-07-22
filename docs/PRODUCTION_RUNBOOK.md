@@ -76,7 +76,7 @@ Health endpoints have distinct contracts:
 `foodgood_suspicious_login_challenges` counts OTP challenges created in the last 15 minutes with at least three failed code attempts. It intentionally exposes no phone or IP labels.
 
 1. Check the aggregate metric, OTP/rate-limit error rate, Redis availability, and structured application logs. Do not paste phone numbers, OTP hashes, bot tokens, or raw webhook payloads into incident chat.
-2. If activity is concentrated or rising, temporarily restrict the invite cohort and reduce traffic at the edge while retaining the PostgreSQL idempotency/rate-limit boundary.
+2. If activity is concentrated or rising, temporarily reduce traffic at the edge while retaining the PostgreSQL idempotency/rate-limit boundary.
 3. For a suspected account compromise, block the account, increment `sessionVersion` through the supported logout-all/block workflow, and preserve relevant audit evidence.
 4. Rotate a secret only when exposure is suspected; coordinate rollout so web and both workers keep matching `METRICS_SECRET`, and Telegram keeps its independently managed webhook/token credentials.
 5. Close after the signal returns to zero or is explained, affected accounts are reviewed, and any control change has an owner and rollback point.

@@ -15,16 +15,15 @@ import { createFixtures, resetDb } from "./helpers";
 beforeEach(() => resetDb());
 
 describe("отдельные обращения и append-only история", () => {
-  it("переводит завершённую выдачу в DISPUTED с атомарной историей", async () => {
+  it("открывает спор, не уничтожая завершённый статус выдачи", async () => {
     const { merchant, customer, bag } = await createFixtures();
     const order = await createOrder(customer.id, bag.id, 1);
     await redeemOrder(merchant.id, order.pickupCode, true);
 
     await createOrderComplaint({ userId: customer.id, orderId: order.id, category: "POOR_QUALITY", note: "Качество не соответствует описанию" });
 
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "DISPUTED" });
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "COMPLETED" });
     await expect(prisma.complaint.findFirstOrThrow({ where: { orderId: order.id } })).resolves.toMatchObject({ status: "OPEN", category: "POOR_QUALITY" });
-    await expect(prisma.orderStatusHistory.findFirstOrThrow({ where: { orderId: order.id, status: "DISPUTED" } })).resolves.toMatchObject({ actor: customer.id, actorRole: "CUSTOMER", reason: "CUSTOMER_COMPLAINT" });
   });
 
   it("сохраняет owner, первый контакт, ответ партнёра, решение и закрытие как события", async () => {
@@ -32,6 +31,7 @@ describe("отдельные обращения и append-only история", 
     const admin = await prisma.user.create({ data: { phone: "+77010007777", role: "ADMIN", name: "Дежурный" } });
     const order = await createOrder(customer.id, bag.id, 1);
     const complaint = await createOrderComplaint({ userId: customer.id, orderId: order.id, category: "OTHER", note: "Нужна помощь с выдачей" });
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "RESERVED" });
 
     await expect(resolveOrderSupportCase({
       adminId: admin.id, complaintId: complaint.id, partnerResponse: "Заведение проверило выдачу",
@@ -91,7 +91,8 @@ describe("отдельные обращения и append-only история", 
 
     await expect(prisma.venue.findUniqueOrThrow({ where: { id: venue.id } })).resolves.toMatchObject({ status: "SUSPENDED" });
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ status: "CANCELLED", quantityLeft: 0 });
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "DISPUTED" });
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "CANCELLED_BY_PARTNER" });
+    await expect(prisma.notification.findUniqueOrThrow({ where: { dedupeKey: `food-safety-cancelled:${order.id}` } })).resolves.toMatchObject({ userId: customer.id, type: "ORDER_CANCELLED_BY_PARTNER" });
     await expect(prisma.complaint.findUniqueOrThrow({ where: { id: complaint.id } })).resolves.toMatchObject({ status: "ESCALATED", escalatedAt: expect.any(Date) });
     await expect(prisma.auditLog.findMany({ where: { action: { in: ["VENUE_SUSPENDED_FOOD_SAFETY", "OFFERS_SUSPENDED_FOOD_SAFETY", "COMPLAINT_ESCALATED"] } } })).resolves.toHaveLength(3);
   });

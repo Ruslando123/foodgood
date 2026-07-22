@@ -84,7 +84,7 @@ model PartnerAgreementAcceptance {
   partnerBusiness PartnerBusiness @relation(fields: [partnerBusinessId], references: [id], onDelete: Restrict)
   acceptedBy      User            @relation("PartnerAgreementAcceptor", fields: [acceptedById], references: [id], onDelete: Restrict)
 
-  @@unique([partnerBusinessId, agreementVersion])
+  @@unique([partnerBusinessId, agreementVersion], map: "PartnerAgreementAcceptance_partnerBusinessId_agreementVersion_k")
   @@index([acceptedById, acceptedAt])
 }
 
@@ -230,6 +230,8 @@ model Order {
   createdAt                DateTime  @default(now())
   completedAt              DateTime?
   idempotencyRecordId      String?   @unique
+  /// Immutable customer-visible offer evidence captured at reservation time.
+  offerSnapshotJson        String    @default("{}")
 
   bag               Bag                  @relation(fields: [bagId], references: [id])
   user              User                 @relation(fields: [userId], references: [id])

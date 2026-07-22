@@ -71,6 +71,7 @@ export async function POST(req: NextRequest) {
       if (!lockedVenue || lockedVenue.ownerId !== user.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
       if (lockedVenue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
       assertVenueInPilotScope(lockedVenue);
+      await tx.$queryRaw`SELECT id FROM "PartnerBusiness" WHERE "ownerId" = ${user.id} FOR SHARE`;
       const lockedPartner = await tx.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
       assertPartnerCanPublish(lockedPartner, lockedVenue.category);
       const activeBagCount = await tx.bag.count({ where: { venueId: venue.id, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } } });

@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { ApiError } from "@/shared/server/api";
 
 export const ACCOUNT_DELETION_CONFIRMATION = "УДАЛИТЬ АККАУНТ";
 
@@ -9,6 +10,12 @@ export async function requestAccountDeletion(userId: string, metadata: Record<st
       await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
       const existing = await tx.accountDeletionRequest.findFirst({ where: { userId, status: "PENDING" } });
       if (existing) return existing;
+      const activeOrders = await tx.order.count({
+        where: { userId, status: { in: ["RESERVED", "READY_FOR_PICKUP"] }, bag: { pickupEnd: { gt: new Date() } } },
+      });
+      if (activeOrders > 0) {
+        throw new ApiError(409, "ACTIVE_ORDERS_EXIST", "Перед удалением аккаунта отмените или получите активные брони");
+      }
       const created = await tx.accountDeletionRequest.create({
         data: {
           userId,

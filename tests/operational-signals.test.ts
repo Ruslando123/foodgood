@@ -9,15 +9,20 @@ describe("pilot operational signals", () => {
   it("counts inventory, complaint, reminder, and suspicious-login breaches without identifiers", async () => {
     const { bag, customer } = await createFixtures({ quantity: 1 });
     await prisma.bag.update({ where: { id: bag.id }, data: { quantityLeft: 0, status: "ACTIVE" } });
-    await prisma.order.create({
+    const order = await prisma.order.create({
       data: {
         bagId: bag.id,
         userId: customer.id,
         totalPrice: bag.price,
         pickupCode: "SIG001",
-        supportStatus: "OPEN",
-        supportCategory: "OTHER",
-        supportOpenedAt: new Date(Date.now() - 3 * 60 * 60_000),
+      },
+    });
+    await prisma.complaint.create({
+      data: {
+        orderId: order.id,
+        customerId: customer.id,
+        category: "OTHER",
+        openedAt: new Date(Date.now() - 3 * 60 * 60_000),
       },
     });
     await prisma.batchJob.create({

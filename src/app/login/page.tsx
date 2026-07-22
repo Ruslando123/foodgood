@@ -45,7 +45,6 @@ function LoginContent() {
   const [user, setUser] = useState<SessionUser | null | undefined>(undefined);
   const [step, setStep] = useState<"phone" | "code">("phone");
   const [phone, setPhone] = useState("+7");
-  const [inviteCode, setInviteCode] = useState("");
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [privacyAcceptanceRequired, setPrivacyAcceptanceRequired] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -94,7 +93,7 @@ function LoginContent() {
     setBusy(true);
     setError(null);
     try {
-      const result = await api<{ phone: string; codeLength: number; privacyAcceptanceRequired: boolean; termsAcceptanceRequired: boolean; devCode?: string; telegramUrl?: string; botUsername?: string }>("/api/auth/phone", { method: "POST", body: JSON.stringify({ phone, inviteCode }) });
+      const result = await api<{ phone: string; codeLength: number; privacyAcceptanceRequired: boolean; termsAcceptanceRequired: boolean; devCode?: string; telegramUrl?: string; botUsername?: string }>("/api/auth/phone", { method: "POST", body: JSON.stringify({ phone }) });
       setPhone(formatKazakhstanPhone(result.phone));
       setCode("");
       setCodeLength(result.codeLength);
@@ -245,7 +244,6 @@ function LoginContent() {
       {step === "phone" ? (
         <form onSubmit={(event) => { event.preventDefault(); void requestCode(); }} className="space-y-4 rounded-[20px] border border-black/[0.08] bg-white p-4 shadow-[0_8px_30px_rgba(20,40,28,0.06)]">
           <label className="block"><span className="mb-1.5 block text-[12px] font-semibold text-[#4f5d55]">Номер телефона</span><span className="relative block"><IconPhone size={20} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-primary" /><input aria-label="Номер телефона" autoFocus autoComplete="tel" inputMode="tel" type="tel" value={phone} onChange={(event) => { setPhone(formatKazakhstanPhone(event.target.value)); setError(null); }} placeholder="+7 (777) 123-45-67" className="h-14 w-full rounded-[14px] border border-black/[0.12] bg-[#fafbfa] pl-11 pr-4 text-[17px] font-medium outline-none transition focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" /></span></label>
-          <label className="block"><span className="mb-1.5 block text-[12px] font-semibold text-[#4f5d55]">Код приглашения <span className="font-normal text-muted">(для новых участников пилота)</span></span><input aria-label="Код приглашения" autoComplete="off" value={inviteCode} onChange={(event) => { setInviteCode(event.target.value); setError(null); }} maxLength={256} className="h-12 w-full rounded-[14px] border border-black/[0.12] bg-[#fafbfa] px-4 text-[15px] outline-none transition focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" /></label>
           {error && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-[12px] text-red-700">{error}</p>}
           <button type="submit" disabled={busy || !phoneValid} className="w-full rounded-[14px] bg-primary py-3.5 text-[15px] font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Отправляем код…" : "Продолжить"}</button>
           <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted"><IconLock size={14} />Номер используется только для входа и заказов</p>

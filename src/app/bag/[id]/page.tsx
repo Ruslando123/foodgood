@@ -314,7 +314,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
           <h2 className="text-[14px] font-bold">Важно перед покупкой</h2>
           <p className="flex gap-2"><IconGift size={17} className="shrink-0 text-primary" />Указан примерный состав. Фактический состав может отличаться и зависит от оставшейся свежей еды.</p>
           <p className="flex gap-2"><IconReceipt size={17} className="shrink-0 text-primary" />Покажите QR-код или шестизначный код сотруднику и оплатите заказ в заведении.</p>
-          <p className="flex gap-2"><IconShieldCheck size={17} className="shrink-0 text-primary" /><span><b>Фактический продавец:</b> {bag.venue.name}, {bag.venue.address}. Продавец принимает оплату на кассе и выдаёт кассовый чек.</span></p>
+          <p className="flex gap-2"><IconShieldCheck size={17} className="shrink-0 text-primary" /><span><b>Фактический продавец:</b> {`${bag.venue.sellerLegalType} ${bag.venue.sellerLegalName}`.trim()}, {bag.venue.address}. Продавец принимает оплату на кассе и выдаёт кассовый чек.</span></p>
           <p className="flex gap-2"><IconShieldCheck size={17} className="shrink-0 text-primary" />Бесплатная отмена доступна до начала окна выдачи.</p>
           <p><b>Поддержка:</b> <Link href="/help" className="font-semibold text-primary underline">обратиться по заказу</Link>{bag.venue.contactPhone ? <> · продавец: <a href={`tel:${bag.venue.contactPhone}`} className="font-semibold text-primary underline">{bag.venue.contactPhone}</a></> : null}</p>
         </div>

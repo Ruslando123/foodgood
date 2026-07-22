@@ -15,11 +15,10 @@ Choose an initial 1–2 venues with a named owner, predictable pickup window, fe
 
 ## Customer cohorts and consent
 
-1. Create a new random invite code for each cohort. Store only its SHA-256 digest in `PILOT_INVITE_CODE_HASH`; never put the plaintext code in Git, logs, screenshots, or analytics.
-2. Send the plaintext code only to the named cohort. Existing accounts can continue signing in after the hash is rotated; only new accounts need the current code.
-3. Every new customer must separately accept the displayed, versioned terms and privacy policy. Each acceptance is written to the audit log. News and special offers use a third, optional switch in Settings and remain off by default.
-4. Use the admin CSV only for the stated pilot communication. It contains only active customers with current privacy acceptance and active communications consent. Access is recorded in the audit log.
-5. Account deletion requests immediately deactivate login, revoke all sessions and optional communications, and enter the retention queue. Do not manually delete orders, support cases or audit rows that must be retained for legal/accountability review.
+1. Registration is open and does not require an invitation code. Keep pilot growth controlled through the named cohort schedule, venue capacity and the server-enforced `FOODGOOD_PILOT_*` limits.
+2. Every new customer must separately accept the displayed, versioned terms and privacy policy. Each acceptance is written to the audit log. News and special offers use a third, optional switch in Settings and remain off by default.
+3. Use the admin CSV only for the stated pilot communication. It contains only active customers with current privacy acceptance and active communications consent. Access is recorded in the audit log.
+4. Account deletion requests immediately deactivate login, revoke all sessions and optional communications, and enter the retention queue. Do not manually delete orders, support cases or audit rows that must be retained for legal/accountability review.
 
 ## Server-enforced pilot scope
 

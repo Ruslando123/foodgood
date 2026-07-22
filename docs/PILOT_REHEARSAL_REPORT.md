@@ -36,7 +36,7 @@ The test used a disposable PostgreSQL database, the production Next.js build, tw
 - Full legacy database upgrade preserved data, validated constraints, and left the Prisma schema diff empty.
 - Production build, ESLint, TypeScript, Prisma validation, and Docker Compose validation passed.
 - Production-like local staging smoke passed with PostgreSQL, PgBouncer, Redis, two web instances, proxy, and both workers.
-- Local closed onboarding passed: invite code, demo OTP, privacy acceptance, and customer creation.
+- Local onboarding passed: demo OTP, privacy and terms acceptance, and customer creation.
 - Deep health was degraded only for object storage, which is intentionally absent from local staging.
 
 ## Problems found and fixed
@@ -45,7 +45,7 @@ The test used a disposable PostgreSQL database, the production Next.js build, tw
 - Added consented CSV inclusion/revocation and audit coverage.
 - Added accountable support handling: immutable first-contact timestamp and owner, venue response, resolution, and explicit customer confirmation.
 - Replaced the inaccessible mobile confirmation radio with touch-safe controls.
-- Added a localhost-only invite/demo-OTP rehearsal mode with three independent guards.
+- Added a localhost-only demo-OTP rehearsal mode with three independent guards.
 - Added a technical allowlist so destructive load seeding refuses remote or non-test databases.
 
 ## External pilot checks still required

@@ -31,6 +31,8 @@ type CatalogRow = {
   venueCategory: string;
   venuePhoto: string;
   venueRating: number;
+  sellerLegalName: string | null;
+  sellerLegalType: string | null;
   distanceKm: number | null;
   sortValue: string | number | Date;
 };
@@ -141,11 +143,13 @@ export async function queryCatalog(input: {
   const rows = await prisma.$queryRaw<CatalogRow[]>(Prisma.sql`
     SELECT
       bag.id, bag."venueId", bag.title, bag.description, bag.composition, bag.allergens, bag.storage, bag."examplePhoto", bag.price, bag."originalPrice",
+      bag."quantityTotal", bag."quantityLeft", bag."pickupStart", bag."pickupEnd", bag.status, bag."createdAt",
       venue.name AS "venueName", venue.description AS "venueDescription", venue.address AS "venueAddress",
       venue.lat AS "venueLat", venue.lng AS "venueLng", venue."cityId" AS "venueCityId",
       venue."twoGisUrl" AS "venueTwoGisUrl",
       venue.category AS "venueCategory", venue.photo AS "venuePhoto",
-      venue."ratingAverage" AS "venueRating", ${distance} AS "distanceKm",
+      venue."ratingAverage" AS "venueRating", partner."legalName" AS "sellerLegalName",
+      partner."legalType" AS "sellerLegalType", ${distance} AS "distanceKm",
       ${sortExpression} AS "sortValue"
     FROM "Bag" bag
     JOIN "Venue" venue ON venue.id = bag."venueId"
@@ -187,6 +191,8 @@ export async function queryCatalog(input: {
         twoGisUrl: row.venueTwoGisUrl,
         category: row.venueCategory,
         photo: row.venuePhoto,
+        sellerLegalName: row.sellerLegalName ?? row.venueName,
+        sellerLegalType: row.sellerLegalType ?? "",
         rating: pilot.features.publicReviews ? row.venueRating || null : null,
         publicRatingsEnabled: pilot.features.publicReviews,
       },

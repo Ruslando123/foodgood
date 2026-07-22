@@ -38,10 +38,10 @@ export async function readOperationalSignals(): Promise<OperationalSignals> {
            OR (bag.status = 'SOLD_OUT' AND bag."quantityLeft" <> 0)
       )::bigint AS "inventoryMismatchBags",
       (
-        SELECT COUNT(*) FROM "Order"
-        WHERE "supportStatus" = 'OPEN'
-          AND "supportFirstContactAt" IS NULL
-          AND "supportOpenedAt" < now() - interval '2 hours'
+        SELECT COUNT(*) FROM "Complaint"
+        WHERE status IN ('OPEN', 'UNDER_REVIEW', 'WAITING_FOR_PARTNER', 'ESCALATED')
+          AND "firstContactAt" IS NULL
+          AND "openedAt" < now() - interval '2 hours'
       )::bigint AS "overdueComplaints",
       (
         SELECT COUNT(*) FROM "BatchJob"

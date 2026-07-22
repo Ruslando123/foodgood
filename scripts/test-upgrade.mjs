@@ -15,6 +15,10 @@ const integrityMigrationName = "20260718100000_core_integrity_checks";
 const integrityValidationMigrationName = "20260718101000_validate_core_integrity_checks";
 const lifecycleMigrationName = "20260719120000_pay_at_venue_lifecycle";
 const complaintsMigrationName = "20260719120000_complaints_private_feedback";
+const partnerSafetyMigrationName = "20260719120000_partner_onboarding_publication_safety";
+const pilotCustomerMigrationName = "20260719120000_pilot_customer_p0";
+const partnerSchemaAlignmentMigrationName = "20260720011500_partner_schema_alignment";
+const orderOfferSnapshotMigrationName = "20260720013000_order_offer_snapshot";
 const reservationMigrationSql = readFileSync(
   path.join("prisma", "migrations", reservationMigrationName, "migration.sql"),
   "utf8"
@@ -30,7 +34,17 @@ function preparePreReservationMigrations() {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync("prisma/schema.prisma", path.join(prismaDir, "schema.prisma"));
   for (const entry of readdirSync("prisma/migrations")) {
-    if ([reservationMigrationName, integrityMigrationName, integrityValidationMigrationName, lifecycleMigrationName, complaintsMigrationName].includes(entry)) continue;
+    if ([
+      reservationMigrationName,
+      integrityMigrationName,
+      integrityValidationMigrationName,
+      lifecycleMigrationName,
+      complaintsMigrationName,
+      partnerSafetyMigrationName,
+      pilotCustomerMigrationName,
+      partnerSchemaAlignmentMigrationName,
+      orderOfferSnapshotMigrationName,
+    ].includes(entry)) continue;
     cpSync(path.join("prisma", "migrations", entry), path.join(migrationsDir, entry), { recursive: true });
   }
   return path.join(prismaDir, "schema.prisma");

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { requestAccountDeletion } from "@/lib/account-deletion";
-import { createOrder } from "@/modules/orders";
+import { cancelOrder, createOrder } from "@/modules/orders";
 import { createFixtures, resetDb } from "./helpers";
 
 beforeEach(() => resetDb());
@@ -14,6 +14,7 @@ describe("безопасное удаление аккаунта", () => {
       data: { communicationsConsent: true, notificationOffers: true, sessionVersion: 4 },
     });
     const order = await createOrder(customer.id, bag.id, 1);
+    await cancelOrder(customer.id, order.id);
 
     const first = await requestAccountDeletion(customer.id, { source: "test" });
     const duplicate = await requestAccountDeletion(customer.id, { source: "duplicate" });
@@ -32,5 +33,14 @@ describe("безопасное удаление аккаунта", () => {
       entityId: customer.id,
     });
     await expect(prisma.accountDeletionRequest.count({ where: { userId: customer.id, status: "PENDING" } })).resolves.toBe(1);
+  });
+
+  it("не деактивирует аккаунт с активной бронью", async () => {
+    const { customer, bag } = await createFixtures();
+    await createOrder(customer.id, bag.id, 1);
+
+    await expect(requestAccountDeletion(customer.id)).rejects.toThrow("отмените или получите активные брони");
+    await expect(prisma.user.findUniqueOrThrow({ where: { id: customer.id } })).resolves.toMatchObject({ status: "ACTIVE" });
+    await expect(prisma.accountDeletionRequest.count({ where: { userId: customer.id } })).resolves.toBe(0);
   });
 });

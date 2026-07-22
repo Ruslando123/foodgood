@@ -58,7 +58,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
       <main className="space-y-5 px-4 pt-4">
         <section className="space-y-3 rounded-[17px] border border-black/[0.07] bg-white p-4 text-[13px] shadow-[0_2px_10px_rgba(20,40,28,0.04)]">
           <p>{venue.description || "Свежая еда, которую можно забрать со скидкой в конце дня."}</p>
-          <p><b>Фактический продавец:</b> {venue.name}. Оплата проходит на кассе продавца, там же выдают кассовый чек.</p>
+          <p><b>Фактический продавец:</b> {`${venue.sellerLegalType} ${venue.sellerLegalName}`.trim()}. Оплата проходит на кассе продавца, там же выдают кассовый чек.</p>
           <a
             href={routeUrl}
             target="_blank"

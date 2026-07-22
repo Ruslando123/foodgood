@@ -19,7 +19,6 @@ import { readVenuePhoto, removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-ph
 import { csvCell, parseFinanceDateRange } from "@/lib/csv";
 import { zonedDayBounds } from "@/lib/timezone";
 import { otpSecretValue, sessionSecretValue } from "@/lib/secrets";
-import { isPilotInviteRequired, isValidPilotInviteCode } from "@/lib/pilot-invite";
 import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
 import { hasAcceptedCurrentTerms, TERMS_VERSION } from "@/lib/legal";
 import { getPilotConfig, isVenueInPilotScope } from "@/lib/pilot";
@@ -238,24 +237,6 @@ describe("PAY_AT_VENUE pilot scope", () => {
     } finally {
       vi.unstubAllEnvs();
     }
-  });
-});
-
-describe("pilot invite gate", () => {
-  it("сравнивает только SHA-256 digest и в production закрывается без env", () => {
-    vi.stubEnv("PILOT_INVITE_CODE_HASH", "");
-    expect(isPilotInviteRequired()).toBe(false);
-    expect(isValidPilotInviteCode("anything")).toBe(true);
-    vi.stubEnv("NODE_ENV", "production");
-    expect(isPilotInviteRequired()).toBe(true);
-    expect(isValidPilotInviteCode("anything")).toBe(false);
-    vi.stubEnv("NODE_ENV", "test");
-    vi.stubEnv("PILOT_INVITE_CODE_HASH", "f2610957d5a52085e4a47d7431d9dc3cb92607d8e2b1310ce9ad6d55a1e62b4d"); // sha256("pilot-only")
-    expect(isPilotInviteRequired()).toBe(true);
-    expect(isValidPilotInviteCode("pilot-only")).toBe(true);
-    expect(isValidPilotInviteCode("wrong-code")).toBe(false);
-    expect(isValidPilotInviteCode("x".repeat(257))).toBe(false);
-    vi.unstubAllEnvs();
   });
 });
 

@@ -30,14 +30,14 @@ for (const command of ["pg_dump", "pg_restore"]) {
   }
 }
 
-const existingAppTable = run("psql", [targetCli, "-v", "ON_ERROR_STOP=1", "-Atc", `SELECT to_regclass('public."User"') IS NOT NULL`], { capture: true });
-if (existingAppTable !== "f") throw new Error("Restore target already contains FoodGood tables");
+const existingPublicTables = Number(run("psql", [targetCli, "-v", "ON_ERROR_STOP=1", "-Atc", "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'spatial_ref_sys'"], { capture: true }));
+if (existingPublicTables !== 0) throw new Error(`Restore target must have an empty public schema; found ${existingPublicTables} table(s)`);
 
 const directory = mkdtempSync(path.join(tmpdir(), "foodgood-restore-"));
 const dumpFile = path.join(directory, "staging.dump");
 const startedAt = Date.now();
 try {
-  const sourceCounts = counts(sourceCli, "source");
+  const sourceCounts = counts(sourceCli);
   run("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", dumpFile, sourceCli]);
   run("pg_restore", ["--exit-on-error", "--no-owner", "--no-acl", "--dbname", targetCli, dumpFile]);
   const restoreEnv = { ...process.env, DATABASE_URL: target, DIRECT_URL: target };
@@ -49,24 +49,28 @@ try {
     `SELECT 'duplicate_pickup_codes=' || count(*) FROM (SELECT "pickupCode" FROM "Order" GROUP BY "pickupCode" HAVING count(*) > 1) duplicates`,
     `SELECT 'failed_prisma_migrations=' || count(*) FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL`,
   ].join("; ")], { capture: true });
-  const restoredCounts = counts(targetCli, "restored");
+  const restoredCounts = counts(targetCli);
+  if (JSON.stringify(restoredCounts) !== JSON.stringify(sourceCounts)) {
+    throw new Error(`Restored row counts differ from source:\nsource=${JSON.stringify(sourceCounts)}\nrestored=${JSON.stringify(restoredCounts)}`);
+  }
   if (!evidence.includes("postgis=") || !evidence.includes("negative_inventory=0") || !evidence.includes("duplicate_pickup_codes=0") || !evidence.includes("failed_prisma_migrations=0")) {
     throw new Error(`Restored database failed integrity checks:\n${evidence}`);
   }
-  console.log(`${sourceCounts}\n${restoredCounts}\n${evidence}\nrestore_duration_seconds=${Math.ceil((Date.now() - startedAt) / 1000)}`);
+  console.log(`source_counts=${JSON.stringify(sourceCounts)}\nrestored_counts=${JSON.stringify(restoredCounts)}\n${evidence}\nrestore_duration_seconds=${Math.ceil((Date.now() - startedAt) / 1000)}`);
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }
 
-function counts(databaseUrl, prefix) {
-  return run("psql", [databaseUrl, "-v", "ON_ERROR_STOP=1", "-Atc", [
-    `SELECT '${prefix}_users=' || count(*) FROM "User"`,
-    `SELECT '${prefix}_venues=' || count(*) FROM "Venue"`,
-    `SELECT '${prefix}_bags=' || count(*) FROM "Bag"`,
-    `SELECT '${prefix}_orders=' || count(*) FROM "Order"`,
-    `SELECT '${prefix}_notifications=' || count(*) FROM "Notification"`,
-    `SELECT '${prefix}_batch_jobs=' || count(*) FROM "BatchJob"`,
-  ].join("; ")], { capture: true });
+function counts(databaseUrl) {
+  const tables = [
+    "User", "Venue", "Bag", "Order", "Notification", "BatchJob",
+    "PartnerBusiness", "PartnerAgreementAcceptance", "Complaint", "ComplaintEvent",
+    "ComplaintAttachment", "OrderStatusHistory", "PickupJournal",
+  ];
+  return Object.fromEntries(tables.map((table) => [
+    table,
+    Number(run("psql", [databaseUrl, "-v", "ON_ERROR_STOP=1", "-Atc", `SELECT count(*) FROM "${table}"`], { capture: true })),
+  ]));
 }
 
 function postgresCliUrl(value) {

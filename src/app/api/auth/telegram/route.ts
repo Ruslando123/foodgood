@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { createSession } from "@/lib/auth";
-import { isValidPilotInviteCode } from "@/lib/pilot-invite";
 import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
 import { hasAcceptedCurrentTerms, TERMS_VERSION } from "@/lib/legal";
 import { telegramAuthEnabled, verifyTelegramInitData } from "@/lib/telegram";
@@ -15,7 +14,7 @@ export async function POST(req: NextRequest) {
       throw new ApiError(503, "TELEGRAM_AUTH_DISABLED", "Вход через Telegram временно отключён");
     }
     await consumeRateLimit(`telegram:auth:${requestIp(req)}`, { limit: 20, windowMs: 15 * 60 * 1000 });
-    const { initData, inviteCode, privacyAccepted, termsAccepted } = await readJsonObject(req);
+    const { initData, privacyAccepted, termsAccepted } = await readJsonObject(req);
     const tgUser = verifyTelegramInitData(String(initData ?? ""));
     if (!tgUser) {
       throw new ApiError(
@@ -32,9 +31,6 @@ export async function POST(req: NextRequest) {
     });
     if (existing?.status === "DEACTIVATED") {
       throw new ApiError(403, "ACCOUNT_DEACTIVATED", "Аккаунт деактивирован. Для восстановления обратитесь в поддержку");
-    }
-    if (!existing && !isValidPilotInviteCode(inviteCode)) {
-      throw new ApiError(403, "PILOT_INVITE_REQUIRED", "Для входа в пилот нужен действующий код приглашения");
     }
     const needsPrivacyAcceptance = (existing?.role ?? "CUSTOMER") === "CUSTOMER"
       && !hasAcceptedCurrentPrivacyPolicy(existing ?? { privacyPolicyVersion: null, privacyAcceptedAt: null });

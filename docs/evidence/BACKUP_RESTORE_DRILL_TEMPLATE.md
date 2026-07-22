@@ -69,7 +69,7 @@ Do not mark S3 verified from database counts or `HeadBucket` alone. Record the e
 - [ ] Customer reservation/cancellation flow passed against the isolated restore.
 - [ ] Merchant ready/redeem flow passed without a bank/refund flow.
 - [ ] Worker heartbeats and reminder drain passed.
-- [ ] Evidence contains no plaintext credentials, OTP values, invite codes, or customer personal data.
+- [ ] Evidence contains no plaintext credentials, OTP values, or customer personal data.
 
 ## Outcome
 

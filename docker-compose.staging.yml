@@ -18,7 +18,6 @@ x-app-environment: &app-environment
   FOODGOOD_E2E_DEV_OTP: "true"
   FOODGOOD_LOCAL_REHEARSAL: "true"
   FOODGOOD_DISABLE_DEV_OTP: "false"
-  PILOT_INVITE_CODE_HASH: "${STAGING_PILOT_INVITE_CODE_HASH:?run node ops/staging/create-env.mjs}"
   TELEGRAM_AUTH_ENABLED: "false"
   TELEGRAM_NOTIFICATIONS_ENABLED: "false"
   TELEGRAM_OTP_ENABLED: "false"

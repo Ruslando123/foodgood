@@ -14,6 +14,8 @@ export type PublicVenueDto = {
   photo: string;
   contactPhone: string;
   openingHours: string;
+  sellerLegalName: string;
+  sellerLegalType: string;
   rating: number | null;
   reviewCount?: number;
   publicRatingsEnabled: boolean;
@@ -80,6 +82,7 @@ export const publicVenueSelect = {
   openingHours: true,
   ratingAverage: true,
   ratingCount: true,
+  owner: { select: { partnerBusiness: { select: { legalName: true, legalType: true } } } },
 } as const satisfies Prisma.VenueSelect;
 
 const publicBagSelect = {
@@ -109,6 +112,7 @@ export const customerOrderSelect = {
   pickupCode: true,
   createdAt: true,
   completedAt: true,
+  offerSnapshotJson: true,
   bag: { select: publicBagSelect },
   feedback: { select: { id: true, quality: true, freshness: true, match: true, value: true, pickup: true, comment: true } },
   complaints: {
@@ -167,30 +171,50 @@ export function toPublicVenueDto(
     photo: venue.photo,
     contactPhone: venue.contactPhone,
     openingHours: venue.openingHours,
+    sellerLegalName: venue.owner.partnerBusiness?.legalName ?? venue.name,
+    sellerLegalType: venue.owner.partnerBusiness?.legalType ?? "",
     rating: reviewsEnabled ? (overrides.rating ?? (venue.ratingCount > 0 ? venue.ratingAverage : null)) : null,
     ...(overrides.reviewCount === undefined ? {} : { reviewCount: reviewsEnabled ? overrides.reviewCount : 0 }),
     publicRatingsEnabled: reviewsEnabled,
   };
 }
 
-function toPublicBagDto(bag: CustomerOrderMappable["bag"]): PublicBagDto {
+type OfferSnapshot = Partial<Pick<PublicBagDto, "title" | "description" | "composition" | "allergens" | "storage" | "examplePhoto" | "price" | "originalPrice" | "pickupStart" | "pickupEnd">> & {
+  venueName?: string;
+  venueAddress?: string;
+  sellerLegalName?: string;
+  sellerLegalType?: string;
+};
+
+function parseOfferSnapshot(value: string): OfferSnapshot {
+  try { return JSON.parse(value) as OfferSnapshot; } catch { return {}; }
+}
+
+function toPublicBagDto(bag: CustomerOrderMappable["bag"], snapshot: OfferSnapshot = {}): PublicBagDto {
+  const venue = toPublicVenueDto(bag.venue);
   return {
     id: bag.id,
     venueId: bag.venueId,
-    title: bag.title,
-    description: bag.description,
-    composition: bag.composition,
-    allergens: bag.allergens,
-    storage: bag.storage,
-    examplePhoto: bag.examplePhoto,
-    price: bag.price,
-    originalPrice: bag.originalPrice,
+    title: snapshot.title ?? bag.title,
+    description: snapshot.description ?? bag.description,
+    composition: snapshot.composition ?? bag.composition,
+    allergens: snapshot.allergens ?? bag.allergens,
+    storage: snapshot.storage ?? bag.storage,
+    examplePhoto: snapshot.examplePhoto ?? bag.examplePhoto,
+    price: snapshot.price ?? bag.price,
+    originalPrice: snapshot.originalPrice ?? bag.originalPrice,
     quantityTotal: bag.quantityTotal,
     quantityLeft: bag.quantityLeft,
-    pickupStart: isoDate(bag.pickupStart),
-    pickupEnd: isoDate(bag.pickupEnd),
+    pickupStart: snapshot.pickupStart ?? isoDate(bag.pickupStart),
+    pickupEnd: snapshot.pickupEnd ?? isoDate(bag.pickupEnd),
     status: bag.status,
-    venue: toPublicVenueDto(bag.venue),
+    venue: {
+      ...venue,
+      name: snapshot.venueName ?? venue.name,
+      address: snapshot.venueAddress ?? venue.address,
+      sellerLegalName: snapshot.sellerLegalName ?? venue.sellerLegalName,
+      sellerLegalType: snapshot.sellerLegalType ?? venue.sellerLegalType,
+    },
   };
 }
 
@@ -203,7 +227,7 @@ export function toCustomerOrderDto(order: CustomerOrderMappable): CustomerOrderD
     pickupCode: order.pickupCode,
     createdAt: isoDate(order.createdAt),
     completedAt: order.completedAt ? isoDate(order.completedAt) : null,
-    bag: toPublicBagDto(order.bag),
+    bag: toPublicBagDto(order.bag, parseOfferSnapshot(order.offerSnapshotJson)),
     feedback: order.feedback ? { ...order.feedback } : null,
     complaints: (order.complaints ?? []).map((complaint) => ({
       id: complaint.id,

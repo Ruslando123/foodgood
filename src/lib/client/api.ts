@@ -13,6 +13,8 @@ export type Venue = {
   photo: string;
   contactPhone: string;
   openingHours: string;
+  sellerLegalName: string;
+  sellerLegalType: string;
   rating?: number | null;
   reviewCount?: number;
   publicRatingsEnabled?: boolean;

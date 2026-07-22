@@ -91,14 +91,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(_request, async () => {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const { id } = await params;
     const venue = await prisma.venue.findUnique({ where: { id }, include: { bags: { include: { orders: true } } } });
     if (!venue) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
     if (venue.bags.some((bag) => bag.orders.length > 0)) {
       throw new ApiError(409, "VENUE_HAS_ORDERS", "Нельзя удалить заведение с заказами; сначала отмените или архивируйте пакеты");
     }
-    await prisma.venue.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      await tx.auditLog.create({ data: { actorId: admin.id, action: "VENUE_DELETED", entityType: "Venue", entityId: id, metadataJson: JSON.stringify({ name: venue.name, ownerId: venue.ownerId }) } });
+      await tx.venue.delete({ where: { id } });
+    });
     return json({ ok: true });
   });
 }

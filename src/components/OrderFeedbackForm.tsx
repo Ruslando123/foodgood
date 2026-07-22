@@ -42,7 +42,7 @@ export default function OrderFeedbackForm({ id }: { id: string }) {
           </select>
         </label>
       ))}
-      <textarea value={comment} onChange={(event) => setComment(event.target.value)} maxLength={800} rows={3} placeholder="Что понравилось или можно улучшить?" className="w-full rounded-lg border bg-white p-2 text-sm" />
+      <textarea aria-label="Комментарий к приватной оценке" value={comment} onChange={(event) => setComment(event.target.value)} maxLength={800} rows={3} placeholder="Что понравилось или можно улучшить?" className="w-full rounded-lg border bg-white p-2 text-sm" />
       <div className="grid grid-cols-2 gap-2"><button disabled={busy} className="min-h-11 rounded-lg bg-primary px-3 text-sm font-semibold text-white disabled:opacity-50">{busy ? "Сохраняем…" : "Сохранить"}</button><button type="button" onClick={() => setOpen(false)} className="min-h-11 rounded-lg border bg-white text-sm font-semibold">Отмена</button></div>
     </form>
   );

@@ -26,7 +26,9 @@ export function customerOrderScopeWhere(
     : { userId, OR: [{ status: { notIn: ACTIVE_PICKUP_ORDER_STATUSES } }, { bag: { pickupEnd: { lte: now } } }] };
 }
 
-const orderInclude = { bag: { include: { venue: true } } } as const;
+const orderInclude = {
+  bag: { include: { venue: { include: { owner: { include: { partnerBusiness: true } } } } } },
+} as const;
 
 class PickupCodeCollisionError extends Error {}
 
@@ -192,7 +194,8 @@ async function createReservedOrder(
   // trips while the popular Bag row is held.
   const rows = await tx.$queryRaw<ReservationResult[]>`
     WITH eligible_venue AS MATERIALIZED (
-      SELECT venue.id
+      SELECT venue.id, venue.name AS "venueName", venue.address AS "venueAddress",
+        partner."legalName" AS "sellerLegalName", partner."legalType" AS "sellerLegalType"
       FROM "Venue" venue
       JOIN "Bag" candidate ON candidate."venueId" = venue.id
       JOIN "PartnerBusiness" partner ON partner."ownerId" = venue."ownerId"
@@ -216,13 +219,16 @@ async function createReservedOrder(
           WHERE acceptance."partnerBusinessId" = partner.id
             AND acceptance."agreementVersion" = ${PARTNER_AGREEMENT_VERSION}
         )
-      FOR SHARE OF venue
+      FOR SHARE OF venue, partner
     ),
     locked_bag AS MATERIALIZED (
       SELECT
-        candidate.id, candidate."venueId", candidate.price,
+        candidate.id, candidate."venueId", candidate.title, candidate.description,
+        candidate.composition, candidate.allergens, candidate.storage, candidate."examplePhoto",
+        candidate.price, candidate."originalPrice",
         candidate."pickupStart", candidate."pickupEnd",
-        candidate.status, candidate."quantityLeft"
+        candidate.status, candidate."quantityLeft", venue."venueName", venue."venueAddress",
+        venue."sellerLegalName", venue."sellerLegalType"
       FROM "Bag" candidate
       JOIN eligible_venue venue ON venue.id = candidate."venueId"
       WHERE candidate.id = ${input.bagId}
@@ -241,17 +247,36 @@ async function createReservedOrder(
         AND candidate.status = 'ACTIVE'
         AND candidate."pickupEnd" > clock_timestamp()
         AND candidate."quantityLeft" >= ${input.quantity}
-      RETURNING bag.id AS "bagId", bag."venueId", bag.price, bag."pickupStart"
+      RETURNING bag.id AS "bagId", bag."venueId", bag.price, candidate."originalPrice",
+        candidate.title, candidate.description, candidate.composition, candidate.allergens,
+        candidate.storage, candidate."examplePhoto", candidate."pickupStart", candidate."pickupEnd",
+        candidate."venueName", candidate."venueAddress", candidate."sellerLegalName", candidate."sellerLegalType"
     ),
     created_order AS (
       INSERT INTO "Order" (
         id, "bagId", "userId", quantity, "totalPrice", "clientSource",
-        status, "pickupCode", "idempotencyRecordId"
+        status, "pickupCode", "idempotencyRecordId", "offerSnapshotJson"
       )
       SELECT
         ${orderId}, reserved."bagId", ${input.userId}, ${input.quantity},
         reserved.price * ${input.quantity}, ${input.clientSource},
-        'RESERVED', ${pickupCode}, ${input.idempotencyRecordId ?? null}
+        'RESERVED', ${pickupCode}, ${input.idempotencyRecordId ?? null},
+        json_build_object(
+          'title', reserved.title,
+          'description', reserved.description,
+          'composition', reserved.composition,
+          'allergens', reserved.allergens,
+          'storage', reserved.storage,
+          'examplePhoto', reserved."examplePhoto",
+          'price', reserved.price,
+          'originalPrice', reserved."originalPrice",
+          'pickupStart', reserved."pickupStart",
+          'pickupEnd', reserved."pickupEnd",
+          'venueName', reserved."venueName",
+          'venueAddress', reserved."venueAddress",
+          'sellerLegalName', COALESCE(reserved."sellerLegalName", reserved."venueName"),
+          'sellerLegalType', COALESCE(reserved."sellerLegalType", '')
+        )::text
       FROM reserved
       ON CONFLICT ("pickupCode") DO NOTHING
       RETURNING id
@@ -472,7 +497,7 @@ export async function markOrderReady(merchantId: string, orderId: string) {
     await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
     const order = await tx.order.findFirst({
       where: { id: orderId, bag: { venue: { ownerId: merchantId } } },
-      include: { user: true, bag: { include: { venue: true } } },
+      include: { ...orderInclude, user: true },
     });
     if (!order) throw new OrderError("Заказ не найден");
     const [{ now }] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT now() AS now`;
@@ -508,7 +533,7 @@ export async function markOrderReady(merchantId: string, orderId: string) {
 
     return tx.order.findUniqueOrThrow({
       where: { id: orderId },
-      include: { user: true, bag: { include: { venue: true } } },
+      include: { ...orderInclude, user: true },
     });
   });
 }
@@ -571,7 +596,7 @@ export async function cancelOrderByPartner(merchantId: string, orderId: string, 
     });
     return tx.order.findUniqueOrThrow({
       where: { id: order.id },
-      include: { user: true, bag: { include: { venue: true } } },
+      include: { ...orderInclude, user: true },
     });
   });
 }

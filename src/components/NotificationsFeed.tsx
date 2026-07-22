@@ -17,7 +17,7 @@ export type NotificationItem = {
   type: string;
   createdAt: string;
   readAt: string | null;
-  payload: { bagId?: string; orderId?: string; venueName?: string; title?: string; pickupStart?: string };
+  payload: { bagId?: string; orderId?: string; venueName?: string; title?: string; pickupStart?: string; reason?: string };
 };
 
 type Copy = {
@@ -54,6 +54,15 @@ function notificationCopy(notification: NotificationItem): Copy {
   if (type === "ORDER_CANCELLED") return {
     title: "Бронь отменена",
     text: "FoodGood не списывал деньги. Если вы уже рассчитались на кассе, возврат оформляет заведение по своему чеку.",
+    action: "Открыть заказы",
+    href: "/orders",
+    tone: "rose",
+  };
+  if (type === "ORDER_CANCELLED_BY_PARTNER") return {
+    title: "Заведение отменило бронь",
+    text: payload.reason
+      ? `${payload.reason} FoodGood не списывал деньги; возврат оплаты на кассе оформляет заведение по чеку.`
+      : "FoodGood не списывал деньги. Если вы уже рассчитались на кассе, возврат оформляет заведение по своему чеку.",
     action: "Открыть заказы",
     href: "/orders",
     tone: "rose",
