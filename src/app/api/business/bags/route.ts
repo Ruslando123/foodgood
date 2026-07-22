@@ -4,7 +4,7 @@ import { requireMerchant } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
-import { assertPartnerCanPublish, parseSafetyAttestations, safetyAttestationData } from "@/lib/partner-onboarding";
+import { parseSafetyAttestations, safetyAttestationData } from "@/lib/publication-safety";
 import { assertVenueInPilotScope, getPilotConfig } from "@/lib/pilot";
 
 export async function GET(request: Request) {
@@ -56,8 +56,6 @@ export async function POST(req: NextRequest) {
       throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
     }
     if (venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
-    const partner = await prisma.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
-    assertPartnerCanPublish(partner, venue.category);
     assertVenueInPilotScope(venue);
     if (end <= start || end <= new Date()) {
       throw new ApiError(400, "INVALID_PICKUP_WINDOW", "Некорректное окно выдачи");
@@ -71,9 +69,6 @@ export async function POST(req: NextRequest) {
       if (!lockedVenue || lockedVenue.ownerId !== user.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
       if (lockedVenue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
       assertVenueInPilotScope(lockedVenue);
-      await tx.$queryRaw`SELECT id FROM "PartnerBusiness" WHERE "ownerId" = ${user.id} FOR SHARE`;
-      const lockedPartner = await tx.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
-      assertPartnerCanPublish(lockedPartner, lockedVenue.category);
       const activeBagCount = await tx.bag.count({ where: { venueId: venue.id, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } } });
       if (activeBagCount >= pilot.limits.activeBagsPerVenue) {
         throw new ApiError(409, "PILOT_BAG_LIMIT", `Для заведения доступно не более ${pilot.limits.activeBagsPerVenue} активных пакетов`);
@@ -117,7 +112,7 @@ export async function POST(req: NextRequest) {
         dedupeKey: `partner_offer_created:${created.id}`,
       });
       await tx.auditLog.create({
-        data: { actorId: user.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: venue.id, partnerBusinessId: lockedPartner!.id, safetyAttestations: true }) },
+        data: { actorId: user.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: venue.id, safetyAttestations: true }) },
       });
       return created;
     });

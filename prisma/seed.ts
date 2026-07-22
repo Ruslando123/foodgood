@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { PRIVACY_POLICY_VERSION } from "../src/lib/privacy";
-import { PARTNER_AGREEMENT_VERSION, isPilotCategoryAllowed } from "../src/lib/config";
+import { isPilotCategoryAllowed } from "../src/lib/config";
 import { TERMS_VERSION } from "../src/lib/legal";
 
 const prisma = new PrismaClient();
@@ -48,14 +48,6 @@ async function main() {
   const merchant2 = await prisma.user.create({
     data: { phone: "+77010000002", name: "Magnum Кулинария", role: "MERCHANT" },
   });
-  await Promise.all([
-    prisma.partnerBusiness.create({
-      data: { ownerId: merchant.id, legalType: "IP", legalName: "ИП Демо-мерчант", businessIdentifier: "900101300001", contactName: "Демо-мерчант", contactPhone: merchant.phone, verificationStatus: "VERIFIED", verifiedAt: new Date(), agreements: { create: { agreementVersion: PARTNER_AGREEMENT_VERSION, acceptedById: merchant.id } } },
-    }),
-    prisma.partnerBusiness.create({
-      data: { ownerId: merchant2.id, legalType: "TOO", legalName: "ТОО Magnum Кулинария", businessIdentifier: "900101300002", contactName: "Magnum Кулинария", contactPhone: merchant2.phone, verificationStatus: "VERIFIED", verifiedAt: new Date(), agreements: { create: { agreementVersion: PARTNER_AGREEMENT_VERSION, acceptedById: merchant2.id } } },
-    }),
-  ]);
   const acceptedAt = new Date();
   await prisma.user.createMany({
     data: [

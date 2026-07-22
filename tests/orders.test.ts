@@ -216,12 +216,12 @@ describe("бесплатная бронь", () => {
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 2 });
   });
 
-  it("не создаёт бронь после приостановки юридического партнёра", async () => {
-    const { customer, partner, bag } = await createFixtures({ quantity: 2 });
-    await prisma.partnerBusiness.update({ where: { id: partner.id }, data: { verificationStatus: "SUSPENDED" } });
+  it("создаёт бронь без юридического профиля и проверки партнёра", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 2 });
+    await expect(prisma.partnerBusiness.count()).resolves.toBe(0);
 
-    await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("Пакет недоступен");
-    await expect(prisma.order.count()).resolves.toBe(0);
+    await expect(createOrder(customer.id, bag.id, 1)).resolves.toMatchObject({ bagId: bag.id, userId: customer.id });
+    await expect(prisma.order.count()).resolves.toBe(1);
   });
 
   it("не создаёт бронь без полного snapshot подтверждений безопасности", async () => {

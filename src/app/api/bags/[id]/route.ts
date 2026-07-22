@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { apiRoute, ApiError, json } from "@/shared/server/api";
 import { publicVenueSelect, toPublicVenueDto } from "@/modules/api/dto";
-import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
+import { PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
 import { getPilotConfig, isVenueInPilotScope, publicPilotConfig } from "@/lib/pilot";
 
 export async function GET(
@@ -23,7 +23,6 @@ export async function GET(
         venue: {
           status: "ACTIVE",
           category: { in: [...PILOT_CATEGORY_ALLOWLIST] },
-          owner: { partnerBusiness: { is: { verificationStatus: "VERIFIED", agreements: { some: { agreementVersion: PARTNER_AGREEMENT_VERSION } } } } },
         },
       },
       select: {

@@ -82,7 +82,6 @@ export const publicVenueSelect = {
   openingHours: true,
   ratingAverage: true,
   ratingCount: true,
-  owner: { select: { partnerBusiness: { select: { legalName: true, legalType: true } } } },
 } as const satisfies Prisma.VenueSelect;
 
 const publicBagSelect = {
@@ -171,8 +170,8 @@ export function toPublicVenueDto(
     photo: venue.photo,
     contactPhone: venue.contactPhone,
     openingHours: venue.openingHours,
-    sellerLegalName: venue.owner.partnerBusiness?.legalName ?? venue.name,
-    sellerLegalType: venue.owner.partnerBusiness?.legalType ?? "",
+    sellerLegalName: venue.name,
+    sellerLegalType: "",
     rating: reviewsEnabled ? (overrides.rating ?? (venue.ratingCount > 0 ? venue.ratingAverage : null)) : null,
     ...(overrides.reviewCount === undefined ? {} : { reviewCount: reviewsEnabled ? overrides.reviewCount : 0 }),
     publicRatingsEnabled: reviewsEnabled,

@@ -1,5 +1,4 @@
 import { prisma } from "@/lib/db";
-import { PARTNER_AGREEMENT_VERSION } from "@/lib/config";
 
 export async function resetDb() {
   // Append-only journal triggers intentionally reject DELETE. TRUNCATE is
@@ -50,19 +49,6 @@ export async function createFixtures(opts: FixtureOptions = {}) {
   const customer = await prisma.user.create({
     data: { phone: "+77070009999", role: "CUSTOMER" },
   });
-  const partner = await prisma.partnerBusiness.create({
-    data: {
-      ownerId: merchant.id,
-      legalType: "IP",
-      legalName: "ИП Тестовый партнёр",
-      businessIdentifier: "900101300001",
-      contactName: "Тестовый партнёр",
-      contactPhone: merchant.phone,
-      verificationStatus: "VERIFIED",
-      verifiedAt: new Date(),
-      agreements: { create: { agreementVersion: PARTNER_AGREEMENT_VERSION, acceptedById: merchant.id } },
-    },
-  });
   const venue = await prisma.venue.create({
     data: {
       name: "Тестовая пекарня",
@@ -93,5 +79,5 @@ export async function createFixtures(opts: FixtureOptions = {}) {
       safetyAttestedById: merchant.id,
     },
   });
-  return { merchant, customer, partner, venue, bag };
+  return { merchant, customer, venue, bag };
 }
