@@ -45,8 +45,9 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
-    // Номер администратора хранится вне кода. Это позволяет выдать доступ
-    // конкретному владельцу проекта без отдельной формы регистрации.
+    // ADMIN_PHONE используется только для первичного создания администратора.
+    // Роль существующего пользователя хранится в БД и не должна автоматически
+    // возвращаться после явного назначения владельцем или покупателем.
     const privacyData = privacyAccepted === true ? {
       privacyPolicyVersion: PRIVACY_POLICY_VERSION,
       privacyAcceptedAt: new Date(),
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
     const user = await prisma.$transaction(async (tx) => {
       const updated = await tx.user.upsert({
         where: { phone: normalized },
-        update: { ...(isAdminPhone ? { role: "ADMIN" } : {}), ...privacyData, ...termsData },
+        update: { ...privacyData, ...termsData },
         create: { phone: normalized, role: isAdminPhone ? "ADMIN" : "CUSTOMER", ...privacyData, ...termsData },
       });
       if (needsPrivacyAcceptance && privacyAccepted === true) {
