@@ -9,6 +9,7 @@ import {
   IconLogout,
   IconPackage,
   IconQrcode,
+  IconShoppingBag,
   IconWallet,
 } from "@tabler/icons-react";
 import { api } from "@/lib/client/api";
@@ -45,7 +46,7 @@ export default function BusinessNav({ name, selectedOwner, isAdmin = false }: { 
           return <Link key={href} href={href} className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium ${active ? "bg-primary text-white" : "text-muted hover:bg-black/[0.04]"}`}><Icon size={17} />{label}</Link>;
         })}</div>
       </nav>
-      <div className="ml-auto flex items-center gap-1 sm:ml-0 sm:gap-2">{!isAdmin && <span className="hidden text-sm text-muted lg:block">{name ?? "Владелец"}</span>}{isAdmin && <Link href="/admin/venues" className="rounded-lg px-2 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5">Админ</Link>}<Link href="/business/venues" className="rounded-lg p-2 text-muted hover:bg-black/[0.04] sm:hidden" aria-label="Заведения"><IconBuildingStore size={19} /></Link><button onClick={logout} className="rounded-lg p-2 text-muted hover:bg-black/[0.04]" aria-label="Выйти из аккаунта"><IconLogout size={19} /></button></div>
+      <div className="ml-auto flex items-center gap-1 sm:ml-0 sm:gap-2">{!isAdmin && <span className="hidden text-sm text-muted lg:block">{name ?? "Владелец"}</span>}<Link href="/login" className="flex items-center gap-1 rounded-lg border border-primary/20 px-2 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5" aria-label="Открыть свой клиентский кабинет"><IconShoppingBag size={16} /><span className="hidden xl:inline">Клиентский кабинет</span><span className="xl:hidden">Клиент</span></Link>{isAdmin && <Link href="/admin/venues" className="rounded-lg px-2 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5">Админ</Link>}<Link href="/business/venues" className="rounded-lg p-2 text-muted hover:bg-black/[0.04] sm:hidden" aria-label="Заведения"><IconBuildingStore size={19} /></Link><button onClick={logout} className="rounded-lg p-2 text-muted hover:bg-black/[0.04]" aria-label="Выйти из аккаунта"><IconLogout size={19} /></button></div>
     </div>
     {isAdmin && <div className="flex items-center justify-between gap-3 border-t border-black/[0.06] bg-primary/[0.04] px-4 py-2 text-xs"><p className="min-w-0 truncate"><span className="text-muted">Открыт кабинет:</span> <b>{selectedOwner}</b></p><Link href="/admin/owners?select=1" className="shrink-0 font-semibold text-primary hover:underline">Сменить</Link></div>}
     </header>
