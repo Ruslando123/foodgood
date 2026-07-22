@@ -48,7 +48,7 @@ export default function VenueRegistrationPage() {
         <input id="new-venue-photo" required type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setPhotoFile(event.target.files?.[0] ?? null)} className="mt-1 block w-full rounded-xl border p-3 text-sm" />
         <p className="mt-1 text-xs text-muted">JPG, PNG или WebP · до 5 МБ</p>
       </div>
-      <select value={form.category} onChange={(event) => set("category", event.target.value)} className="w-full rounded-xl border p-3"><option value="CAFE">Кофейня</option><option value="BAKERY">Пекарня</option><option value="SUPERMARKET">Супермаркет</option><option value="RESTAURANT">Ресторан</option></select>
+      <select value={form.category} onChange={(event) => set("category", event.target.value)} className="w-full rounded-xl border p-3"><option value="CAFE">Кофейня</option><option value="BAKERY">Пекарня</option><option value="RESTAURANT">Ресторан</option></select>
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       <button disabled={busy} className="w-full rounded-xl bg-primary p-3 font-bold text-white disabled:opacity-60">{busy ? "Добавляем…" : "Добавить заведение"}</button>
     </form>

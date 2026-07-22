@@ -1,12 +1,14 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { VENUE_CATEGORIES } from "@/lib/config";
+import { VENUE_CATEGORIES, isPilotCategoryAllowed } from "@/lib/config";
 import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { normalizeTwoGisUrl } from "@/lib/maps";
 import { requireMerchant, requireUser } from "@/modules/auth/server";
 import { apiRoute, ApiError, assertSameOrigin, json } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
+import { assertVenueInPilotScope, enforcePilotVenueCapacity } from "@/lib/pilot";
+import { assertPartnerCanPublish } from "@/lib/partner-onboarding";
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
@@ -21,6 +23,7 @@ export async function POST(req: NextRequest) {
   return apiRoute(req, async () => {
     assertSameOrigin(req);
     const owner = await requireMerchant();
+    const partner = await prisma.partnerBusiness.findUnique({ where: { ownerId: owner.id }, include: { agreements: true } });
     const form = await req.formData();
     const body = Object.fromEntries(form.entries());
     const file = form.get("photo");
@@ -36,9 +39,12 @@ export async function POST(req: NextRequest) {
     let twoGisUrl: string;
     try { twoGisUrl = normalizeTwoGisUrl(optionalString(body.twoGisUrl, "twoGisUrl", 1000)); }
     catch { throw new ApiError(400, "INVALID_TWO_GIS_URL", "Укажите ссылку на карточку заведения с сайта 2GIS"); }
-    if (!(cat in VENUE_CATEGORIES)) {
-      throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
+    if (!(cat in VENUE_CATEGORIES) || !isPilotCategoryAllowed(cat)) {
+      throw new ApiError(400, "CATEGORY_NOT_ALLOWED_IN_PILOT", "Категория пока не входит в закрытый пилот");
     }
+    assertPartnerCanPublish(partner, cat);
+    const candidate = { cityId: nearestKazakhstanCity(lat, lng).id, category: cat, lat, lng };
+    assertVenueInPilotScope(candidate);
     let photo: string;
     try { photo = await saveVenuePhoto(file); }
     catch (error) {
@@ -47,8 +53,14 @@ export async function POST(req: NextRequest) {
       throw new ApiError(400, "PHOTO_FORMAT", "Поддерживаются только JPG, PNG и WebP");
     }
     try {
-      const venue = await prisma.venue.create({
-        data: { name, address, lat, lng, cityId: nearestKazakhstanCity(lat, lng).id, category: cat, description, contactPhone, openingHours, twoGisUrl, photo, ownerId: owner.id },
+      const venue = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "PartnerBusiness" WHERE "ownerId" = ${owner.id} FOR SHARE`;
+        const lockedPartner = await tx.partnerBusiness.findUnique({ where: { ownerId: owner.id }, include: { agreements: true } });
+        assertPartnerCanPublish(lockedPartner, cat);
+        await enforcePilotVenueCapacity(tx);
+        return tx.venue.create({
+          data: { name, address, lat, lng, cityId: candidate.cityId, category: cat, description, contactPhone, openingHours, twoGisUrl, photo, ownerId: owner.id },
+        });
       });
       return json({ venue }, { status: 201 });
     } catch (error) {

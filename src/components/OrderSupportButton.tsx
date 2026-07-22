@@ -13,6 +13,7 @@ export default function OrderSupportButton({ id }: { id: string }) {
   const [open, setOpen] = useState(false);
   const [category, setCategory] = useState<ComplaintCategory | "">("");
   const [note, setNote] = useState("");
+  const [attachments, setAttachments] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -29,9 +30,13 @@ export default function OrderSupportButton({ id }: { id: string }) {
     setBusy(true);
     setMessage(null);
     try {
+      const form = new FormData();
+      form.set("category", category);
+      form.set("note", note);
+      attachments.forEach((file) => form.append("attachments", file));
       await api(`/api/orders/${id}/support`, {
         method: "POST",
-        body: JSON.stringify({ category, note }),
+        body: form,
       });
       setMessage("Обращение отправлено. Свяжемся с вами в течение двух часов.");
       setOpen(false);
@@ -94,6 +99,9 @@ export default function OrderSupportButton({ id }: { id: string }) {
           <p id="support-note-help" className={`text-xs ${needsDetails && !hasRequiredDetails ? "text-amber-800" : "text-muted"}`}>
             {needsDetails ? `Для пункта «Другое» нужно не менее 5 символов · ${note.trim().length}/5` : "Можно добавить детали, чтобы нам было проще помочь."}
           </p>
+          <label className="block text-xs font-semibold">Фото или PDF (до 3 файлов, каждый до 5 МБ)
+            <input type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => setAttachments(Array.from(event.target.files ?? []).slice(0, 3))} className="mt-1 block w-full text-xs font-normal file:mr-2 file:rounded-lg file:border-0 file:bg-white file:px-3 file:py-2 file:font-semibold" />
+          </label>
           {message && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{message}</p>}
           <div className="grid grid-cols-2 gap-2">
             <button

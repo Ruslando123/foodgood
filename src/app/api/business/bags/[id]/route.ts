@@ -5,6 +5,8 @@ import { cancelBag, throwOrderApiError } from "@/modules/orders";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
+import { assertPartnerCanPublish, parseSafetyAttestations, safetyAttestationData } from "@/lib/partner-onboarding";
+import { assertVenueInPilotScope, getPilotConfig } from "@/lib/pilot";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(_req, async () => {
@@ -18,15 +20,31 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(req, async () => {
     const user = await requireMerchant(); const { id } = await params;
+    const body = await readJsonObject(req);
+    const safety = parseSafetyAttestations(body.safetyAttestations);
     const source = await prisma.bag.findUnique({ where: { id }, include: { venue: true } });
     if (!source || source.venue.ownerId !== user.id) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
     if (source.venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено");
+    const partner = await prisma.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
+    assertPartnerCanPublish(partner, source.venue.category);
+    assertVenueInPilotScope(source.venue);
+    const pilot = getPilotConfig();
     const duration = source.pickupEnd.getTime() - source.pickupStart.getTime();
     const pickupStart = new Date(source.pickupStart); const now = new Date();
     do { pickupStart.setDate(pickupStart.getDate() + 1); } while (pickupStart <= now);
     const pickupEnd = new Date(pickupStart.getTime() + duration);
     const bag = await prisma.$transaction(async (tx) => {
-      const created = await tx.bag.create({ data: { venueId: source.venueId, title: source.title, description: source.description, allergens: source.allergens, price: source.price, originalPrice: source.originalPrice, quantityTotal: source.quantityTotal, quantityLeft: source.quantityTotal, pickupStart, pickupEnd }, include: { venue: true } });
+      await tx.$queryRaw`SELECT id FROM "Venue" WHERE id = ${source.venueId} FOR UPDATE`;
+      const lockedVenue = await tx.venue.findUnique({ where: { id: source.venueId } });
+      if (!lockedVenue || lockedVenue.ownerId !== user.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
+      if (lockedVenue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено");
+      assertVenueInPilotScope(lockedVenue);
+      await tx.$queryRaw`SELECT id FROM "PartnerBusiness" WHERE "ownerId" = ${user.id} FOR SHARE`;
+      const lockedPartner = await tx.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
+      assertPartnerCanPublish(lockedPartner, lockedVenue.category);
+      const activeBagCount = await tx.bag.count({ where: { venueId: source.venueId, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } } });
+      if (activeBagCount >= pilot.limits.activeBagsPerVenue) throw new ApiError(409, "PILOT_BAG_LIMIT", `Для заведения доступно не более ${pilot.limits.activeBagsPerVenue} активных пакетов`);
+      const created = await tx.bag.create({ data: { venueId: source.venueId, title: source.title, description: source.description, composition: source.composition || source.description, allergens: source.allergens, storage: source.storage || "Уточнить у продавца при получении", examplePhoto: source.examplePhoto, price: source.price, originalPrice: source.originalPrice, quantityTotal: source.quantityTotal, quantityLeft: source.quantityTotal, pickupStart, pickupEnd, ...safetyAttestationData(safety, user.id) }, include: { venue: true } });
       await recordProductEvent(tx, {
         name: "partner_offer_created",
         userId: user.id,
@@ -38,6 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         dedupeKey: `partner_offer_created:${created.id}`,
         metadata: { repeatedFromBagId: source.id },
       });
+      await tx.auditLog.create({ data: { actorId: user.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: source.venueId, partnerBusinessId: lockedPartner!.id, repeatedFromBagId: source.id, safetyAttestations: true }) } });
       return created;
     });
     return json({ bag }, { status: 201 });
@@ -60,7 +79,8 @@ export async function PATCH(
 
     if (body.status === "CANCELLED") {
       try {
-      const bag = await cancelBag(user.id, id);
+        const reason = requiredString(body.reason, "reason", { min: 3, max: 500 });
+        const bag = await cancelBag(user.id, id, reason);
         return json({ bag });
       } catch (error) {
         throwOrderApiError(error);
@@ -69,9 +89,13 @@ export async function PATCH(
 
     if (body.quantityLeft === undefined) {
       if (body.action !== "details") throw new ApiError(400, "NO_CHANGES", "Нечего изменять");
+      const safety = parseSafetyAttestations(body.safetyAttestations);
       const title = requiredString(body.title, "title", { max: 120 });
       const description = optionalString(body.description, "description", 1000);
+      const composition = requiredString(body.composition, "composition", { min: 3, max: 1000 });
       const allergens = optionalString(body.allergens, "allergens", 300);
+      const storage = requiredString(body.storage, "storage", { min: 3, max: 500 });
+      const examplePhoto = optionalString(body.examplePhoto, "examplePhoto", 1000);
       const price = integer(body.price, "price", { min: 1, max: 10_000_000 });
       const originalPrice = integer(body.originalPrice, "originalPrice", { min: price, max: 10_000_000 });
       const pickupStart = dateValue(body.pickupStart, "pickupStart"); const pickupEnd = dateValue(body.pickupEnd, "pickupEnd");
@@ -84,6 +108,9 @@ export async function PATCH(
         if (!bag || bag.venue.ownerId !== user.id) {
           throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
         }
+        await tx.$queryRaw`SELECT id FROM "PartnerBusiness" WHERE "ownerId" = ${user.id} FOR SHARE`;
+        const partner = await tx.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
+        assertPartnerCanPublish(partner, bag.venue.category);
         if (bag.status !== "ACTIVE" && bag.status !== "SOLD_OUT") {
           throw new ApiError(409, "BAG_NOT_EDITABLE", "Закрытый пакет нельзя редактировать");
         }
@@ -95,7 +122,7 @@ export async function PATCH(
         }
         return tx.bag.update({
           where: { id },
-          data: { title, description, allergens, price, originalPrice, pickupStart, pickupEnd },
+          data: { title, description, composition, allergens, storage, examplePhoto, price, originalPrice, pickupStart, pickupEnd, ...safetyAttestationData(safety, user.id) },
           include: { venue: true },
         });
       });

@@ -1,23 +1,35 @@
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "crypto";
 import { recordOrderLifecycleEvent } from "@/lib/product-analytics";
 
 export const ORDER_STATUSES = [
   "RESERVED",
   "READY_FOR_PICKUP",
   "COMPLETED",
-  "CANCELLED",
-  "EXPIRED",
+  "CANCELLED_BY_USER",
+  "CANCELLED_BY_PARTNER",
+  "NO_SHOW",
+  "DISPUTED",
 ] as const;
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
+export type OrderActorRole = "CUSTOMER" | "PARTNER" | "ADMIN" | "SYSTEM";
+
+export const ACTIVE_ORDER_STATUSES: readonly OrderStatus[] = ["RESERVED", "READY_FOR_PICKUP"];
 
 const ALLOWED_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
-  RESERVED: ["READY_FOR_PICKUP", "COMPLETED", "CANCELLED", "EXPIRED"],
-  READY_FOR_PICKUP: ["COMPLETED", "CANCELLED", "EXPIRED"],
-  COMPLETED: [],
-  CANCELLED: [],
-  EXPIRED: [],
+  RESERVED: ["READY_FOR_PICKUP", "COMPLETED", "CANCELLED_BY_USER", "CANCELLED_BY_PARTNER", "NO_SHOW", "DISPUTED"],
+  READY_FOR_PICKUP: ["COMPLETED", "CANCELLED_BY_USER", "CANCELLED_BY_PARTNER", "NO_SHOW", "DISPUTED"],
+  COMPLETED: ["DISPUTED"],
+  CANCELLED_BY_USER: ["DISPUTED"],
+  CANCELLED_BY_PARTNER: ["DISPUTED"],
+  NO_SHOW: ["DISPUTED"],
+  DISPUTED: [],
 };
+
+export function isOrderStatus(value: string): value is OrderStatus {
+  return (ORDER_STATUSES as readonly string[]).includes(value);
+}
 
 function assertAllowed(from: readonly OrderStatus[], to: OrderStatus): void {
   if (from.some((status) => !ALLOWED_TRANSITIONS[status].includes(to))) {
@@ -25,21 +37,35 @@ function assertAllowed(from: readonly OrderStatus[], to: OrderStatus): void {
   }
 }
 
-type TransitionInput = {
+type TransitionAudit = {
+  actor: string;
+  actorRole: OrderActorRole;
+  reason: string;
+  metadata?: Record<string, unknown>;
+  timestamp?: Date;
+};
+
+type TransitionInput = TransitionAudit & {
   id: string;
   from: OrderStatus | readonly OrderStatus[];
   to: OrderStatus;
   data?: Omit<Prisma.OrderUpdateManyMutationInput, "status">;
 };
 
+function lifecycleEvent(status: OrderStatus): "order_completed" | "order_cancelled" | null {
+  if (status === "COMPLETED") return "order_completed";
+  if (status === "CANCELLED_BY_USER" || status === "CANCELLED_BY_PARTNER") return "order_cancelled";
+  return null;
+}
+
 /**
- * Единственная граница изменения статуса заказа. Условный updateMany повторно
- * проверяет исходный статус после получения row lock, поэтому параллельный
- * переход может выиграть только один раз.
+ * The only boundary for changing one order's status. The conditional update
+ * and immutable history insert use the caller's transaction, so they commit or
+ * roll back together. updateMany also makes concurrent repeats single-winner.
  */
 export async function transitionOrder(
   tx: Prisma.TransactionClient,
-  { id, from, to, data = {} }: TransitionInput
+  { id, from, to, data = {}, actor, actorRole, reason, metadata = {}, timestamp = new Date() }: TransitionInput
 ): Promise<boolean> {
   const source = Array.isArray(from) ? from : [from];
   assertAllowed(source, to);
@@ -47,29 +73,48 @@ export async function transitionOrder(
     where: { id, status: { in: [...source] } },
     data: { ...data, status: to },
   });
-  if (changed.count === 1 && (to === "COMPLETED" || to === "CANCELLED")) {
-    await recordOrderLifecycleEvent(tx, to === "COMPLETED" ? "order_completed" : "order_cancelled", id);
-  }
-  return changed.count === 1;
+  if (changed.count !== 1) return false;
+
+  await tx.orderStatusHistory.create({
+    data: {
+      id: randomUUID(),
+      orderId: id,
+      status: to,
+      actor,
+      actorRole,
+      reason,
+      metadataJson: JSON.stringify(metadata),
+      timestamp,
+    },
+  });
+  const eventName = lifecycleEvent(to);
+  if (eventName) await recordOrderLifecycleEvent(tx, eventName, id);
+  return true;
 }
+
+type BulkTransitionInput = TransitionAudit & {
+  bagId: string;
+  from: OrderStatus | readonly OrderStatus[];
+  to: OrderStatus;
+};
+
+export type BulkTransitionedOrder = {
+  id: string;
+  userId: string;
+  bagId: string;
+  totalPrice: number;
+  quantity: number;
+  clientSource: string;
+  venueId: string;
+};
 
 export async function transitionBagOrders(
   tx: Prisma.TransactionClient,
-  bagId: string,
-  from: OrderStatus | readonly OrderStatus[],
-  to: OrderStatus
-): Promise<number> {
+  { bagId, from, to, actor, actorRole, reason, metadata = {}, timestamp = new Date() }: BulkTransitionInput
+): Promise<BulkTransitionedOrder[]> {
   const source = Array.isArray(from) ? from : [from];
   assertAllowed(source, to);
-  const affected = await tx.$queryRaw<Array<{
-    id: string;
-    userId: string;
-    bagId: string;
-    totalPrice: number;
-    quantity: number;
-    clientSource: string;
-    venueId: string;
-  }>>(Prisma.sql`
+  const affected = await tx.$queryRaw<BulkTransitionedOrder[]>(Prisma.sql`
     UPDATE "Order" orders
     SET status = ${to}
     FROM "Bag" bag
@@ -79,12 +124,24 @@ export async function transitionBagOrders(
     RETURNING orders.id, orders."userId", orders."bagId", orders."totalPrice",
       orders.quantity, orders."clientSource", bag."venueId"
   `);
-  if (affected.length && (to === "COMPLETED" || to === "CANCELLED")) {
-    const eventName = to === "COMPLETED" ? "order_completed" : "order_cancelled";
-    // A bag may contain thousands of reservations. Insert analytics in
-    // bounded multi-row statements instead of issuing two queries per order.
-    for (let offset = 0; offset < affected.length; offset += 1_000) {
-      const rows = affected.slice(offset, offset + 1_000);
+  if (!affected.length) return affected;
+
+  for (let offset = 0; offset < affected.length; offset += 1_000) {
+    const rows = affected.slice(offset, offset + 1_000);
+    await tx.orderStatusHistory.createMany({
+      data: rows.map((order) => ({
+        id: randomUUID(),
+        orderId: order.id,
+        status: to,
+        actor,
+        actorRole,
+        reason,
+        metadataJson: JSON.stringify(metadata),
+        timestamp,
+      })),
+    });
+    const eventName = lifecycleEvent(to);
+    if (eventName) {
       await tx.productEvent.createMany({
         data: rows.map((order) => ({
           name: eventName,
@@ -101,5 +158,5 @@ export async function transitionBagOrders(
       });
     }
   }
-  return affected.length;
+  return affected;
 }

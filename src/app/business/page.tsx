@@ -3,9 +3,10 @@ import { prisma } from "@/lib/db";
 import { getSessionUser } from "@/lib/auth";
 import { IconCircleCheckFilled, IconClock, IconPackage, IconQrcode } from "@tabler/icons-react";
 import BusinessRepeatBagButton from "@/components/BusinessRepeatBagButton";
+import { PARTNER_AGREEMENT_VERSION } from "@/lib/partner-onboarding";
 
 const ORDER_LABELS: Record<string, string> = {
-  RESERVED: "Забронирован", READY_FOR_PICKUP: "Готов к выдаче", COMPLETED: "Выдан", CANCELLED: "Отменён", EXPIRED: "Истёк",
+  RESERVED: "Забронирован", READY_FOR_PICKUP: "Готов к выдаче", COMPLETED: "Выдан", CANCELLED_BY_USER: "Отменён клиентом", CANCELLED_BY_PARTNER: "Отменён заведением", NO_SHOW: "Неявка", DISPUTED: "Спор",
 };
 
 function price(value: number) { return `${value.toLocaleString("ru-RU")} ₸`; }
@@ -13,6 +14,9 @@ function price(value: number) { return `${value.toLocaleString("ru-RU")} ₸`; }
 export default async function BusinessDashboard() {
   const user = await getSessionUser();
   if (!user) return null;
+  const partner = await prisma.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
+  const publicationEnabled = partner?.verificationStatus === "VERIFIED"
+    && partner.agreements.some(({ agreementVersion }) => agreementVersion === PARTNER_AGREEMENT_VERSION);
   const owner = { venue: { ownerId: user.id } };
   const [venues, activeBags, awaitingPickup, completed, recentOrders, recentBags] = await Promise.all([
     prisma.venue.count({ where: { ownerId: user.id } }),
@@ -30,7 +34,9 @@ export default async function BusinessDashboard() {
     { label: "Спасено пакетов", value: completed._sum.quantity ?? 0, hint: "Все деньги остаются заведению", href: "/business/orders?status=COMPLETED" },
   ];
   const latestBag = recentBags[0];
-  const daily = venues === 0
+  const daily = !publicationEnabled
+    ? { eyebrow: "Требуется проверка", title: "Завершите onboarding партнёра", text: partner?.verificationStatus === "PENDING" ? "Данные ожидают решения администратора." : "Заполните юридические данные и примите партнёрский договор.", href: "/business/onboarding", action: "Открыть проверку" }
+    : venues === 0
     ? { eyebrow: "Начните за минуту", title: "Добавьте первое заведение", text: "После этого можно сразу опубликовать первый набор.", href: "/business/venue", action: "Добавить заведение" }
     : awaitingPickup > 0
       ? { eyebrow: "Нужно внимание", title: `${awaitingPickup} ${awaitingPickup === 1 ? "заказ ждёт" : "заказа ждут"} выдачи`, text: "Откройте выдачу и введите шестизначный код покупателя.", href: "/business/redeem", action: "Перейти к выдаче" }
@@ -39,6 +45,7 @@ export default async function BusinessDashboard() {
         : { eyebrow: "На сегодня всё готово", title: `${activeBags} ${activeBags === 1 ? "набор активен" : "набора активны"}`, text: "Новых заказов на выдачу нет. При необходимости обновите остаток.", href: "/business/bags", action: "Проверить остатки" };
   return <main className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
     <div><h1 className="text-2xl font-bold">Добрый день{user.name ? `, ${user.name}` : ""}</h1><p className="mt-1 text-sm text-muted">Ежедневные задачи FoodGood — на одном экране.</p></div>
+    {!publicationEnabled && <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><b>Публикация закрыта.</b> Статус партнёра: {partner?.verificationStatus ?? "данные не заполнены"}. <Link href="/business/onboarding" className="font-semibold underline">Перейти к проверке →</Link></section>}
     <section className={`overflow-hidden rounded-2xl border p-5 ${awaitingPickup > 0 ? "border-amber-200 bg-amber-50" : "border-primary/20 bg-primary/[0.055]"}`}>
       <div className="flex items-start gap-3"><div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${awaitingPickup > 0 ? "bg-amber-100 text-amber-800" : "bg-primary/10 text-primary"}`}>{awaitingPickup > 0 ? <IconClock size={22} /> : <IconCircleCheckFilled size={22} />}</div><div className="min-w-0"><p className={`text-xs font-bold uppercase tracking-wide ${awaitingPickup > 0 ? "text-amber-800" : "text-primary"}`}>{daily.eyebrow}</p><h2 className="mt-1 text-xl font-bold">{daily.title}</h2><p className="mt-1 text-sm leading-5 text-muted">{daily.text}</p></div></div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2"><Link href={daily.href} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white">{awaitingPickup > 0 ? <IconQrcode size={18} /> : <IconPackage size={18} />}{daily.action}</Link>{latestBag && venues > 0 ? <BusinessRepeatBagButton id={latestBag.id} label={`Повторить «${latestBag.title}» завтра`} /> : <Link href="/business/new" className="flex min-h-11 items-center justify-center rounded-xl border border-primary bg-white px-4 py-2.5 text-sm font-semibold text-primary">+ Новый набор</Link>}</div>

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { IconArrowLeft, IconMapPin } from "@tabler/icons-react";
 import BagCard from "@/components/BagCard";
 import BottomNav from "@/components/BottomNav";
-import { api, Bag, Venue, pluralRu } from "@/lib/client/api";
+import { api, Bag, Venue, pluralRu, PublicPilotConfig } from "@/lib/client/api";
 import { VENUE_CATEGORIES } from "@/lib/config";
 import VenuePhoto from "@/components/VenuePhoto";
 import FavoriteButton from "@/components/FavoriteButton";
@@ -17,10 +17,11 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
   const { id } = use(params);
   const [venue, setVenue] = useState<VenueDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pilot, setPilot] = useState<PublicPilotConfig | null>(null);
 
   useEffect(() => {
-    api<{ venue: VenueDetails }>(`/api/venues/${id}`)
-      .then(({ venue }) => setVenue(venue))
+    api<{ venue: VenueDetails; pilot: PublicPilotConfig }>(`/api/venues/${id}`)
+      .then(({ venue, pilot }) => { setVenue(venue); setPilot(pilot); })
       .catch((e) => setError(e instanceof Error ? e.message : "Не удалось загрузить заведение"));
   }, [id]);
 
@@ -50,13 +51,14 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
           <p className="text-[12px] text-white/80">{VENUE_CATEGORIES[venue.category] ?? "Заведение"}</p>
           <h1 className="mt-0.5 text-[24px] font-bold tracking-[-0.03em]">{venue.name}</h1>
           <p className="mt-1 text-[13px] text-white/85">{venue.address}</p>
-          <p className="mt-2 text-[13px] font-semibold text-amber-300">★ {venue.reviews.length ? (venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1) : "Новый"} · {venue.reviews.length} отзывов</p>
+          {pilot?.features.publicReviews && <p className="mt-2 text-[13px] font-semibold text-amber-300">★ {venue.reviews.length ? (venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1) : "Новый"} · {venue.reviews.length} отзывов</p>}
         </div>
       </header>
 
       <main className="space-y-5 px-4 pt-4">
         <section className="space-y-3 rounded-[17px] border border-black/[0.07] bg-white p-4 text-[13px] shadow-[0_2px_10px_rgba(20,40,28,0.04)]">
           <p>{venue.description || "Свежая еда, которую можно забрать со скидкой в конце дня."}</p>
+          <p><b>Фактический продавец:</b> {`${venue.sellerLegalType} ${venue.sellerLegalName}`.trim()}. Оплата проходит на кассе продавца, там же выдают кассовый чек.</p>
           <a
             href={routeUrl}
             target="_blank"
@@ -80,7 +82,7 @@ export default function VenuePage({ params }: { params: Promise<{ id: string }> 
             </div>
           ) : bags.map((bag) => <BagCard key={bag.id} bag={bag} />)}
         </section>
-        <section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-[17px] font-bold">Отзывы</h2>{venue.reviews.length > 0 && <span className="text-sm font-semibold text-amber-500">★ {(venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1)}</span>}</div>{venue.reviews.length === 0 ? <p className="rounded-[17px] bg-[#f5f6f5] p-5 text-[13px] text-muted">Отзывов пока нет.</p> : venue.reviews.map((review) => <article key={review.id} className="rounded-[17px] border p-4"><div className="flex justify-between"><p className="text-sm font-semibold">{review.user.name ?? "Покупатель"}</p><p className="text-amber-500">{"★".repeat(review.rating)}</p></div>{review.comment && <p className="mt-2 text-sm">{review.comment}</p>}<p className="mt-2 text-xs text-muted">{new Date(review.createdAt).toLocaleDateString("ru-RU")}</p></article>)}</section>
+        {pilot?.features.publicReviews && <section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-[17px] font-bold">Отзывы</h2>{venue.reviews.length > 0 && <span className="text-sm font-semibold text-amber-500">★ {(venue.reviews.reduce((sum, review) => sum + review.rating, 0) / venue.reviews.length).toFixed(1)}</span>}</div>{venue.reviews.length === 0 ? <p className="rounded-[17px] bg-[#f5f6f5] p-5 text-[13px] text-muted">Отзывов пока нет.</p> : venue.reviews.map((review) => <article key={review.id} className="rounded-[17px] border p-4"><div className="flex justify-between"><p className="text-sm font-semibold">{review.user.name ?? "Покупатель"}</p><p className="text-amber-500">{"★".repeat(review.rating)}</p></div>{review.comment && <p className="mt-2 text-sm">{review.comment}</p>}<p className="mt-2 text-xs text-muted">{new Date(review.createdAt).toLocaleDateString("ru-RU")}</p></article>)}</section>}
       </main>
       <BottomNav />
     </div>

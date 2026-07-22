@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const e2ePort = process.env.E2E_PORT ?? "3100";
+const e2eBaseUrl = `http://localhost:${e2ePort}`;
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 60_000,
@@ -8,7 +11,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
   use: {
-    baseURL: "http://localhost:3100",
+    baseURL: e2eBaseUrl,
     navigationTimeout: 20_000,
     actionTimeout: 20_000,
     trace: "retain-on-failure",
@@ -17,8 +20,8 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
   },
   webServer: {
-      command: "npm run start -- --hostname localhost --port 3100",
-      url: "http://localhost:3100/api/health",
+      command: `npm run start -- --hostname localhost --port ${e2ePort}`,
+      url: `${e2eBaseUrl}/api/health`,
       reuseExistingServer: false,
       timeout: 120_000,
       env: {
@@ -27,8 +30,7 @@ export default defineConfig({
         OTP_SECRET: "e2e-otp-secret-at-least-32-bytes-long",
         FOODGOOD_E2E_DEV_OTP: "true",
         FOODGOOD_LOCAL_REHEARSAL: "true",
-        APP_BASE_URL: "http://localhost:3100",
-        PILOT_INVITE_CODE_HASH: "052067a5a994e8cac137bc3b2d15283e55222fff49198be65d0eb3005c5c1f92",
+        APP_BASE_URL: e2eBaseUrl,
         TELEGRAM_AUTH_ENABLED: "true",
         TELEGRAM_BOT_TOKEN: "12345:E2E_TEST_TOKEN",
       },

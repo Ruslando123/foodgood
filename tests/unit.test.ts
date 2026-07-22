@@ -19,9 +19,12 @@ import { readVenuePhoto, removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-ph
 import { csvCell, parseFinanceDateRange } from "@/lib/csv";
 import { zonedDayBounds } from "@/lib/timezone";
 import { otpSecretValue, sessionSecretValue } from "@/lib/secrets";
-import { isPilotInviteRequired, isValidPilotInviteCode } from "@/lib/pilot-invite";
 import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
+import { hasAcceptedCurrentTerms, TERMS_VERSION } from "@/lib/legal";
+import { getPilotConfig, isVenueInPilotScope } from "@/lib/pilot";
 import { assertDisposableLoadDatabase } from "@/lib/load-safety";
+import { PARTNER_AGREEMENT_VERSION, isPilotCategoryAllowed } from "@/lib/config";
+import { assertPartnerCanPublish, normalizeBusinessIdentifier, parseSafetyAttestations } from "@/lib/partner-onboarding";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -210,23 +213,72 @@ describe("customer consent", () => {
     expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: null })).toBe(false);
     expect(hasAcceptedCurrentPrivacyPolicy({ privacyPolicyVersion: "old-version", privacyAcceptedAt: new Date() })).toBe(false);
   });
+
+  it("версионирует terms независимо от privacy", () => {
+    expect(hasAcceptedCurrentTerms({ termsVersion: TERMS_VERSION, termsAcceptedAt: new Date() })).toBe(true);
+    expect(hasAcceptedCurrentTerms({ termsVersion: TERMS_VERSION, termsAcceptedAt: null })).toBe(false);
+    expect(hasAcceptedCurrentTerms({ termsVersion: "old", termsAcceptedAt: new Date() })).toBe(false);
+  });
 });
 
-describe("pilot invite gate", () => {
-  it("сравнивает только SHA-256 digest и в production закрывается без env", () => {
-    vi.stubEnv("PILOT_INVITE_CODE_HASH", "");
-    expect(isPilotInviteRequired()).toBe(false);
-    expect(isValidPilotInviteCode("anything")).toBe(true);
-    vi.stubEnv("NODE_ENV", "production");
-    expect(isPilotInviteRequired()).toBe(true);
-    expect(isValidPilotInviteCode("anything")).toBe(false);
-    vi.stubEnv("NODE_ENV", "test");
-    vi.stubEnv("PILOT_INVITE_CODE_HASH", "f2610957d5a52085e4a47d7431d9dc3cb92607d8e2b1310ce9ad6d55a1e62b4d"); // sha256("pilot-only")
-    expect(isPilotInviteRequired()).toBe(true);
-    expect(isValidPilotInviteCode("pilot-only")).toBe(true);
-    expect(isValidPilotInviteCode("wrong-code")).toBe(false);
-    expect(isValidPilotInviteCode("x".repeat(257))).toBe(false);
-    vi.unstubAllEnvs();
+describe("PAY_AT_VENUE pilot scope", () => {
+  it("закрывает непилотный город, район и категорию", () => {
+    vi.stubEnv("FOODGOOD_PILOT_CITY_ID", "almaty");
+    vi.stubEnv("FOODGOOD_PILOT_CATEGORIES", "CAFE,BAKERY");
+    vi.stubEnv("FOODGOOD_PILOT_RADIUS_KM", "10");
+    try {
+      const config = getPilotConfig();
+      expect(config.mode).toBe("PAY_AT_VENUE");
+      expect(config.features).toMatchObject({ publicReviews: false, delivery: false, prepaid: false, loyalty: false, ai: false });
+      expect(isVenueInPilotScope({ cityId: "almaty", category: "CAFE", lat: 43.24, lng: 76.89 })).toBe(true);
+      expect(isVenueInPilotScope({ cityId: "astana", category: "CAFE", lat: 51.17, lng: 71.45 })).toBe(false);
+      expect(isVenueInPilotScope({ cityId: "almaty", category: "RESTAURANT", lat: 43.24, lng: 76.89 })).toBe(false);
+      expect(isVenueInPilotScope({ cityId: "almaty", category: "CAFE", lat: 43.6, lng: 77.3 })).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("безопасная публикация партнёра", () => {
+  const verifiedPartner = {
+    id: "partner-1",
+    legalType: "IP",
+    legalName: "ИП Тест",
+    businessIdentifier: "900101300001",
+    contactName: "Представитель",
+    contactPhone: "+77010000001",
+    verificationStatus: "VERIFIED",
+    agreements: [{ agreementVersion: PARTNER_AGREEMENT_VERSION }],
+  };
+
+  it("нормализует БИН/ИИН и оставляет только 12 цифр", () => {
+    expect(normalizeBusinessIdentifier("900 101 300 001")).toBe("900101300001");
+    expect(normalizeBusinessIdentifier("123")).toBeNull();
+  });
+
+  it("требует каждое safety-подтверждение явно", () => {
+    expect(() => parseSafetyAttestations({ suitableForSaleAttested: true })).toThrow("все условия безопасности");
+    expect(parseSafetyAttestations({
+      suitableForSaleAttested: true,
+      storageCompliantAttested: true,
+      allergensCurrentAttested: true,
+      categoryAllowedAttested: true,
+    })).toEqual({
+      suitableForSaleAttested: true,
+      storageCompliantAttested: true,
+      allergensCurrentAttested: true,
+      categoryAllowedAttested: true,
+    });
+  });
+
+  it("допускает только проверенного партнёра с текущим договором и pilot-категорией", () => {
+    expect(() => assertPartnerCanPublish(verifiedPartner, "BAKERY")).not.toThrow();
+    expect(() => assertPartnerCanPublish({ ...verifiedPartner, verificationStatus: "PENDING" }, "BAKERY")).toThrow("после проверки");
+    expect(() => assertPartnerCanPublish({ ...verifiedPartner, agreements: [] }, "BAKERY")).toThrow("версию партнёрского договора");
+    expect(() => assertPartnerCanPublish(verifiedPartner, "SUPERMARKET")).toThrow("закрытый пилот");
+    expect(isPilotCategoryAllowed("CAFE")).toBe(true);
+    expect(isPilotCategoryAllowed("SUPERMARKET")).toBe(false);
   });
 });
 

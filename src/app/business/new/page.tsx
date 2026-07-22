@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, Venue } from "@/lib/client/api";
+import SafetyAttestationChecklist, { allSafetyConfirmed, EMPTY_SAFETY_CHECKLIST } from "@/components/SafetyAttestationChecklist";
+import { isPilotCategoryAllowed } from "@/lib/config";
 
 /** Публикация пакета «в 2 клика»: разумные значения по умолчанию на вечер. */
 export default function NewBagPage() {
@@ -12,7 +14,10 @@ export default function NewBagPage() {
   const [venueId, setVenueId] = useState("");
   const [title, setTitle] = useState("Пакет-сюрприз");
   const [description, setDescription] = useState("");
+  const [composition, setComposition] = useState("Не менее 2 единиц свежей еды из указанного ассортимента");
   const [allergens, setAllergens] = useState("");
+  const [storage, setStorage] = useState("Забрать в окно выдачи и употребить в тот же день; уточнить у продавца");
+  const [examplePhoto, setExamplePhoto] = useState("");
   const [price, setPrice] = useState("1500");
   const [originalPrice, setOriginalPrice] = useState("4500");
   const [quantity, setQuantity] = useState("5");
@@ -20,12 +25,14 @@ export default function NewBagPage() {
   const [endTime, setEndTime] = useState("22:00");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [safety, setSafety] = useState(EMPTY_SAFETY_CHECKLIST);
 
   useEffect(() => {
     api<{ venues: Venue[] }>("/api/business/venues")
       .then(({ venues }) => {
-        setVenues(venues);
-        if (venues[0]) setVenueId(venues[0].id);
+        const pilotVenues = venues.filter(({ category }) => isPilotCategoryAllowed(category));
+        setVenues(pilotVenues);
+        if (pilotVenues[0]) setVenueId(pilotVenues[0].id);
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -57,12 +64,16 @@ export default function NewBagPage() {
           venueId,
           title,
           description,
+          composition,
           allergens,
+          storage,
+          examplePhoto,
           price: Number(price),
           originalPrice: Number(originalPrice),
           quantity: Number(quantity),
           pickupStart,
           pickupEnd,
+          safetyAttestations: safety,
         }),
       });
       router.push("/business");
@@ -111,6 +122,10 @@ export default function NewBagPage() {
           />
         </Field>
 
+        <Field label="Минимальный гарантированный состав">
+          <textarea value={composition} onChange={(e) => setComposition(e.target.value)} rows={2} required className="w-full bg-card border border-black/10 rounded-xl px-3 py-3" />
+        </Field>
+
         <Field label="Возможные аллергены (необязательно)">
           <input
             value={allergens}
@@ -119,6 +134,15 @@ export default function NewBagPage() {
             className="w-full bg-card border border-black/10 rounded-xl px-3 py-3"
           />
           <p className="mt-1 text-[11px] font-normal text-muted">Укажите всё возможное — поле сохранится при повторе пакета.</p>
+        </Field>
+
+        <Field label="Хранение и срок употребления">
+          <textarea value={storage} onChange={(e) => setStorage(e.target.value)} rows={2} required className="w-full bg-card border border-black/10 rounded-xl px-3 py-3" />
+        </Field>
+
+        <Field label="Ссылка на фото-пример (необязательно)">
+          <input type="url" value={examplePhoto} onChange={(e) => setExamplePhoto(e.target.value)} placeholder="https://…" className="w-full bg-card border border-black/10 rounded-xl px-3 py-3" />
+          <p className="mt-1 text-[11px] font-normal text-muted">Фото иллюстрирует возможный вид; фактический состав задаётся отдельно.</p>
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
@@ -144,15 +168,17 @@ export default function NewBagPage() {
 
         {error && <p className="text-red-600 text-sm">{error}</p>}
 
+        <SafetyAttestationChecklist value={safety} onChange={setSafety} />
+
         <button
           onClick={publish}
-          disabled={busy || !venueId}
+          disabled={busy || !venueId || !allSafetyConfirmed(safety)}
           className="w-full py-3.5 rounded-2xl bg-primary text-white font-bold disabled:opacity-60"
         >
           {busy ? "Публикуем…" : `Опубликовать ${quantity || 0} шт. · ${startTime}–${endTime}`}
         </button>
         <p className="text-xs text-muted text-center">
-          Покупатель платит онлайн и забирает заказ по QR-коду в окно выдачи.
+          FoodGood создаёт бесплатную бронь. Покупатель платит продавцу на кассе при получении, а продавец выдаёт кассовый чек.
         </p>
       </main>
 

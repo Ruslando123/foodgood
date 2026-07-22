@@ -20,13 +20,12 @@
 
 ```env
 NODE_ENV=production
-DATABASE_URL=postgresql://...        # pooled runtime connection
-DIRECT_URL=postgresql://...          # direct migrations/admin connection
+DATABASE_URL=postgresql://...?sslmode=require  # pooled runtime connection
+DIRECT_URL=postgresql://...?sslmode=require    # direct migrations/admin connection, no pgbouncer=true
 REDIS_URL=rediss://...
 REDIS_REQUIRED=true
 SESSION_SECRET=<at least 32 random bytes>
 OTP_SECRET=<different random secret>
-PILOT_INVITE_CODE_HASH=<required SHA-256 hex digest for closed-pilot customer invites>
 ADMIN_PHONE=+7...
 APP_BASE_URL=https://foodgood.example.kz
 TELEGRAM_OTP_ENABLED=true
@@ -52,17 +51,36 @@ The `production-gate` GitHub Actions check must be required by the protected mai
 
 ```bash
 npm ci
+npm run db:generate
 npm audit --omit=dev --audit-level=high
 npm run lint
 npx tsc --noEmit
+npm run db:migrate:deploy
+npm run db:migrate:validate
 npm test
 npm run test:upgrade
 npm run build
 npm run test:e2e
-npx prisma migrate deploy
 ```
 
-Never run `npm run seed` against production.
+`db:migrate:deploy` deliberately substitutes `DIRECT_URL` for `DATABASE_URL`, so migrations bypass the runtime pool. `db:migrate:validate` fails on pending, failed, or divergent migration history. Never run `npm run seed` against production.
+
+Before starting any production process, run the non-network secret/configuration gate against the exact deployment environment:
+
+```bash
+npm run production:env:check
+```
+
+After deploy, use the public application URL and the two independently addressable worker metrics URLs:
+
+```bash
+PRODUCTION_BASE_URL=https://... \
+PRODUCTION_EXPIRY_METRICS_URL=https://.../metrics \
+PRODUCTION_NOTIFICATIONS_METRICS_URL=https://.../metrics \
+METRICS_SECRET=... npm run production:health:check
+```
+
+The post-deploy gate requires live/ready/deep health, rejected invalid metrics credentials, authenticated web metrics, and authenticated metrics from both named workers. A command invocation is not evidence by itself: retain timestamped output and deployment/target identifiers. Hosting, Telegram, S3, and alert-delivery gates remain open until their external evidence is attached.
 
 ## Worker deployment and monitoring
 
@@ -142,7 +160,8 @@ The restore target must be an isolated empty PostgreSQL 16/PostGIS database. A s
 
 ## Production pilot
 
-- Start with 3–5 venues and invite 20–50 customers in named cohorts; reconcile completed FoodGood reservations against each venue's till report daily.
+- Start with 1–2 venues and a named internal cohort. Complete at least one pickup cycle and reconcile every completed FoodGood reservation against each venue's till report before expanding.
+- Expand to 3–5 venues and 20–50 invited customers only after the 1–2 venue phase meets the criteria in [the pilot checklist](PILOT_CHECKLIST.md).
 - Alert on worker heartbeat loss, failed notification jobs, expired reservations, and inventory mismatches.
 - Before the first customer cohort, submit one order-linked “Обратная связь или помощь” message and confirm it appears in `/admin/support`; assign an owner and confirm first contact can be made within two hours.
 - Keep a documented cancellation, no-show, and customer-support procedure, including first-contact time, venue response, and final resolution. FoodGood does not process refunds in pilot mode.

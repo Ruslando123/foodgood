@@ -4,9 +4,12 @@ import { ACTIVE_PICKUP_ORDER_STATUSES } from "@/modules/orders";
 
 const ORDER_LABELS: Record<string, string> = {
   RESERVED: "Забронирован",
+  READY_FOR_PICKUP: "Готов к выдаче",
   COMPLETED: "Выдан",
-  CANCELLED: "Отменён",
-  EXPIRED: "Истёк",
+  CANCELLED_BY_USER: "Отменён клиентом",
+  CANCELLED_BY_PARTNER: "Отменён партнёром",
+  NO_SHOW: "Неявка",
+  DISPUTED: "Спор",
 };
 
 function price(value: number): string {

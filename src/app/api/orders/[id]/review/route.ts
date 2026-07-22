@@ -4,9 +4,11 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { integer, optionalString } from "@/shared/validation";
+import { getPilotConfig } from "@/lib/pilot";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(req, async () => {
+    if (!getPilotConfig().features.publicReviews) throw new ApiError(403, "PUBLIC_REVIEWS_DISABLED", "Публичные отзывы отключены на время пилота");
     const user = await requireUser();
     const { id } = await params;
     const order = await prisma.order.findUnique({ where: { id }, include: { bag: true, review: true } });

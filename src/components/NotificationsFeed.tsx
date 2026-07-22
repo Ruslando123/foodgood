@@ -17,7 +17,7 @@ export type NotificationItem = {
   type: string;
   createdAt: string;
   readAt: string | null;
-  payload: { bagId?: string; orderId?: string; venueName?: string; title?: string; pickupStart?: string };
+  payload: { bagId?: string; orderId?: string; venueName?: string; title?: string; pickupStart?: string; reason?: string };
 };
 
 type Copy = {
@@ -36,6 +36,43 @@ function notificationCopy(notification: NotificationItem): Copy {
     action: "Открыть заказ",
     href: "/orders",
     tone: "green",
+  };
+  if (type === "ORDER_RESERVED") return {
+    title: "Бронь подтверждена",
+    text: "Пакет зарезервирован. Оплатите его на кассе заведения при получении — FoodGood деньги не списывает.",
+    action: "Показать код",
+    href: "/orders",
+    tone: "green",
+  };
+  if (type === "ORDER_COMPLETED") return {
+    title: "Заказ выдан",
+    text: `«${payload.title ?? "Пакет"}» получен. Кассовый чек и расчёты предоставляет ${payload.venueName ?? "заведение"}.`,
+    action: "Открыть историю",
+    href: "/orders",
+    tone: "green",
+  };
+  if (type === "ORDER_CANCELLED") return {
+    title: "Бронь отменена",
+    text: "FoodGood не списывал деньги. Если вы уже рассчитались на кассе, возврат оформляет заведение по своему чеку.",
+    action: "Открыть заказы",
+    href: "/orders",
+    tone: "rose",
+  };
+  if (type === "ORDER_CANCELLED_BY_PARTNER") return {
+    title: "Заведение отменило бронь",
+    text: payload.reason
+      ? `${payload.reason} FoodGood не списывал деньги; возврат оплаты на кассе оформляет заведение по чеку.`
+      : "FoodGood не списывал деньги. Если вы уже рассчитались на кассе, возврат оформляет заведение по своему чеку.",
+    action: "Открыть заказы",
+    href: "/orders",
+    tone: "rose",
+  };
+  if (type === "ORDER_EXPIRED") return {
+    title: "Окно выдачи закончилось",
+    text: "Бронь закрыта как не полученная. Онлайн-списания и автоматического возврата в FoodGood нет.",
+    action: "Открыть историю",
+    href: "/orders",
+    tone: "amber",
   };
   if (type === "PICKUP_REMINDER") return {
     title: "Скоро начнётся выдача",

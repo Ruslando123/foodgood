@@ -26,6 +26,7 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/business/venues": sharpRuntimeFiles,
     "/api/business/venues/*": sharpRuntimeFiles,
+    "/api/orders/*/support": sharpRuntimeFiles,
   },
   turbopack: {
     root: process.cwd(),

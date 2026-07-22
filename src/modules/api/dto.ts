@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { getPilotConfig } from "@/lib/pilot";
 
 export type PublicVenueDto = {
   id: string;
@@ -13,8 +14,11 @@ export type PublicVenueDto = {
   photo: string;
   contactPhone: string;
   openingHours: string;
+  sellerLegalName: string;
+  sellerLegalType: string;
   rating: number | null;
   reviewCount?: number;
+  publicRatingsEnabled: boolean;
 };
 
 export type PublicBagDto = {
@@ -22,7 +26,10 @@ export type PublicBagDto = {
   venueId: string;
   title: string;
   description: string;
+  composition: string;
   allergens: string;
+  storage: string;
+  examplePhoto: string;
   price: number;
   originalPrice: number;
   quantityTotal: number;
@@ -42,7 +49,18 @@ export type CustomerOrderDto = {
   createdAt: string;
   completedAt: string | null;
   bag: PublicBagDto;
-  review: { id: string; rating: number; comment: string } | null;
+  feedback: { id: string; quality: number; freshness: number; match: number; value: number; pickup: number; comment: string } | null;
+  complaints: Array<{
+    id: string;
+    category: string;
+    status: string;
+    note: string;
+    partnerResponse: string;
+    resolution: string;
+    openedAt: string;
+    events: Array<{ id: string; type: string; status: string | null; message: string; createdAt: string }>;
+    attachments: Array<{ id: string; name: string; contentType: string; sizeBytes: number }>;
+  }>;
 };
 
 export type MerchantOrderDto = CustomerOrderDto & {
@@ -64,6 +82,7 @@ export const publicVenueSelect = {
   openingHours: true,
   ratingAverage: true,
   ratingCount: true,
+  owner: { select: { partnerBusiness: { select: { legalName: true, legalType: true } } } },
 } as const satisfies Prisma.VenueSelect;
 
 const publicBagSelect = {
@@ -71,7 +90,10 @@ const publicBagSelect = {
   venueId: true,
   title: true,
   description: true,
+  composition: true,
   allergens: true,
+  storage: true,
+  examplePhoto: true,
   price: true,
   originalPrice: true,
   quantityTotal: true,
@@ -90,23 +112,41 @@ export const customerOrderSelect = {
   pickupCode: true,
   createdAt: true,
   completedAt: true,
+  offerSnapshotJson: true,
   bag: { select: publicBagSelect },
-  review: { select: { id: true, rating: true, comment: true } },
+  feedback: { select: { id: true, quality: true, freshness: true, match: true, value: true, pickup: true, comment: true } },
+  complaints: {
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: {
+      id: true, category: true, status: true, note: true, partnerResponse: true, resolution: true, openedAt: true,
+      events: {
+        where: { visibleToCustomer: true },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, type: true, toStatus: true, message: true, createdAt: true },
+      },
+      attachments: { orderBy: { createdAt: "asc" }, select: { id: true, originalName: true, contentType: true, sizeBytes: true } },
+    },
+  },
 } as const satisfies Prisma.OrderSelect;
 
 export const merchantOrderSelect = {
   ...customerOrderSelect,
+  feedback: false,
+  complaints: false,
   user: { select: { name: true, phone: true } },
 } as const satisfies Prisma.OrderSelect;
 
 type PublicVenueSource = Prisma.VenueGetPayload<{ select: typeof publicVenueSelect }>;
 type CustomerOrderSource = Prisma.OrderGetPayload<{ select: typeof customerOrderSelect }>;
 type MerchantOrderSource = Prisma.OrderGetPayload<{ select: typeof merchantOrderSelect }>;
-type CustomerOrderMappable = Omit<CustomerOrderSource, "review"> & {
-  review?: CustomerOrderSource["review"];
+type CustomerOrderMappable = Omit<CustomerOrderSource, "feedback" | "complaints"> & {
+  feedback?: CustomerOrderSource["feedback"];
+  complaints?: CustomerOrderSource["complaints"];
 };
-type MerchantOrderMappable = Omit<MerchantOrderSource, "review"> & {
-  review?: MerchantOrderSource["review"];
+type MerchantOrderMappable = Omit<MerchantOrderSource, "feedback" | "complaints"> & {
+  feedback?: CustomerOrderSource["feedback"];
+  complaints?: CustomerOrderSource["complaints"];
 };
 
 function isoDate(value: Date | string): string {
@@ -117,6 +157,7 @@ export function toPublicVenueDto(
   venue: PublicVenueSource,
   overrides: { rating?: number | null; reviewCount?: number } = {}
 ): PublicVenueDto {
+  const reviewsEnabled = getPilotConfig().features.publicReviews;
   return {
     id: venue.id,
     name: venue.name,
@@ -130,26 +171,50 @@ export function toPublicVenueDto(
     photo: venue.photo,
     contactPhone: venue.contactPhone,
     openingHours: venue.openingHours,
-    rating: overrides.rating ?? (venue.ratingCount > 0 ? venue.ratingAverage : null),
-    ...(overrides.reviewCount === undefined ? {} : { reviewCount: overrides.reviewCount }),
+    sellerLegalName: venue.owner.partnerBusiness?.legalName ?? venue.name,
+    sellerLegalType: venue.owner.partnerBusiness?.legalType ?? "",
+    rating: reviewsEnabled ? (overrides.rating ?? (venue.ratingCount > 0 ? venue.ratingAverage : null)) : null,
+    ...(overrides.reviewCount === undefined ? {} : { reviewCount: reviewsEnabled ? overrides.reviewCount : 0 }),
+    publicRatingsEnabled: reviewsEnabled,
   };
 }
 
-function toPublicBagDto(bag: CustomerOrderMappable["bag"]): PublicBagDto {
+type OfferSnapshot = Partial<Pick<PublicBagDto, "title" | "description" | "composition" | "allergens" | "storage" | "examplePhoto" | "price" | "originalPrice" | "pickupStart" | "pickupEnd">> & {
+  venueName?: string;
+  venueAddress?: string;
+  sellerLegalName?: string;
+  sellerLegalType?: string;
+};
+
+function parseOfferSnapshot(value: string): OfferSnapshot {
+  try { return JSON.parse(value) as OfferSnapshot; } catch { return {}; }
+}
+
+function toPublicBagDto(bag: CustomerOrderMappable["bag"], snapshot: OfferSnapshot = {}): PublicBagDto {
+  const venue = toPublicVenueDto(bag.venue);
   return {
     id: bag.id,
     venueId: bag.venueId,
-    title: bag.title,
-    description: bag.description,
-    allergens: bag.allergens,
-    price: bag.price,
-    originalPrice: bag.originalPrice,
+    title: snapshot.title ?? bag.title,
+    description: snapshot.description ?? bag.description,
+    composition: snapshot.composition ?? bag.composition,
+    allergens: snapshot.allergens ?? bag.allergens,
+    storage: snapshot.storage ?? bag.storage,
+    examplePhoto: snapshot.examplePhoto ?? bag.examplePhoto,
+    price: snapshot.price ?? bag.price,
+    originalPrice: snapshot.originalPrice ?? bag.originalPrice,
     quantityTotal: bag.quantityTotal,
     quantityLeft: bag.quantityLeft,
-    pickupStart: isoDate(bag.pickupStart),
-    pickupEnd: isoDate(bag.pickupEnd),
+    pickupStart: snapshot.pickupStart ?? isoDate(bag.pickupStart),
+    pickupEnd: snapshot.pickupEnd ?? isoDate(bag.pickupEnd),
     status: bag.status,
-    venue: toPublicVenueDto(bag.venue),
+    venue: {
+      ...venue,
+      name: snapshot.venueName ?? venue.name,
+      address: snapshot.venueAddress ?? venue.address,
+      sellerLegalName: snapshot.sellerLegalName ?? venue.sellerLegalName,
+      sellerLegalType: snapshot.sellerLegalType ?? venue.sellerLegalType,
+    },
   };
 }
 
@@ -162,10 +227,19 @@ export function toCustomerOrderDto(order: CustomerOrderMappable): CustomerOrderD
     pickupCode: order.pickupCode,
     createdAt: isoDate(order.createdAt),
     completedAt: order.completedAt ? isoDate(order.completedAt) : null,
-    bag: toPublicBagDto(order.bag),
-    review: order.review
-      ? { id: order.review.id, rating: order.review.rating, comment: order.review.comment }
-      : null,
+    bag: toPublicBagDto(order.bag, parseOfferSnapshot(order.offerSnapshotJson)),
+    feedback: order.feedback ? { ...order.feedback } : null,
+    complaints: (order.complaints ?? []).map((complaint) => ({
+      id: complaint.id,
+      category: complaint.category,
+      status: complaint.status,
+      note: complaint.note,
+      partnerResponse: complaint.partnerResponse,
+      resolution: complaint.resolution,
+      openedAt: isoDate(complaint.openedAt),
+      events: complaint.events.map((event) => ({ id: event.id, type: event.type, status: event.toStatus, message: event.message, createdAt: isoDate(event.createdAt) })),
+      attachments: complaint.attachments.map((attachment) => ({ id: attachment.id, name: attachment.originalName, contentType: attachment.contentType, sizeBytes: attachment.sizeBytes })),
+    })),
   };
 }
 

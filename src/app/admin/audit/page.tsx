@@ -9,11 +9,19 @@ function describe(action: string): string {
     OWNER_REMOVED: "Удалён доступ владельца",
     OPERATION_RETRY_REQUESTED: "Запрошен повтор операции",
     PRIVACY_POLICY_ACCEPTED: "Принята политика конфиденциальности",
+    TERMS_ACCEPTED: "Приняты условия использования",
+    ACCOUNT_DELETION_REQUESTED: "Запрошено удаление аккаунта",
     COMMUNICATIONS_CONSENT_GRANTED: "Дано согласие на предложения",
     COMMUNICATIONS_CONSENT_REVOKED: "Отозвано согласие на предложения",
     CUSTOMER_CONTACT_EXPORT_STARTED: "Выгружена согласованная клиентская база",
     ORDER_SUPPORT_CONTACTED: "Зафиксирован первый контакт по обращению",
     ORDER_SUPPORT_RESOLVED: "Обращение закрыто",
+    PARTNER_ONBOARDING_SUBMITTED: "Данные партнёра отправлены на проверку",
+    PARTNER_AGREEMENT_ACCEPTED: "Принят партнёрский договор",
+    PARTNER_VERIFIED: "Партнёр проверен",
+    PARTNER_REJECTED: "Партнёр отклонён",
+    PARTNER_SUSPENDED: "Партнёр приостановлен",
+    BAG_PUBLISHED: "Пакет опубликован с safety-подтверждениями",
   };
   return labels[action] ?? action;
 }

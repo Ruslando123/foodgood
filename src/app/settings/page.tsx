@@ -4,6 +4,7 @@ import { getSessionUser } from "@/lib/auth";
 import BottomNav from "@/components/BottomNav";
 import SettingsPreferences from "@/components/SettingsPreferences";
 import ConsentPreferences from "@/components/ConsentPreferences";
+import AccountDeletionPanel from "@/components/AccountDeletionPanel";
 
 export default async function SettingsPage() {
   const user = await getSessionUser();
@@ -27,6 +28,7 @@ export default async function SettingsPage() {
         <Link href="/help" className="block border-b px-4 py-3 text-sm font-medium">Помощь и поддержка →</Link>
         <Link href="/about" className="block px-4 py-3 text-sm font-medium">О приложении и документы →</Link>
       </section>
+      {user.role === "CUSTOMER" && <AccountDeletionPanel />}
     </main>
     <BottomNav />
   </div>;

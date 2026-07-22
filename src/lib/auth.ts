@@ -91,7 +91,7 @@ export async function getSessionUser(options: { includeBlocked?: boolean } = {})
     // Pages use the safe default and cannot render private data for an account
     // blocked after its session was issued. API guards include the record so
     // they can return a specific ACCOUNT_BLOCKED response.
-    if (user.status === "BLOCKED" && !options.includeBlocked) return null;
+    if (user.status !== "ACTIVE" && !options.includeBlocked) return null;
     return {
       id: user.id,
       phone: user.phone,

@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { PRIVACY_POLICY_VERSION } from "./privacy";
 import { startLeaseHeartbeat } from "./lease-heartbeat";
 import { workerClaims, workerFailures, workerJobDuration, workerLeaseLost, workerSuccesses } from "./metrics";
+import { PARTNER_AGREEMENT_VERSION, PILOT_CATEGORY_ALLOWLIST } from "./config";
 
 export type BatchQueue = "notifications";
 type BatchJobType = "FANOUT_NEW_BAG" | "PICKUP_REMINDER";
@@ -189,7 +190,24 @@ async function pickupReminder(orderId: string): Promise<JobResult> {
 }
 
 async function fanoutNewBag(bagId: string, cursor: string | undefined, batchSize: number): Promise<JobResult> {
-  const bag = await prisma.bag.findUniqueOrThrow({ where: { id: bagId }, include: { venue: true } });
+  const bag = await prisma.bag.findFirst({
+    where: {
+      id: bagId,
+      status: "ACTIVE",
+      pickupEnd: { gt: new Date() },
+      suitableForSaleAttested: true,
+      storageCompliantAttested: true,
+      allergensCurrentAttested: true,
+      categoryAllowedAttested: true,
+      venue: {
+        status: "ACTIVE",
+        category: { in: [...PILOT_CATEGORY_ALLOWLIST] },
+        owner: { partnerBusiness: { is: { verificationStatus: "VERIFIED", agreements: { some: { agreementVersion: PARTNER_AGREEMENT_VERSION } } } } },
+      },
+    },
+    include: { venue: true },
+  });
+  if (!bag) return { done: true };
   const followers = await prisma.favorite.findMany({
     where: {
       venueId: bag.venueId,

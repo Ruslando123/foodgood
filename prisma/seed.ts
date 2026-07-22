@@ -1,5 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { PRIVACY_POLICY_VERSION } from "../src/lib/privacy";
+import { PARTNER_AGREEMENT_VERSION, isPilotCategoryAllowed } from "../src/lib/config";
+import { TERMS_VERSION } from "../src/lib/legal";
 
 const prisma = new PrismaClient();
 
@@ -23,13 +25,20 @@ async function main() {
   await prisma.telegramLoginRequest.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.batchJob.deleteMany();
+  await prisma.complaintAttachment.deleteMany();
+  await prisma.complaintEvent.deleteMany();
+  await prisma.complaint.deleteMany();
+  await prisma.postPickupFeedback.deleteMany();
   await prisma.review.deleteMany();
   await prisma.favorite.deleteMany();
   await prisma.notification.deleteMany();
   await prisma.order.deleteMany();
   await prisma.bag.deleteMany();
   await prisma.venue.deleteMany();
+  await prisma.partnerAgreementAcceptance.deleteMany();
+  await prisma.partnerBusiness.deleteMany();
   await prisma.auditLog.deleteMany();
+  await prisma.accountDeletionRequest.deleteMany();
   await prisma.user.deleteMany();
   await prisma.systemState.deleteMany();
 
@@ -39,12 +48,20 @@ async function main() {
   const merchant2 = await prisma.user.create({
     data: { phone: "+77010000002", name: "Magnum Кулинария", role: "MERCHANT" },
   });
+  await Promise.all([
+    prisma.partnerBusiness.create({
+      data: { ownerId: merchant.id, legalType: "IP", legalName: "ИП Демо-мерчант", businessIdentifier: "900101300001", contactName: "Демо-мерчант", contactPhone: merchant.phone, verificationStatus: "VERIFIED", verifiedAt: new Date(), agreements: { create: { agreementVersion: PARTNER_AGREEMENT_VERSION, acceptedById: merchant.id } } },
+    }),
+    prisma.partnerBusiness.create({
+      data: { ownerId: merchant2.id, legalType: "TOO", legalName: "ТОО Magnum Кулинария", businessIdentifier: "900101300002", contactName: "Magnum Кулинария", contactPhone: merchant2.phone, verificationStatus: "VERIFIED", verifiedAt: new Date(), agreements: { create: { agreementVersion: PARTNER_AGREEMENT_VERSION, acceptedById: merchant2.id } } },
+    }),
+  ]);
   const acceptedAt = new Date();
   await prisma.user.createMany({
     data: [
-      { phone: "+77070000001", name: "Демо-покупатель", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt },
-      { phone: "+77070000002", name: "E2E покупатель 2", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt },
-      { phone: "+77070000004", name: "E2E покупатель 4", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt },
+      { phone: "+77070000001", name: "Демо-покупатель", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt, termsVersion: TERMS_VERSION, termsAcceptedAt: acceptedAt },
+      { phone: "+77070000002", name: "E2E покупатель 2", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt, termsVersion: TERMS_VERSION, termsAcceptedAt: acceptedAt },
+      { phone: "+77070000004", name: "E2E покупатель 4", role: "CUSTOMER", privacyPolicyVersion: PRIVACY_POLICY_VERSION, privacyAcceptedAt: acceptedAt, termsVersion: TERMS_VERSION, termsAcceptedAt: acceptedAt },
     ],
   });
   await prisma.user.create({ data: { phone: "+77010000003", name: "Демо-админ", role: "ADMIN" } });
@@ -207,7 +224,21 @@ async function main() {
     },
   ];
 
-  for (const bag of bags) await prisma.bag.create({ data: bag });
+  for (const bag of bags) {
+    const venue = venues.find(({ id }) => id === bag.venueId)!;
+    await prisma.bag.create({ data: {
+      ...bag,
+      composition: `Минимум 2 позиции. Возможный состав: ${bag.description}`,
+      storage: "Забрать в окно выдачи, соблюдать рекомендации продавца и употребить в тот же день",
+      examplePhoto: bag.title.includes("Хлеб") ? "/images/food-bread.jpg" : bag.title.includes("выпеч") ? "/images/food-coffee.jpg" : "/images/food-bowl.jpg",
+      suitableForSaleAttested: true,
+      storageCompliantAttested: true,
+      allergensCurrentAttested: true,
+      categoryAllowedAttested: isPilotCategoryAllowed(venue.category),
+      safetyAttestedAt: new Date(),
+      safetyAttestedById: venue.ownerId,
+    } });
+  }
 
   console.log(
     `Seed готов: ${venues.length} заведений, ${bags.length} пакетов.\n` +

@@ -57,8 +57,8 @@ export default async function AdminCustomersPage({
               <p className="mt-1 text-xs text-muted">{user._count.orders} заказов · {user._count.favorites} избранных · {user._count.reviews} отзывов</p>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1.5">
-              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${user.status === "BLOCKED" ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"}`}>
-                {user.status === "BLOCKED" ? "Заблокирован" : "Активен"}
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${user.status === "ACTIVE" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+                {user.status === "ACTIVE" ? "Активен" : user.status === "BLOCKED" ? "Заблокирован" : "Деактивирован"}
               </span>
               <span className={`text-xs font-medium ${exportable ? "text-primary" : "text-muted"}`}>
                 {exportable ? "Связь разрешена" : "Без рассылок"}

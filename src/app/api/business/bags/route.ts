@@ -4,6 +4,8 @@ import { requireMerchant } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
+import { assertPartnerCanPublish, parseSafetyAttestations, safetyAttestationData } from "@/lib/partner-onboarding";
+import { assertVenueInPilotScope, getPilotConfig } from "@/lib/pilot";
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
@@ -31,16 +33,21 @@ export async function POST(req: NextRequest) {
   return apiRoute(req, async () => {
     const user = await requireMerchant();
     const body = await readJsonObject(req);
+    const safety = parseSafetyAttestations(body.safetyAttestations);
     const venueId = requiredString(body.venueId, "venueId", { max: 64 });
     const title = requiredString(body.title, "title", { max: 120 });
     const description = optionalString(body.description, "description", 1000);
+    const composition = requiredString(body.composition, "composition", { min: 3, max: 1000 });
     const allergens = optionalString(body.allergens, "allergens", 300);
+    const storage = requiredString(body.storage, "storage", { min: 3, max: 500 });
+    const examplePhoto = optionalString(body.examplePhoto, "examplePhoto", 1000);
     const priceNum = integer(body.price, "price", { min: 1, max: 10_000_000 });
     const originalNum = integer(body.originalPrice, "originalPrice", {
       min: priceNum,
       max: 10_000_000,
     });
-    const qty = integer(body.quantity, "quantity", { min: 1, max: 10_000 });
+    const pilot = getPilotConfig();
+    const qty = integer(body.quantity, "quantity", { min: 1, max: pilot.limits.quantityPerBag });
     const start = dateValue(body.pickupStart, "pickupStart");
     const end = dateValue(body.pickupEnd, "pickupEnd");
 
@@ -49,23 +56,44 @@ export async function POST(req: NextRequest) {
       throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
     }
     if (venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
+    const partner = await prisma.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
+    assertPartnerCanPublish(partner, venue.category);
+    assertVenueInPilotScope(venue);
     if (end <= start || end <= new Date()) {
       throw new ApiError(400, "INVALID_PICKUP_WINDOW", "Некорректное окно выдачи");
     }
-
+    if (end.getTime() - start.getTime() > pilot.limits.pickupWindowHours * 60 * 60_000) {
+      throw new ApiError(400, "PICKUP_WINDOW_TOO_LONG", `Окно выдачи пилота — не более ${pilot.limits.pickupWindowHours} ч`);
+    }
     const bag = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Venue" WHERE id = ${venue.id} FOR UPDATE`;
+      const lockedVenue = await tx.venue.findUnique({ where: { id: venue.id } });
+      if (!lockedVenue || lockedVenue.ownerId !== user.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
+      if (lockedVenue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
+      assertVenueInPilotScope(lockedVenue);
+      await tx.$queryRaw`SELECT id FROM "PartnerBusiness" WHERE "ownerId" = ${user.id} FOR SHARE`;
+      const lockedPartner = await tx.partnerBusiness.findUnique({ where: { ownerId: user.id }, include: { agreements: true } });
+      assertPartnerCanPublish(lockedPartner, lockedVenue.category);
+      const activeBagCount = await tx.bag.count({ where: { venueId: venue.id, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } } });
+      if (activeBagCount >= pilot.limits.activeBagsPerVenue) {
+        throw new ApiError(409, "PILOT_BAG_LIMIT", `Для заведения доступно не более ${pilot.limits.activeBagsPerVenue} активных пакетов`);
+      }
       const created = await tx.bag.create({
         data: {
           venueId: venue.id,
           title,
           description,
+          composition,
           allergens,
+          storage,
+          examplePhoto,
           price: priceNum,
           originalPrice: originalNum,
           quantityTotal: qty,
           quantityLeft: qty,
           pickupStart: start,
           pickupEnd: end,
+          ...safetyAttestationData(safety, user.id),
         },
         include: { venue: true },
       });
@@ -87,6 +115,9 @@ export async function POST(req: NextRequest) {
         quantity: created.quantityTotal,
         clientSource: clientSourceFromRequest(req),
         dedupeKey: `partner_offer_created:${created.id}`,
+      });
+      await tx.auditLog.create({
+        data: { actorId: user.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: venue.id, partnerBusinessId: lockedPartner!.id, safetyAttestations: true }) },
       });
       return created;
     });

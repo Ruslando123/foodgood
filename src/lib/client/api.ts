@@ -11,8 +11,13 @@ export type Venue = {
   twoGisUrl: string;
   category: string;
   photo: string;
+  contactPhone: string;
+  openingHours: string;
+  sellerLegalName: string;
+  sellerLegalType: string;
   rating?: number | null;
   reviewCount?: number;
+  publicRatingsEnabled?: boolean;
   reviews?: Array<{ id: string; rating: number; comment: string; createdAt: string; user: { name: string | null } }>;
 };
 
@@ -21,7 +26,10 @@ export type Bag = {
   venueId: string;
   title: string;
   description: string;
+  composition: string;
   allergens: string;
+  storage: string;
+  examplePhoto: string;
   price: number;
   originalPrice: number;
   quantityTotal: number;
@@ -41,12 +49,19 @@ export type Order = {
     | "RESERVED"
     | "READY_FOR_PICKUP"
     | "COMPLETED"
-    | "CANCELLED"
-    | "EXPIRED";
+    | "CANCELLED_BY_USER"
+    | "CANCELLED_BY_PARTNER"
+    | "NO_SHOW"
+    | "DISPUTED";
   pickupCode: string;
   createdAt: string;
   bag: Bag;
-  review?: { id: string; rating: number; comment: string } | null;
+  feedback?: { id: string; quality: number; freshness: number; match: number; value: number; pickup: number; comment: string } | null;
+  complaints?: Array<{
+    id: string; category: string; status: string; note: string; partnerResponse: string; resolution: string; openedAt: string;
+    events: Array<{ id: string; type: string; status: string | null; message: string; createdAt: string }>;
+    attachments: Array<{ id: string; name: string; contentType: string; sizeBytes: number }>;
+  }>;
 };
 
 export type SessionUser = {
@@ -55,6 +70,16 @@ export type SessionUser = {
   name: string | null;
   role: string;
   status?: string;
+};
+
+export type PublicPilotConfig = {
+  mode: "PAY_AT_VENUE";
+  cityId: string;
+  cityName: string;
+  district: { name: string; radiusKm: number };
+  limits: { venues: number; activeBagsPerVenue: number; quantityPerBag: number; quantityPerOrder: number; activeOrdersPerCustomer: number; pickupWindowHours: number };
+  features: { publicReviews: boolean; delivery: false; prepaid: false; loyalty: false; ai: false };
+  allowedCategories: string[];
 };
 
 export class ApiError extends Error {

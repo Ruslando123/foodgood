@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import {
   cancelBag,
   cancelOrder,
+  cancelOrderByPartner,
   createOrder,
   customerOrderScopeWhere,
   expireStale,
@@ -61,6 +62,16 @@ describe("бесплатная бронь", () => {
     await expect(prisma.productEvent.findUnique({
       where: { dedupeKey: `order_created:${order.id}` },
     })).resolves.toMatchObject({ amount: 3600, quantity: 2 });
+    await expect(prisma.orderStatusHistory.findMany({ where: { orderId: order.id } })).resolves.toEqual([
+      expect.objectContaining({
+        status: "RESERVED",
+        actor: customer.id,
+        actorRole: "CUSTOMER",
+        reason: "RESERVATION_CREATED",
+        timestamp: expect.any(Date),
+      }),
+    ]);
+    await expect(prisma.notification.findUnique({ where: { dedupeKey: `order-reserved:${order.id}` } })).resolves.toMatchObject({ type: "ORDER_RESERVED" });
   });
 
   it("не позволяет продать последний пакет двум клиентам", async () => {
@@ -184,11 +195,16 @@ describe("бесплатная бронь", () => {
 
     const cancelled = await cancelOrder(customer.id, order.id);
 
-    expect(cancelled.status).toBe("CANCELLED");
+    expect(cancelled.status).toBe("CANCELLED_BY_USER");
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({
       quantityLeft: 1,
       status: "ACTIVE",
     });
+    await expect(prisma.orderStatusHistory.findMany({ where: { orderId: order.id }, orderBy: { timestamp: "asc" } })).resolves.toMatchObject([
+      { status: "RESERVED" },
+      { status: "CANCELLED_BY_USER", actor: customer.id, actorRole: "CUSTOMER", reason: "CUSTOMER_REQUEST" },
+    ]);
+    await expect(prisma.notification.findUnique({ where: { dedupeKey: `order-cancelled:${order.id}` } })).resolves.toMatchObject({ type: "ORDER_CANCELLED" });
   });
 
   it("не создаёт новую бронь у приостановленного заведения", async () => {
@@ -198,6 +214,22 @@ describe("бесплатная бронь", () => {
     await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("временно недоступно");
     await expect(prisma.order.count()).resolves.toBe(0);
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 2 });
+  });
+
+  it("не создаёт бронь после приостановки юридического партнёра", async () => {
+    const { customer, partner, bag } = await createFixtures({ quantity: 2 });
+    await prisma.partnerBusiness.update({ where: { id: partner.id }, data: { verificationStatus: "SUSPENDED" } });
+
+    await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("Пакет недоступен");
+    await expect(prisma.order.count()).resolves.toBe(0);
+  });
+
+  it("не создаёт бронь без полного snapshot подтверждений безопасности", async () => {
+    const { customer, bag } = await createFixtures({ quantity: 2 });
+    await prisma.bag.update({ where: { id: bag.id }, data: { allergensCurrentAttested: false } });
+
+    await expect(createOrder(customer.id, bag.id, 1)).rejects.toThrow("Пакет недоступен");
+    await expect(prisma.order.count()).resolves.toBe(0);
   });
 
   it("проверяет начало выдачи внутри транзакции отмены", async () => {
@@ -221,7 +253,57 @@ describe("выдача в заведении", () => {
 
     expect(completed.status).toBe("COMPLETED");
     expect(completed.completedAt).toBeInstanceOf(Date);
+    await expect(prisma.notification.findUnique({ where: { dedupeKey: `order-completed:${order.id}` } })).resolves.toMatchObject({ type: "ORDER_COMPLETED" });
     await expect(redeemOrder(merchant.id, order.pickupCode, true)).rejects.toThrow("уже выдан");
+    await expect(prisma.pickupJournal.findUniqueOrThrow({ where: { orderId: order.id } })).resolves.toMatchObject({
+      actor: merchant.id,
+      actorRole: "PARTNER",
+      pickupCodeSuffix: order.pickupCode.slice(-2),
+    });
+  });
+
+  it("защищает выдачу и журнал от параллельного повтора", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    const results = await Promise.allSettled([
+      redeemOrder(merchant.id, order.pickupCode, true),
+      redeemOrder(merchant.id, order.pickupCode, true),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    await expect(prisma.pickupJournal.count({ where: { orderId: order.id } })).resolves.toBe(1);
+    await expect(prisma.orderStatusHistory.count({ where: { orderId: order.id, status: "COMPLETED" } })).resolves.toBe(1);
+  });
+
+  it("партнёр отменяет бронь с причиной, возвращает остаток и оставляет audit", async () => {
+    const { merchant, customer, bag } = await createFixtures({ quantity: 2 });
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    const cancelled = await cancelOrderByPartner(merchant.id, order.id, "Оборудование вышло из строя");
+
+    expect(cancelled.status).toBe("CANCELLED_BY_PARTNER");
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 2 });
+    await expect(prisma.notification.findUniqueOrThrow({ where: { dedupeKey: `order-cancelled-by-partner:${order.id}` } })).resolves.toMatchObject({ type: "ORDER_CANCELLED_BY_PARTNER", userId: customer.id });
+    await expect(prisma.auditLog.findFirstOrThrow({ where: { action: "ORDER_CANCELLED_BY_PARTNER", entityId: order.id } })).resolves.toMatchObject({ actorId: merchant.id });
+    const entry = await prisma.orderStatusHistory.findFirstOrThrow({ where: { orderId: order.id, status: "CANCELLED_BY_PARTNER" } });
+    expect(JSON.parse(entry.metadataJson)).toEqual({ reason: "Оборудование вышло из строя" });
+  });
+
+  it("не возвращает остаток дважды при параллельной отмене партнёром", async () => {
+    const { merchant, customer, bag } = await createFixtures({ quantity: 2 });
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    const results = await Promise.allSettled([
+      cancelOrderByPartner(merchant.id, order.id, "Нет ингредиентов"),
+      cancelOrderByPartner(merchant.id, order.id, "Нет ингредиентов"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 2 });
+    await expect(prisma.orderStatusHistory.count({ where: { orderId: order.id, status: "CANCELLED_BY_PARTNER" } })).resolves.toBe(1);
+    await expect(prisma.notification.count({ where: { dedupeKey: `order-cancelled-by-partner:${order.id}` } })).resolves.toBe(1);
   });
 
   it("переводит бронь в готовую и создаёт уведомление", async () => {
@@ -244,10 +326,10 @@ describe("выдача в заведении", () => {
     await createOrder(customer.id, bag.id, 1);
     await createOrder(secondCustomer.id, bag.id, 1);
 
-    const cancelledBag = await cancelBag(merchant.id, bag.id);
+    const cancelledBag = await cancelBag(merchant.id, bag.id, "Сегодня нет возможности приготовить пакет");
 
     expect(cancelledBag.status).toBe("CANCELLED");
-    await expect(prisma.order.count({ where: { bagId: bag.id, status: "CANCELLED" } })).resolves.toBe(2);
+    await expect(prisma.order.count({ where: { bagId: bag.id, status: "CANCELLED_BY_PARTNER" } })).resolves.toBe(2);
   });
 
   it("сохраняет корректное состояние при одновременной отмене брони и предложения", async () => {
@@ -256,14 +338,15 @@ describe("выдача в заведении", () => {
 
     const results = await Promise.allSettled([
       cancelOrder(customer.id, order.id),
-      cancelBag(merchant.id, bag.id),
+      cancelBag(merchant.id, bag.id, "Пакет повреждён"),
     ]);
 
     for (const result of results) {
       if (result.status === "rejected") expect(result.reason).toBeInstanceOf(OrderError);
     }
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ status: "CANCELLED" });
-    await expect(prisma.order.findUniqueOrThrow({ where: { id: order.id } })).resolves.toMatchObject({ status: "CANCELLED" });
+    const final = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(["CANCELLED_BY_USER", "CANCELLED_BY_PARTNER"]).toContain(final.status);
   });
 
   it("отменяет 1000 броней и записывает аналитику пакетно", async () => {
@@ -279,9 +362,9 @@ describe("выдача в заведении", () => {
       })),
     });
 
-    await cancelBag(merchant.id, bag.id);
+    await cancelBag(merchant.id, bag.id, "Заведение закрылось раньше");
 
-    await expect(prisma.order.count({ where: { bagId: bag.id, status: "CANCELLED" } })).resolves.toBe(1_000);
+    await expect(prisma.order.count({ where: { bagId: bag.id, status: "CANCELLED_BY_PARTNER" } })).resolves.toBe(1_000);
     await expect(prisma.productEvent.count({ where: { bagId: bag.id, name: "order_cancelled" } })).resolves.toBe(1_000);
   });
 });
@@ -336,7 +419,7 @@ describe("жизненный цикл броней", () => {
         userId: customer.id,
         quantity: 1,
         totalPrice: bag.price,
-        status: "CANCELLED",
+        status: "CANCELLED_BY_USER",
         pickupCode: "HISTORY",
       },
     });
@@ -350,7 +433,7 @@ describe("жизненный цикл броней", () => {
 
     expect(activeOrders.map(({ id }) => id)).toEqual([active.id]);
     expect(history).toHaveLength(1);
-    expect(history[0].status).toBe("CANCELLED");
+    expect(history[0].status).toBe("CANCELLED_BY_USER");
   });
 
   it("истекает закончившиеся предложения и активные брони", async () => {
@@ -359,7 +442,7 @@ describe("жизненный цикл броней", () => {
       pickupEnd: inMinutes(-60),
       bagStatus: "ACTIVE",
     });
-    await prisma.order.create({
+    const expiring = await prisma.order.create({
       data: {
         bagId: bag.id,
         userId: customer.id,
@@ -372,7 +455,9 @@ describe("жизненный цикл броней", () => {
 
     expect(await expireStale()).toBe(2);
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ status: "EXPIRED" });
-    await expect(prisma.order.findUniqueOrThrow({ where: { pickupCode: "EXPIRE" } })).resolves.toMatchObject({ status: "EXPIRED" });
+    await expect(prisma.order.findUniqueOrThrow({ where: { pickupCode: "EXPIRE" } })).resolves.toMatchObject({ status: "NO_SHOW" });
+    await expect(prisma.orderStatusHistory.findFirstOrThrow({ where: { orderId: expiring.id, status: "NO_SHOW" } })).resolves.toMatchObject({ actor: "SYSTEM", actorRole: "SYSTEM", reason: "PICKUP_WINDOW_EXPIRED" });
+    await expect(prisma.notification.findUnique({ where: { dedupeKey: `order-expired:${expiring.id}` } })).resolves.toMatchObject({ type: "ORDER_EXPIRED" });
   });
 });
 
@@ -392,15 +477,31 @@ describe("идемпотентность и безопасные DTO", () => {
     expect(second.id).toBe(first.id);
     expect(new Set(concurrent.map(({ id }) => id))).toEqual(new Set([first.id]));
     await expect(prisma.order.count()).resolves.toBe(1);
+    await expect(prisma.orderStatusHistory.count({ where: { orderId: first.id, status: "RESERVED" } })).resolves.toBe(1);
     await expect(prisma.bag.findUniqueOrThrow({ where: { id: bag.id } })).resolves.toMatchObject({ quantityLeft: 1 });
     const entry = await prisma.orderIdempotencyKey.findUniqueOrThrow({ where: { key } });
     expect(entry.expiresAt.getTime()).toBeGreaterThan(pickupEnd.getTime());
+  });
+
+  it("не разрешает изменять или удалять записи журналов", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const order = await createOrder(customer.id, bag.id, 1);
+    await redeemOrder(merchant.id, order.pickupCode, true);
+    const history = await prisma.orderStatusHistory.findFirstOrThrow({ where: { orderId: order.id } });
+    const pickup = await prisma.pickupJournal.findUniqueOrThrow({ where: { orderId: order.id } });
+
+    await expect(prisma.orderStatusHistory.update({ where: { id: history.id }, data: { reason: "CHANGED" } })).rejects.toThrow("append-only");
+    await expect(prisma.pickupJournal.delete({ where: { id: pickup.id } })).rejects.toThrow("append-only");
   });
 
   it("не раскрывает внутренние поля пользователя и брони", async () => {
     const { customer, bag } = await createFixtures();
     await prisma.user.update({ where: { id: customer.id }, data: { telegramId: "secret", sessionVersion: 7 } });
     const order = await createOrder(customer.id, bag.id, 1);
+    await prisma.bag.update({
+      where: { id: bag.id },
+      data: { title: "Изменённое после брони", composition: "Новый состав", allergens: "Новые аллергены" },
+    });
     const customerView = await prisma.order.findUniqueOrThrow({
       where: { id: order.id },
       select: customerOrderSelect,
@@ -419,7 +520,7 @@ describe("идемпотентность и безопасные DTO", () => {
     expect(json).not.toContain("idempotencyRecordId");
     expect(json).not.toContain("payment");
     expect(JSON.parse(json)).toMatchObject({
-      customer: { status: "RESERVED", totalPrice: bag.price },
+      customer: { status: "RESERVED", totalPrice: bag.price, bag: { title: bag.title, composition: bag.composition, allergens: bag.allergens } },
       merchant: { user: { phone: customer.phone } },
     });
   });

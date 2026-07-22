@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { checkVenuePhotoStorage } from "@/lib/venue-photos";
 import { json } from "@/shared/server/api";
 import { checkRedisHealth } from "@/lib/redis";
+import { readOperationalSignals } from "@/lib/operational-signals";
 
 type DeepPayload = Record<string, unknown>;
 const globalHealth = globalThis as unknown as { deepHealth?: { expiresAt: number; payload: DeepPayload } };
@@ -13,12 +14,13 @@ export async function GET() {
   const checkedAt = new Date();
   try {
     await prisma.$queryRaw`SELECT 1`;
-    const [workers, failedJobs, overdueJobs, storage, redis] = await Promise.all([
+    const [workers, failedJobs, overdueJobs, storage, redis, operationalSignals] = await Promise.all([
       prisma.systemState.findMany({ where: { key: { in: ["worker:expiry", "worker:notifications"] } } }),
       prisma.batchJob.count({ where: { status: "FAILED" } }),
       prisma.batchJob.count({ where: { status: { in: ["PENDING", "RETRY", "PROCESSING"] }, nextAttemptAt: { lt: new Date(checkedAt.getTime() - 5 * 60_000) } } }),
       checkVenuePhotoStorage(),
       checkRedisHealth(),
+      readOperationalSignals(),
     ]);
     const requiredWorkers = process.env.NODE_ENV === "production";
     const requiredWorkerNames = ["expiry", "notifications"];
@@ -31,11 +33,26 @@ export async function GET() {
     const workersFresh = requiredWorkerNames.every((name) => workerHealth[name] === "ok");
     const redisRequired = process.env.NODE_ENV === "production" || process.env.REDIS_REQUIRED === "true";
     const redisDegraded = redis === "unavailable" || (redisRequired && redis !== "ok");
-    const degraded = !storage || redisDegraded || (requiredWorkers && !workersFresh) || failedJobs > 0 || overdueJobs > 0;
+    const operationalDegraded = operationalSignals.inventoryMismatchBags > 0
+      || operationalSignals.overdueComplaints > 0
+      || operationalSignals.delayedReminders > 0;
+    const degraded = !storage || redisDegraded || (requiredWorkers && !workersFresh) || failedJobs > 0 || overdueJobs > 0 || operationalDegraded;
     const payload: DeepPayload = {
       status: degraded ? "degraded" : "ok",
       checkedAt: checkedAt.toISOString(),
-      checks: { database: "ok", redis, storage: storage ? "ok" : "degraded", workers: workerHealth, batchJobs: { failed: failedJobs, overdue: overdueJobs } },
+      checks: {
+        database: "ok",
+        redis,
+        storage: storage ? "ok" : "degraded",
+        workers: workerHealth,
+        batchJobs: { failed: failedJobs, overdue: overdueJobs },
+        operations: {
+          inventoryMismatchBags: operationalSignals.inventoryMismatchBags,
+          overdueComplaints: operationalSignals.overdueComplaints,
+          delayedReminders: operationalSignals.delayedReminders,
+        },
+        security: { suspiciousLoginChallenges: operationalSignals.suspiciousLoginChallenges },
+      },
     };
     globalHealth.deepHealth = { expiresAt: Date.now() + 20_000, payload };
     return json(payload, { headers: { "X-Health-Cache": "MISS" } });

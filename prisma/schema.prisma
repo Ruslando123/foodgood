@@ -13,18 +13,24 @@ model User {
   telegramId                     String?   @unique
   name                           String?
   role                           String    @default("CUSTOMER") // CUSTOMER | MERCHANT | ADMIN
-  status                         String    @default("ACTIVE") // ACTIVE | BLOCKED
+  status                         String    @default("ACTIVE") // ACTIVE | BLOCKED | DEACTIVATED
   notificationReminders          Boolean   @default(true)
   notificationOffers             Boolean   @default(true)
   /// Versioned acceptance of the privacy policy. Both fields are retained so
   /// the pilot can demonstrate exactly which text a customer accepted and when.
   privacyPolicyVersion           String?
   privacyAcceptedAt              DateTime?
+  /// Terms are accepted independently from the privacy policy.  Keeping both
+  /// snapshots on the account makes the current gate cheap, while AuditLog is
+  /// the append-only history of every acceptance event.
+  termsVersion                   String?
+  termsAcceptedAt                DateTime?
   /// Optional marketing/communications permission. The offers preference is
   /// kept in sync with it; delivery also requires the current privacy version.
   communicationsConsent          Boolean   @default(false)
   communicationsConsentUpdatedAt DateTime?
   sessionVersion                 Int       @default(0)
+  deactivatedAt                  DateTime?
   createdAt                      DateTime  @default(now())
 
   venues             Venue[]
@@ -32,10 +38,54 @@ model User {
   auditLogs          AuditLog[]
   notifications      Notification[]
   favorites          Favorite[]
-  reviews            Review[]
-  supportAssignments Order[]        @relation("OrderSupportOwner")
+  reviews                Review[]
+  feedback               PostPickupFeedback[]
+  complaints             Complaint[]           @relation("ComplaintCustomer")
+  complaintAssignments   Complaint[]           @relation("ComplaintOwner")
+  complaintEvents        ComplaintEvent[]
+  complaintAttachments   ComplaintAttachment[]
+  partnerBusiness        PartnerBusiness?       @relation("PartnerBusinessOwner")
+  partnerAgreements      PartnerAgreementAcceptance[] @relation("PartnerAgreementAcceptor")
+  deletionRequests       AccountDeletionRequest[]
 
   @@index([role, communicationsConsent])
+}
+
+/// Legal entity operating one or more pilot venues. Existing merchants are
+/// backfilled as PENDING and must be explicitly verified before publication.
+model PartnerBusiness {
+  id                 String   @id @default(cuid())
+  ownerId            String   @unique
+  legalType          String?  // IP | TOO
+  legalName          String?
+  businessIdentifier String?  @unique // IIN for IP, BIN for TOO
+  contactName        String?
+  contactPhone       String?
+  verificationStatus String   @default("PENDING") // PENDING | VERIFIED | REJECTED | SUSPENDED
+  verificationNote   String?
+  verifiedAt         DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  owner      User                         @relation("PartnerBusinessOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  agreements PartnerAgreementAcceptance[]
+
+  @@index([verificationStatus, updatedAt])
+}
+
+/// Append-only, versioned evidence that a partner accepted the current terms.
+model PartnerAgreementAcceptance {
+  id                String   @id @default(cuid())
+  partnerBusinessId String
+  agreementVersion  String
+  acceptedById      String
+  acceptedAt        DateTime @default(now())
+
+  partnerBusiness PartnerBusiness @relation(fields: [partnerBusinessId], references: [id], onDelete: Restrict)
+  acceptedBy      User            @relation("PartnerAgreementAcceptor", fields: [acceptedById], references: [id], onDelete: Restrict)
+
+  @@unique([partnerBusinessId, agreementVersion], map: "PartnerAgreementAcceptance_partnerBusinessId_agreementVersion_k")
+  @@index([acceptedById, acceptedAt])
 }
 
 model SystemState {
@@ -112,6 +162,7 @@ model Venue {
   bags      Bag[]
   favorites Favorite[]
   reviews   Review[]
+  feedback  PostPickupFeedback[]
 
   @@index([cityId, status])
   @@index([ownerId])
@@ -120,25 +171,51 @@ model Venue {
 }
 
 model Bag {
-  id            String   @id @default(cuid())
-  venueId       String
-  title         String
-  description   String   @default("")
-  allergens     String   @default("") // possible allergens, free-text label shown to customers
-  price         Int // sale price, KZT
-  originalPrice Int // estimated original value, KZT
-  quantityTotal Int
-  quantityLeft  Int
-  pickupStart   DateTime
-  pickupEnd     DateTime
-  status        String   @default("ACTIVE") // ACTIVE | SOLD_OUT | EXPIRED | CANCELLED
-  createdAt     DateTime @default(now())
+  id                         String    @id @default(cuid())
+  venueId                    String
+  title                      String
+  description                String    @default("")
+  composition                String    @default("") // minimum guaranteed contents or food groups
+  allergens                  String    @default("") // possible allergens, free-text label shown to customers
+  storage                    String    @default("") // storage instructions before consumption
+  examplePhoto               String    @default("") // illustrative photo URL; actual contents may differ
+  price                      Int // sale price, KZT
+  originalPrice              Int // estimated original value, KZT
+  quantityTotal              Int
+  quantityLeft               Int
+  pickupStart                DateTime
+  pickupEnd                  DateTime
+  status                     String    @default("ACTIVE") // ACTIVE | SOLD_OUT | EXPIRED | CANCELLED
+  suitableForSaleAttested    Boolean   @default(false)
+  storageCompliantAttested   Boolean   @default(false)
+  allergensCurrentAttested   Boolean   @default(false)
+  categoryAllowedAttested    Boolean   @default(false)
+  safetyAttestedAt           DateTime?
+  safetyAttestedById         String?
+  createdAt                  DateTime  @default(now())
 
   venue  Venue   @relation(fields: [venueId], references: [id])
   orders Order[]
 
   @@index([status, pickupEnd])
   @@index([venueId, createdAt(sort: Desc)])
+}
+
+/// A customer-initiated erasure request.  The account is deactivated and all
+/// sessions are revoked immediately; legally required order, receipt-support
+/// and audit history remains linked until the retention review is completed.
+model AccountDeletionRequest {
+  id              String    @id @default(cuid())
+  userId          String
+  status          String    @default("PENDING") // PENDING | COMPLETED | REJECTED
+  requestedAt     DateTime  @default(now())
+  processedAt     DateTime?
+  retentionReason String    @default("")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, requestedAt(sort: Desc)])
+  @@index([status, requestedAt])
 }
 
 model Order {
@@ -148,34 +225,155 @@ model Order {
   quantity                 Int       @default(1)
   totalPrice               Int // KZT
   clientSource             String    @default("direct") // first-touch source captured at checkout
-  status                   String    @default("RESERVED") // RESERVED | READY_FOR_PICKUP | COMPLETED | CANCELLED | EXPIRED
+  status                   String    @default("RESERVED") // RESERVED | READY_FOR_PICKUP | COMPLETED | CANCELLED_BY_USER | CANCELLED_BY_PARTNER | NO_SHOW | DISPUTED
   pickupCode               String    @unique
   createdAt                DateTime  @default(now())
   completedAt              DateTime?
-  supportStatus            String    @default("NONE") // NONE | OPEN | RESOLVED
-  supportCategory          String? // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | OTHER
-  supportNote              String    @default("")
-  supportOpenedAt          DateTime?
-  supportOwnerId           String?
-  supportFirstContactAt    DateTime?
-  supportVenueResponse     String    @default("")
-  supportCustomerConfirmed Boolean?
-  supportResolvedAt        DateTime?
-  supportResolution        String    @default("")
   idempotencyRecordId      String?   @unique
+  /// Immutable customer-visible offer evidence captured at reservation time.
+  offerSnapshotJson        String    @default("{}")
 
   bag               Bag                  @relation(fields: [bagId], references: [id])
   user              User                 @relation(fields: [userId], references: [id])
-  supportOwner      User?                @relation("OrderSupportOwner", fields: [supportOwnerId], references: [id], onDelete: SetNull)
   review            Review?
+  feedback          PostPickupFeedback?
+  complaints        Complaint[]
   idempotencyRecord OrderIdempotencyKey? @relation(fields: [idempotencyRecordId], references: [id], onDelete: SetNull)
+  statusHistory     OrderStatusHistory[]
+  pickupJournal     PickupJournal?
 
   @@index([userId, status])
   @@index([userId, status, createdAt(sort: Desc), id(sort: Desc)])
   @@index([bagId, status])
   @@index([createdAt])
-  @@index([supportStatus, supportOpenedAt])
-  @@index([supportOwnerId, supportStatus])
+}
+
+/// Operational complaint snapshot. All state changes are also appended to
+/// ComplaintEvent so customer-visible history and accountability are durable.
+model Complaint {
+  id                String    @id @default(cuid())
+  orderId           String
+  customerId        String
+  category          String // VENUE_CLOSED | ORDER_MISSING | POOR_QUALITY | WRONG_CONTENT | FOOD_SAFETY | OTHER
+  status            String    @default("OPEN") // OPEN | UNDER_REVIEW | WAITING_FOR_PARTNER | RESOLVED | ESCALATED | CLOSED
+  note              String    @default("")
+  ownerId           String?
+  firstContactAt    DateTime?
+  partnerResponse   String    @default("")
+  resolution        String    @default("")
+  customerConfirmed Boolean?
+  openedAt          DateTime  @default(now())
+  escalatedAt       DateTime?
+  resolvedAt        DateTime?
+  closedAt          DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  order       Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customer    User                  @relation("ComplaintCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  owner       User?                 @relation("ComplaintOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  events      ComplaintEvent[]
+  attachments ComplaintAttachment[]
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([status, openedAt])
+  @@index([ownerId, status])
+  @@index([orderId, createdAt(sort: Desc)])
+}
+
+/// Append-only complaint timeline. `visibleToCustomer` prevents internal
+/// operational notes from leaking while preserving the complete audit trail.
+model ComplaintEvent {
+  id                String   @id @default(cuid())
+  complaintId       String
+  actorId           String?
+  type              String
+  fromStatus        String?
+  toStatus          String?
+  message           String   @default("")
+  metadataJson      String   @default("{}")
+  visibleToCustomer Boolean  @default(true)
+  createdAt         DateTime @default(now())
+
+  complaint Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([complaintId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model ComplaintAttachment {
+  id           String   @id @default(cuid())
+  complaintId  String
+  uploaderId   String
+  storageKey   String   @unique
+  originalName String
+  contentType  String
+  sizeBytes    Int
+  createdAt    DateTime @default(now())
+
+  complaint Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  uploader  User      @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
+
+  @@index([complaintId, createdAt])
+}
+
+/// Private, structured post-pickup feedback. It is intentionally independent
+/// from the legacy public Review/rating aggregate.
+model PostPickupFeedback {
+  id        String   @id @default(cuid())
+  orderId   String   @unique
+  userId    String
+  venueId   String
+  quality   Int
+  freshness Int
+  match     Int
+  value     Int
+  pickup    Int
+  comment   String   @default("")
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Restrict)
+
+  @@index([venueId, createdAt])
+  @@index([userId, createdAt])
+}
+
+/// Immutable lifecycle journal. Rows are inserted in the same transaction as
+/// the corresponding Order.status change and protected from UPDATE/DELETE by
+/// a database trigger.
+model OrderStatusHistory {
+  id           String   @id @default(cuid())
+  orderId      String
+  status       String
+  actor        String
+  actorRole    String
+  reason       String
+  metadataJson String   @default("{}")
+  timestamp    DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, timestamp])
+  @@index([status, timestamp])
+}
+
+/// One immutable hand-off receipt per order. The unique orderId is the final
+/// database-level guard against recording a second pickup.
+model PickupJournal {
+  id               String   @id @default(cuid())
+  orderId          String   @unique
+  actor            String
+  actorRole        String
+  pickupCodeSuffix String
+  metadataJson     String   @default("{}")
+  timestamp        DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([timestamp])
 }
 
 /// Append-only product analytics used by the internal funnel dashboard.
