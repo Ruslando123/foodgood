@@ -7,7 +7,7 @@ import { api } from "@/lib/client/api";
 
 const links = [
   { href: "/admin", label: "Обзор", icon: IconLayoutDashboard },
-  { href: "/business", label: "Кабинет владельца", icon: IconBuildingStore },
+  { href: "/admin/owners?select=1", label: "Кабинет владельца", icon: IconBuildingStore },
   { href: "/admin/analytics", label: "Воронка", icon: IconChartBar },
   { href: "/admin/venues", label: "Заведения", icon: IconBuildingStore },
   { href: "/admin/owners", label: "Владельцы", icon: IconUsers },

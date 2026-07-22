@@ -4,6 +4,7 @@ import { prisma } from "./db";
 import { sessionSecretValue } from "./secrets";
 
 const SESSION_COOKIE = "foodgood_session";
+const ADMIN_BUSINESS_COOKIE = "foodgood_admin_business";
 const SESSION_TTL_DAYS = 30;
 
 // Локальная заглушка. В production код доставляет Telegram-бот после
@@ -64,6 +65,9 @@ export async function createSession(userId: string): Promise<void> {
     .sign(secret());
 
   const store = await cookies();
+  // A selected merchant belongs to one exact administrator login and must not
+  // survive account switching or a fresh login.
+  store.delete(ADMIN_BUSINESS_COOKIE);
   store.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -76,6 +80,7 @@ export async function createSession(userId: string): Promise<void> {
 export async function destroySession(): Promise<void> {
   const store = await cookies();
   store.delete(SESSION_COOKIE);
+  store.delete(ADMIN_BUSINESS_COOKIE);
 }
 
 export async function getSessionUser(options: { includeBlocked?: boolean } = {}): Promise<SessionUser | null> {

@@ -93,12 +93,29 @@ export class ApiError extends Error {
   }
 }
 
+let businessOwnerContext: string | null = null;
+
+/** Per-tab guard against submitting a stale business form after an admin switches owners. */
+export function setBusinessOwnerContext(ownerId: string): void {
+  businessOwnerContext = ownerId;
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (typeof window !== "undefined" && !headers.has("X-Client-Source")) {
     const { currentClientSource } = await import("./product-analytics");
     headers.set("X-Client-Source", currentClientSource());
+  }
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (
+    typeof window !== "undefined"
+    && path.startsWith("/api/business/")
+    && !["GET", "HEAD", "OPTIONS"].includes(method)
+    && businessOwnerContext
+    && !headers.has("X-FoodGood-Owner-Context")
+  ) {
+    headers.set("X-FoodGood-Owner-Context", businessOwnerContext);
   }
   const res = await fetch(path, {
     ...init,

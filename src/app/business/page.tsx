@@ -1,6 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
+import { getBusinessAccess } from "@/modules/auth/business";
 import { IconCircleCheckFilled, IconClock, IconPackage, IconQrcode } from "@tabler/icons-react";
 import BusinessRepeatBagButton from "@/components/BusinessRepeatBagButton";
 
@@ -11,16 +12,16 @@ const ORDER_LABELS: Record<string, string> = {
 function price(value: number) { return `${value.toLocaleString("ru-RU")} ₸`; }
 
 export default async function BusinessDashboard() {
-  const user = await getSessionUser();
-  if (!user) return null;
-  const owner = { venue: { ownerId: user.id } };
+  const { actor, owner } = await getBusinessAccess();
+  if (!owner) redirect(actor?.role === "ADMIN" ? "/admin/owners?select=1" : "/");
+  const ownerScope = { venue: { ownerId: owner.id } };
   const [venues, activeBags, awaitingPickup, completed, recentOrders, recentBags] = await Promise.all([
-    prisma.venue.count({ where: { ownerId: user.id } }),
-    prisma.bag.count({ where: { ...owner, status: "ACTIVE", pickupEnd: { gt: new Date() } } }),
-    prisma.order.count({ where: { bag: owner, status: { in: ["RESERVED", "READY_FOR_PICKUP"] } } }),
-    prisma.order.aggregate({ where: { bag: owner, status: "COMPLETED" }, _sum: { totalPrice: true, quantity: true } }),
-    prisma.order.findMany({ where: { bag: owner }, include: { user: true, bag: { include: { venue: true } } }, orderBy: { createdAt: "desc" }, take: 6 }),
-    prisma.bag.findMany({ where: owner, include: { venue: true }, orderBy: { createdAt: "desc" }, take: 5 }),
+    prisma.venue.count({ where: { ownerId: owner.id } }),
+    prisma.bag.count({ where: { ...ownerScope, status: "ACTIVE", pickupEnd: { gt: new Date() } } }),
+    prisma.order.count({ where: { bag: ownerScope, status: { in: ["RESERVED", "READY_FOR_PICKUP"] } } }),
+    prisma.order.aggregate({ where: { bag: ownerScope, status: "COMPLETED" }, _sum: { totalPrice: true, quantity: true } }),
+    prisma.order.findMany({ where: { bag: ownerScope }, include: { user: true, bag: { include: { venue: true } } }, orderBy: { createdAt: "desc" }, take: 6 }),
+    prisma.bag.findMany({ where: ownerScope, include: { venue: true }, orderBy: { createdAt: "desc" }, take: 5 }),
   ]);
   const gross = completed._sum.totalPrice ?? 0;
   const stats = [
@@ -38,7 +39,7 @@ export default async function BusinessDashboard() {
         ? { eyebrow: "На сегодня", title: "Нет активных наборов", text: "Опубликуйте предложение — основные поля уже заполнены.", href: "/business/new", action: "Опубликовать набор" }
         : { eyebrow: "На сегодня всё готово", title: `${activeBags} ${activeBags === 1 ? "набор активен" : "набора активны"}`, text: "Новых заказов на выдачу нет. При необходимости обновите остаток.", href: "/business/bags", action: "Проверить остатки" };
   return <main className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
-    <div><h1 className="text-2xl font-bold">Добрый день{user.name ? `, ${user.name}` : ""}</h1><p className="mt-1 text-sm text-muted">Ежедневные задачи FoodGood — на одном экране.</p></div>
+    <div><h1 className="text-2xl font-bold">Добрый день{owner.name ? `, ${owner.name}` : ""}</h1><p className="mt-1 text-sm text-muted">Ежедневные задачи FoodGood — на одном экране.</p></div>
     <section className={`overflow-hidden rounded-2xl border p-5 ${awaitingPickup > 0 ? "border-amber-200 bg-amber-50" : "border-primary/20 bg-primary/[0.055]"}`}>
       <div className="flex items-start gap-3"><div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${awaitingPickup > 0 ? "bg-amber-100 text-amber-800" : "bg-primary/10 text-primary"}`}>{awaitingPickup > 0 ? <IconClock size={22} /> : <IconCircleCheckFilled size={22} />}</div><div className="min-w-0"><p className={`text-xs font-bold uppercase tracking-wide ${awaitingPickup > 0 ? "text-amber-800" : "text-primary"}`}>{daily.eyebrow}</p><h2 className="mt-1 text-xl font-bold">{daily.title}</h2><p className="mt-1 text-sm leading-5 text-muted">{daily.text}</p></div></div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2"><Link href={daily.href} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white">{awaitingPickup > 0 ? <IconQrcode size={18} /> : <IconPackage size={18} />}{daily.action}</Link>{latestBag && venues > 0 ? <BusinessRepeatBagButton id={latestBag.id} label={`Повторить «${latestBag.title}» завтра`} /> : <Link href="/business/new" className="flex min-h-11 items-center justify-center rounded-xl border border-primary bg-white px-4 py-2.5 text-sm font-semibold text-primary">+ Новый набор</Link>}</div>

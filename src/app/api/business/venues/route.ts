@@ -4,15 +4,15 @@ import { VENUE_CATEGORIES, isPilotCategoryAllowed } from "@/lib/config";
 import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { normalizeTwoGisUrl } from "@/lib/maps";
-import { requireMerchant } from "@/modules/auth/server";
+import { requireBusinessAccess } from "@/modules/auth/business";
 import { apiRoute, ApiError, assertSameOrigin, json } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
 import { assertVenueInPilotScope, enforcePilotVenueCapacity } from "@/lib/pilot";
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
-    const user = await requireMerchant();
-    const venues = await prisma.venue.findMany({ where: { ownerId: user.id } });
+    const { owner } = await requireBusinessAccess();
+    const venues = await prisma.venue.findMany({ where: { ownerId: owner.id } });
     return json({ venues });
   });
 }
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
 export async function POST(req: NextRequest) {
   return apiRoute(req, async () => {
     assertSameOrigin(req);
-    const owner = await requireMerchant();
+    const { owner } = await requireBusinessAccess(req);
     const form = await req.formData();
     const body = Object.fromEntries(form.entries());
     const file = form.get("photo");

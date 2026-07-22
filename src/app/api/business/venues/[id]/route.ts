@@ -4,7 +4,7 @@ import { VENUE_CATEGORIES, isPilotCategoryAllowed } from "@/lib/config";
 import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { normalizeTwoGisUrl } from "@/lib/maps";
-import { requireMerchant } from "@/modules/auth/server";
+import { requireBusinessAccess } from "@/modules/auth/business";
 import { apiRoute, ApiError, assertSameOrigin, json, readJsonObject } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
 import { assertVenueInPilotScope, enforcePilotVenueCapacity } from "@/lib/pilot";
@@ -17,14 +17,14 @@ async function ownedVenue(ownerId: string, id: string) {
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(_req, async () => {
-    const owner = await requireMerchant(); const { id } = await params;
+    const { owner } = await requireBusinessAccess(); const { id } = await params;
     return json({ venue: await ownedVenue(owner.id, id) });
   });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(req, async () => {
-    const owner = await requireMerchant(); const { id } = await params;
+    const { owner } = await requireBusinessAccess(req); const { id } = await params;
     const existing = await ownedVenue(owner.id, id);
     const body = await readJsonObject(req);
     const category = requiredString(body.category, "category", { max: 40 });
@@ -58,7 +58,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(req, async () => {
     assertSameOrigin(req);
-    const owner = await requireMerchant();
+    const { owner } = await requireBusinessAccess(req);
     const { id } = await params;
     const venue = await ownedVenue(owner.id, id);
     const form = await req.formData();

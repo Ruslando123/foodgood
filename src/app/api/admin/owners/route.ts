@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     const page = Math.min(requestedPage, pages);
     const owners = await prisma.user.findMany({
       where,
-      select: { id: true, phone: true, name: true, createdAt: true, _count: { select: { venues: true } } },
+      select: { id: true, phone: true, name: true, status: true, createdAt: true, _count: { select: { venues: true } } },
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * pageSize,
       take: pageSize,

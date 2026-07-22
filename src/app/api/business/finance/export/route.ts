@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { csvCell, parseFinanceDateRange } from "@/lib/csv";
-import { requireMerchant } from "@/modules/auth/server";
+import { requireBusinessAccess } from "@/modules/auth/business";
 import { apiRoute } from "@/shared/server/api";
 
 const HEADER = ["order_id", "date", "venue", "package", "quantity", "venue_till_kzt"];
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
-    const user = await requireMerchant();
+    const { owner } = await requireBusinessAccess();
     const range = parseFinanceDateRange(request.url);
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
@@ -19,7 +19,7 @@ export async function GET(request: Request) {
           while (true) {
             const orders = await prisma.order.findMany({
               where: {
-                bag: { venue: { ownerId: user.id } },
+                bag: { venue: { ownerId: owner.id } },
                 status: "COMPLETED",
                 completedAt: { gte: range.from, lt: range.toExclusive },
               },

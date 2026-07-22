@@ -6,6 +6,7 @@ import {
   ACTIVE_ORDER_STATUSES,
   transitionBagOrders,
   transitionOrder,
+  type OrderActorRole,
 } from "@/modules/orders/state-machine";
 import { normalizeClientSource } from "./product-analytics";
 import { PILOT_CATEGORY_ALLOWLIST } from "./config";
@@ -412,7 +413,13 @@ export async function cancelOrder(userId: string, orderId: string) {
   });
 }
 
-export async function redeemOrder(merchantId: string, pickupCode: string, cashReceivedConfirmed = false) {
+export async function redeemOrder(
+  ownerId: string,
+  pickupCode: string,
+  cashReceivedConfirmed = false,
+  actorId = ownerId,
+  actorRole: OrderActorRole = "PARTNER"
+) {
   const code = pickupCode.trim().toUpperCase();
   if (!cashReceivedConfirmed) throw new OrderError("Подтвердите получение оплаты в заведении");
   const pointer = await prisma.order.findUnique({ where: { pickupCode: code }, select: { id: true, bagId: true } });
@@ -426,7 +433,7 @@ export async function redeemOrder(merchantId: string, pickupCode: string, cashRe
       include: { bag: { include: { venue: true } }, user: true },
     });
     if (!order) throw new OrderError("Код не найден");
-    if (order.bag.venue.ownerId !== merchantId) throw new OrderError("Код от другого заведения");
+    if (order.bag.venue.ownerId !== ownerId) throw new OrderError("Код от другого заведения");
     const [{ now }] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT now() AS now`;
     if (order.bag.pickupEnd <= now) throw new OrderError("Окно выдачи закончилось");
     if (order.status === "COMPLETED") throw new OrderError("Заказ уже выдан");
@@ -438,8 +445,8 @@ export async function redeemOrder(merchantId: string, pickupCode: string, cashRe
       from: ["RESERVED", "READY_FOR_PICKUP"],
       to: "COMPLETED",
       data: { completedAt: now },
-      actor: merchantId,
-      actorRole: "PARTNER",
+      actor: actorId,
+      actorRole,
       reason: "PICKUP_CODE_REDEEMED",
       metadata: { cashReceivedConfirmed: true },
       timestamp: now,
@@ -449,8 +456,8 @@ export async function redeemOrder(merchantId: string, pickupCode: string, cashRe
       data: {
         id: randomUUID(),
         orderId: order.id,
-        actor: merchantId,
-        actorRole: "PARTNER",
+        actor: actorId,
+        actorRole,
         pickupCodeSuffix: code.slice(-2),
         metadataJson: JSON.stringify({ cashReceivedConfirmed: true }),
         timestamp: now,
@@ -472,14 +479,19 @@ export async function redeemOrder(merchantId: string, pickupCode: string, cashRe
   });
 }
 
-export async function markOrderReady(merchantId: string, orderId: string) {
+export async function markOrderReady(
+  ownerId: string,
+  orderId: string,
+  actorId = ownerId,
+  actorRole: OrderActorRole = "PARTNER"
+) {
   const pointer = await prisma.order.findUnique({ where: { id: orderId }, select: { bagId: true } });
   if (!pointer) throw new OrderError("Заказ не найден");
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Bag" WHERE id = ${pointer.bagId} FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
     const order = await tx.order.findFirst({
-      where: { id: orderId, bag: { venue: { ownerId: merchantId } } },
+      where: { id: orderId, bag: { venue: { ownerId } } },
       include: { ...orderInclude, user: true },
     });
     if (!order) throw new OrderError("Заказ не найден");
@@ -492,8 +504,8 @@ export async function markOrderReady(merchantId: string, orderId: string) {
       id: orderId,
       from: "RESERVED",
       to: "READY_FOR_PICKUP",
-      actor: merchantId,
-      actorRole: "PARTNER",
+      actor: actorId,
+      actorRole,
       reason: "PARTNER_MARKED_READY",
       timestamp: now,
     });
@@ -521,7 +533,13 @@ export async function markOrderReady(merchantId: string, orderId: string) {
   });
 }
 
-export async function cancelOrderByPartner(merchantId: string, orderId: string, reason: string) {
+export async function cancelOrderByPartner(
+  ownerId: string,
+  orderId: string,
+  reason: string,
+  actorId = ownerId,
+  actorRole: OrderActorRole = "PARTNER"
+) {
   const normalizedReason = reason.trim();
   if (normalizedReason.length < 3 || normalizedReason.length > 500) {
     throw new OrderError("Укажите причину отмены (от 3 до 500 символов)");
@@ -533,7 +551,7 @@ export async function cancelOrderByPartner(merchantId: string, orderId: string, 
     await tx.$queryRaw`SELECT id FROM "Bag" WHERE id = ${pointer.bagId} FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
     const order = await tx.order.findFirst({
-      where: { id: orderId, bag: { venue: { ownerId: merchantId } } },
+      where: { id: orderId, bag: { venue: { ownerId } } },
       include: { user: true, bag: { include: { venue: true } } },
     });
     if (!order) throw new OrderError("Заказ не найден");
@@ -548,8 +566,8 @@ export async function cancelOrderByPartner(merchantId: string, orderId: string, 
       id: order.id,
       from: ACTIVE_ORDER_STATUSES,
       to: "CANCELLED_BY_PARTNER",
-      actor: merchantId,
-      actorRole: "PARTNER",
+      actor: actorId,
+      actorRole,
       reason: "PARTNER_REQUEST",
       metadata: { reason: normalizedReason },
       timestamp: now,
@@ -570,11 +588,11 @@ export async function cancelOrderByPartner(merchantId: string, orderId: string, 
     });
     await tx.auditLog.create({
       data: {
-        actorId: merchantId,
+        actorId,
         action: "ORDER_CANCELLED_BY_PARTNER",
         entityType: "Order",
         entityId: order.id,
-        metadataJson: JSON.stringify({ reason: normalizedReason, quantityRestored: order.quantity }),
+        metadataJson: JSON.stringify({ ownerId, reason: normalizedReason, quantityRestored: order.quantity }),
       },
     });
     return tx.order.findUniqueOrThrow({
@@ -584,7 +602,13 @@ export async function cancelOrderByPartner(merchantId: string, orderId: string, 
   });
 }
 
-export async function cancelBag(merchantId: string, bagId: string, reason: string) {
+export async function cancelBag(
+  ownerId: string,
+  bagId: string,
+  reason: string,
+  actorId = ownerId,
+  actorRole: OrderActorRole = "PARTNER"
+) {
   const normalizedReason = reason.trim();
   if (normalizedReason.length < 3 || normalizedReason.length > 500) {
     throw new OrderError("Укажите причину снятия пакета (от 3 до 500 символов)");
@@ -592,7 +616,7 @@ export async function cancelBag(merchantId: string, bagId: string, reason: strin
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Bag" WHERE id = ${bagId} FOR UPDATE`;
     const bag = await tx.bag.findUnique({ where: { id: bagId }, include: { venue: true } });
-    if (!bag || bag.venue.ownerId !== merchantId) throw new OrderError("Пакет не найден");
+    if (!bag || bag.venue.ownerId !== ownerId) throw new OrderError("Пакет не найден");
     if (bag.status === "CANCELLED") return;
     await tx.bag.update({ where: { id: bagId }, data: { status: "CANCELLED" } });
     const timestamp = new Date();
@@ -600,8 +624,8 @@ export async function cancelBag(merchantId: string, bagId: string, reason: strin
       bagId,
       from: ACTIVE_ORDER_STATUSES,
       to: "CANCELLED_BY_PARTNER",
-      actor: merchantId,
-      actorRole: "PARTNER",
+      actor: actorId,
+      actorRole,
       reason: "PARTNER_CANCELLED_OFFER",
       metadata: { reason: normalizedReason },
       timestamp,
@@ -623,11 +647,11 @@ export async function cancelBag(merchantId: string, bagId: string, reason: strin
     }
     await tx.auditLog.create({
       data: {
-        actorId: merchantId,
+        actorId,
         action: "BAG_CANCELLED_BY_PARTNER",
         entityType: "Bag",
         entityId: bagId,
-        metadataJson: JSON.stringify({ reason: normalizedReason, cancelledOrderCount: cancelled.length }),
+        metadataJson: JSON.stringify({ ownerId, reason: normalizedReason, cancelledOrderCount: cancelled.length }),
       },
     });
   });
