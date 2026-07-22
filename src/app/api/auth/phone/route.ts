@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
       return json({
         ok: true,
         phone: normalized,
+        ownerPasswordless: existing?.role === "MERCHANT" && !isDevOtpEnabled(),
         privacyAcceptanceRequired,
         termsAcceptanceRequired,
         legalAcceptanceRequired: { privacy: privacyAcceptanceRequired, terms: termsAcceptanceRequired },

@@ -39,14 +39,16 @@ export async function createTelegramOtpRequest(phone: string) {
   const now = new Date();
   await prisma.telegramLoginRequest.deleteMany({ where: { expiresAt: { lt: now } } });
   await prisma.telegramLoginRequest.updateMany({
-    where: { phone, consumedAt: null, status: { in: ["PENDING", "WAITING_CONTACT"] } },
+    where: { phone, consumedAt: null, status: { in: ["PENDING", "WAITING_CONTACT", "VERIFIED"] } },
     data: { status: "CONSUMED", consumedAt: now },
   });
 
   const token = randomBytes(24).toString("base64url");
+  const pollToken = randomBytes(24).toString("base64url");
   await prisma.telegramLoginRequest.create({
     data: {
       tokenHash: tokenHash(token),
+      pollTokenHash: tokenHash(pollToken),
       phone,
       expiresAt: new Date(now.getTime() + REQUEST_TTL_MS),
     },
@@ -54,6 +56,7 @@ export async function createTelegramOtpRequest(phone: string) {
 
   return {
     telegramUrl: `https://t.me/${username}?start=login_${token}`,
+    pollToken,
     botUsername: `@${username}`,
     codeLength: 6,
   };
@@ -156,6 +159,16 @@ async function handleContact(chatId: string, telegramId: string, message: Telegr
     await prisma.user.update({ where: { id: telegramUser.id }, data: { phone: request.phone } });
   }
 
+  if (phoneUser?.role === "MERCHANT") {
+    await prisma.telegramLoginRequest.update({ where: { id: request.id }, data: { status: "VERIFIED" } });
+    await sendTelegramBotMessage(
+      chatId,
+      "Номер подтверждён. Вернитесь в FoodGood — кабинет владельца откроется автоматически.",
+      { replyMarkup: { remove_keyboard: true } }
+    );
+    return;
+  }
+
   try {
     await issueOtp(request.phone, {
       deliver: (code) => sendTelegramBotMessage(
@@ -171,6 +184,35 @@ async function handleContact(chatId: string, telegramId: string, message: Telegr
   }
 
   await prisma.telegramLoginRequest.update({ where: { id: request.id }, data: { status: "CODE_SENT" } });
+}
+
+export type MerchantTelegramLoginResult =
+  | { status: "PENDING" }
+  | { status: "EXPIRED" }
+  | { status: "AUTHENTICATED"; user: { id: string; phone: string | null; name: string | null; role: string; status: string } };
+
+/** Consumes the browser-only polling secret after Telegram verified the native contact. */
+export async function consumeVerifiedMerchantLogin(pollToken: string): Promise<MerchantTelegramLoginResult> {
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(pollToken)) return { status: "EXPIRED" };
+  const request = await prisma.telegramLoginRequest.findUnique({ where: { pollTokenHash: tokenHash(pollToken) } });
+  if (!request || request.consumedAt || request.expiresAt <= new Date()) return { status: "EXPIRED" };
+  if (request.status !== "VERIFIED" || !request.telegramId) return { status: "PENDING" };
+
+  const user = await prisma.user.findUnique({ where: { phone: request.phone } });
+  if (!user || user.role !== "MERCHANT") return { status: "EXPIRED" };
+  if (user.telegramId && user.telegramId !== request.telegramId) return { status: "EXPIRED" };
+
+  const authenticated = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.telegramLoginRequest.updateMany({
+      where: { id: request.id, status: "VERIFIED", consumedAt: null, expiresAt: { gt: new Date() } },
+      data: { status: "CONSUMED", consumedAt: new Date() },
+    });
+    if (claimed.count !== 1) return null;
+    return tx.user.update({ where: { id: user.id }, data: { telegramId: request.telegramId } });
+  });
+  return authenticated
+    ? { status: "AUTHENTICATED", user: { id: authenticated.id, phone: authenticated.phone, name: authenticated.name, role: authenticated.role, status: authenticated.status } }
+    : { status: "EXPIRED" };
 }
 
 export async function processTelegramWebhook(update: TelegramWebhookUpdate): Promise<void> {

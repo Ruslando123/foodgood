@@ -31,7 +31,7 @@ const STATIC_API_SEGMENTS = new Set([
   "reviews", "favorites", "notifications", "metrics", "health", "live", "ready", "deep", "internal",
   "redeem", "finance", "export", "stats", "phone", "verify", "logout", "logout-all", "me",
   "support", "complaints", "complaint-attachments", "feedback", "cancel", "review", "media",
-  "analytics", "events",
+  "analytics", "events", "status",
   "partners", "onboarding",
 ]);
 

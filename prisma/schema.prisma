@@ -113,14 +113,15 @@ model OtpChallenge {
 /// The bot verifies ownership of the entered phone through request_contact
 /// before it is allowed to deliver an OTP.
 model TelegramLoginRequest {
-  id         String    @id @default(cuid())
-  tokenHash  String    @unique
-  phone      String
-  telegramId String?
-  status     String    @default("PENDING") // PENDING | WAITING_CONTACT | CODE_SENT | CONSUMED
-  expiresAt  DateTime
-  consumedAt DateTime?
-  createdAt  DateTime  @default(now())
+  id            String    @id @default(cuid())
+  tokenHash     String    @unique
+  pollTokenHash String?   @unique
+  phone         String
+  telegramId    String?
+  status        String    @default("PENDING") // PENDING | WAITING_CONTACT | VERIFIED | CODE_SENT | CONSUMED
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  createdAt     DateTime  @default(now())
 
   @@index([phone, status, createdAt(sort: Desc)])
   @@index([telegramId, status, createdAt(sort: Desc)])

@@ -54,6 +54,8 @@ function LoginContent() {
   const [devCode, setDevCode] = useState<string | null>(null);
   const [telegramUrl, setTelegramUrl] = useState<string | null>(null);
   const [botUsername, setBotUsername] = useState<string | null>(null);
+  const [ownerPasswordless, setOwnerPasswordless] = useState(false);
+  const [pollToken, setPollToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
@@ -85,6 +87,35 @@ function LoginContent() {
     return () => window.clearInterval(timer);
   }, [cooldown]);
 
+  useEffect(() => {
+    if (step !== "code" || !ownerPasswordless || !pollToken) return;
+    let stopped = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const result = await api<{ status: "PENDING" | "AUTHENTICATED"; user?: SessionUser }>("/api/auth/phone/status", {
+          method: "POST",
+          body: JSON.stringify({ pollToken }),
+        });
+        if (stopped) return;
+        if (result.status === "AUTHENTICATED" && result.user) {
+          setUser(result.user);
+          router.replace("/business");
+          router.refresh();
+          return;
+        }
+        timer = window.setTimeout(poll, 2000);
+      } catch (reason) {
+        if (!stopped) setError(reason instanceof Error ? reason.message : "Не удалось завершить вход");
+      }
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [ownerPasswordless, pollToken, router, step]);
+
   async function requestCode() {
     if (!phoneValid) {
       setError("Введите полный номер телефона");
@@ -93,13 +124,15 @@ function LoginContent() {
     setBusy(true);
     setError(null);
     try {
-      const result = await api<{ phone: string; codeLength: number; privacyAcceptanceRequired: boolean; termsAcceptanceRequired: boolean; devCode?: string; telegramUrl?: string; botUsername?: string }>("/api/auth/phone", { method: "POST", body: JSON.stringify({ phone }) });
+      const result = await api<{ phone: string; codeLength: number; privacyAcceptanceRequired: boolean; termsAcceptanceRequired: boolean; ownerPasswordless?: boolean; pollToken?: string; devCode?: string; telegramUrl?: string; botUsername?: string }>("/api/auth/phone", { method: "POST", body: JSON.stringify({ phone }) });
       setPhone(formatKazakhstanPhone(result.phone));
       setCode("");
       setCodeLength(result.codeLength);
       setDevCode(result.devCode ?? null);
       setTelegramUrl(result.telegramUrl ?? null);
       setBotUsername(result.botUsername ?? null);
+      setOwnerPasswordless(result.ownerPasswordless === true);
+      setPollToken(result.ownerPasswordless ? result.pollToken ?? null : null);
       setPrivacyAcceptanceRequired(result.privacyAcceptanceRequired);
       setTermsAcceptanceRequired(result.termsAcceptanceRequired);
       if (!result.privacyAcceptanceRequired) setPrivacyAccepted(false);
@@ -121,7 +154,7 @@ function LoginContent() {
       setUser(user);
       // Администратор всегда попадает в рабочий кабинет, даже если ранее
       // открывал профиль или пришёл с параметром next.
-      router.replace(user.role === "ADMIN" ? "/admin/venues" : next);
+      router.replace(user.role === "ADMIN" ? "/admin/venues" : user.role === "MERCHANT" ? "/business" : next);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -134,6 +167,8 @@ function LoginContent() {
     setUser(null);
     setStep("phone");
     setTelegramUrl(null);
+    setOwnerPasswordless(false);
+    setPollToken(null);
     setStats({ bagsSaved: 0, moneySaved: 0 });
   }
 
@@ -146,6 +181,8 @@ function LoginContent() {
       setUser(null);
       setStep("phone");
       setTelegramUrl(null);
+      setOwnerPasswordless(false);
+      setPollToken(null);
       setStats({ bagsSaved: 0, moneySaved: 0 });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось завершить сессии");
@@ -238,14 +275,14 @@ function LoginContent() {
     <main className="px-4 pb-8">
       <div className="pb-6 pt-7 text-center">
         <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-[24px] bg-[#edf7f1] text-primary shadow-[0_8px_30px_rgba(26,127,78,0.12)]"><IconSeedlingFilled size={44} /></div>
-        <h2 className="mt-5 text-[24px] font-bold tracking-[-0.04em]">{step === "phone" ? "Вход в FoodGood" : "Введите код"}</h2>
-        <p className="mx-auto mt-2 max-w-[310px] text-[13px] leading-5 text-muted">{step === "phone" ? "Введите номер — получите бесплатный одноразовый код в Telegram." : telegramUrl ? <>Подтвердите номер <span className="font-semibold text-foreground">{phone}</span> в Telegram</> : <>Код отправлен на <span className="font-semibold text-foreground">{phone}</span></>}</p>
+        <h2 className="mt-5 text-[24px] font-bold tracking-[-0.04em]">{step === "phone" ? "Вход в FoodGood" : ownerPasswordless ? "Подтвердите номер" : "Введите код"}</h2>
+        <p className="mx-auto mt-2 max-w-[310px] text-[13px] leading-5 text-muted">{step === "phone" ? "Введите номер телефона для входа." : telegramUrl ? <>Подтвердите номер <span className="font-semibold text-foreground">{phone}</span> в Telegram</> : <>Код отправлен на <span className="font-semibold text-foreground">{phone}</span></>}</p>
       </div>
       {step === "phone" ? (
         <form onSubmit={(event) => { event.preventDefault(); void requestCode(); }} className="space-y-4 rounded-[20px] border border-black/[0.08] bg-white p-4 shadow-[0_8px_30px_rgba(20,40,28,0.06)]">
           <label className="block"><span className="mb-1.5 block text-[12px] font-semibold text-[#4f5d55]">Номер телефона</span><span className="relative block"><IconPhone size={20} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-primary" /><input aria-label="Номер телефона" autoFocus autoComplete="tel" inputMode="tel" type="tel" value={phone} onChange={(event) => { setPhone(formatKazakhstanPhone(event.target.value)); setError(null); }} placeholder="+7 (777) 123-45-67" className="h-14 w-full rounded-[14px] border border-black/[0.12] bg-[#fafbfa] pl-11 pr-4 text-[17px] font-medium outline-none transition focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" /></span></label>
           {error && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-[12px] text-red-700">{error}</p>}
-          <button type="submit" disabled={busy || !phoneValid} className="w-full rounded-[14px] bg-primary py-3.5 text-[15px] font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Отправляем код…" : "Продолжить"}</button>
+          <button type="submit" disabled={busy || !phoneValid} className="w-full rounded-[14px] bg-primary py-3.5 text-[15px] font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Проверяем номер…" : "Продолжить"}</button>
           <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted"><IconLock size={14} />Номер используется только для входа и заказов</p>
         </form>
       ) : (
@@ -255,7 +292,7 @@ function LoginContent() {
               <ol className="space-y-1 text-[#315d47]">
                 <li><b>1.</b> Откройте бота FoodGood.</li>
                 <li><b>2.</b> Нажмите «Поделиться номером телефона».</li>
-                <li><b>3.</b> Вернитесь сюда и введите код из сообщения.</li>
+                <li><b>3.</b> {ownerPasswordless ? "Кабинет владельца откроется автоматически." : "Вернитесь сюда и введите код из сообщения."}</li>
               </ol>
               <a
                 href={telegramUrl}
@@ -263,17 +300,18 @@ function LoginContent() {
                 rel="noopener noreferrer"
                 className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#229ED9] px-4 font-bold text-white shadow-sm"
               >
-                <IconBrandTelegram size={21} /> Получить код в {botUsername ?? "Telegram"}
+                <IconBrandTelegram size={21} /> {ownerPasswordless ? "Подтвердить в" : "Получить код в"} {botUsername ?? "Telegram"}
               </a>
             </div>
           )}
-          <label className="block"><span className="mb-1.5 block text-center text-[12px] font-semibold text-[#4f5d55]">Код подтверждения</span><input aria-label="Код подтверждения" autoFocus autoComplete="one-time-code" type="text" inputMode="numeric" value={code} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "").slice(0, codeLength)); setError(null); }} placeholder={"•".repeat(codeLength)} maxLength={codeLength} className="h-16 w-full rounded-[14px] border border-black/[0.12] bg-[#fafbfa] px-4 text-center text-[26px] font-bold tracking-[0.55em] outline-none transition placeholder:tracking-[0.45em] focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" /></label>
-          {devCode && <button type="button" onClick={() => setCode(devCode)} className="w-full rounded-xl bg-amber-50 px-3 py-2.5 text-[12px] font-semibold text-amber-800">Использовать демо-код {devCode}</button>}
+          {!ownerPasswordless && <label className="block"><span className="mb-1.5 block text-center text-[12px] font-semibold text-[#4f5d55]">Код подтверждения</span><input aria-label="Код подтверждения" autoFocus autoComplete="one-time-code" type="text" inputMode="numeric" value={code} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "").slice(0, codeLength)); setError(null); }} placeholder={"•".repeat(codeLength)} maxLength={codeLength} className="h-16 w-full rounded-[14px] border border-black/[0.12] bg-[#fafbfa] px-4 text-center text-[26px] font-bold tracking-[0.55em] outline-none transition placeholder:tracking-[0.45em] focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" /></label>}
+          {!ownerPasswordless && devCode && <button type="button" onClick={() => setCode(devCode)} className="w-full rounded-xl bg-amber-50 px-3 py-2.5 text-[12px] font-semibold text-amber-800">Использовать демо-код {devCode}</button>}
+          {ownerPasswordless && !error && <p role="status" className="rounded-xl bg-blue-50 px-3 py-2.5 text-center text-[12px] text-blue-700">Ожидаем подтверждение в Telegram…</p>}
           {error && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-[12px] text-red-700">{error}</p>}
-          {privacyAcceptanceRequired && <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-[#edf7f1] p-3 text-[12px] leading-4 text-[#315d47]"><input aria-label="Принимаю политику конфиденциальности" type="checkbox" checked={privacyAccepted} onChange={(event) => setPrivacyAccepted(event.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-[#1a7f4e]" /><span>Отдельно принимаю <Link href="/legal/privacy" target="_blank" className="font-semibold underline">политику конфиденциальности</Link> FoodGood.</span></label>}
-          {termsAcceptanceRequired && <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-[#f5f5f3] p-3 text-[12px] leading-4 text-[#3f4742]"><input aria-label="Принимаю условия использования" type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-[#1a7f4e]" /><span>Отдельно принимаю <Link href="/legal/terms" target="_blank" className="font-semibold underline">условия использования</Link> FoodGood.</span></label>}
-          <button type="submit" disabled={busy || code.length !== codeLength || (privacyAcceptanceRequired && !privacyAccepted) || (termsAcceptanceRequired && !termsAccepted)} className="w-full rounded-[14px] bg-primary py-3.5 text-[15px] font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Проверяем…" : "Войти"}</button>
-          <div className="flex items-center justify-between gap-3"><button type="button" onClick={() => { setStep("phone"); setCode(""); setTelegramUrl(null); setError(null); }} className="inline-flex items-center gap-1 text-[12px] font-semibold text-muted"><IconArrowLeft size={15} />Изменить номер</button><button type="button" onClick={requestCode} disabled={busy || cooldown > 0} className="text-right text-[12px] font-semibold text-primary disabled:text-muted">{cooldown > 0 ? `Повторить через ${cooldown} сек` : "Получить новую ссылку"}</button></div>
+          {!ownerPasswordless && privacyAcceptanceRequired && <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-[#edf7f1] p-3 text-[12px] leading-4 text-[#315d47]"><input aria-label="Принимаю политику конфиденциальности" type="checkbox" checked={privacyAccepted} onChange={(event) => setPrivacyAccepted(event.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-[#1a7f4e]" /><span>Отдельно принимаю <Link href="/legal/privacy" target="_blank" className="font-semibold underline">политику конфиденциальности</Link> FoodGood.</span></label>}
+          {!ownerPasswordless && termsAcceptanceRequired && <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-[#f5f5f3] p-3 text-[12px] leading-4 text-[#3f4742]"><input aria-label="Принимаю условия использования" type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-[#1a7f4e]" /><span>Отдельно принимаю <Link href="/legal/terms" target="_blank" className="font-semibold underline">условия использования</Link> FoodGood.</span></label>}
+          {!ownerPasswordless && <button type="submit" disabled={busy || code.length !== codeLength || (privacyAcceptanceRequired && !privacyAccepted) || (termsAcceptanceRequired && !termsAccepted)} className="w-full rounded-[14px] bg-primary py-3.5 text-[15px] font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Проверяем…" : "Войти"}</button>}
+          <div className="flex items-center justify-between gap-3"><button type="button" onClick={() => { setStep("phone"); setCode(""); setTelegramUrl(null); setOwnerPasswordless(false); setPollToken(null); setError(null); }} className="inline-flex items-center gap-1 text-[12px] font-semibold text-muted"><IconArrowLeft size={15} />Изменить номер</button><button type="button" onClick={requestCode} disabled={busy || cooldown > 0} className="text-right text-[12px] font-semibold text-primary disabled:text-muted">{cooldown > 0 ? `Повторить через ${cooldown} сек` : "Получить новую ссылку"}</button></div>
         </form>
       )}
       {next !== "/" && <p className="mt-4 text-center text-[12px] text-muted">После входа вернём вас на нужную страницу.</p>}
