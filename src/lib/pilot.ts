@@ -86,7 +86,15 @@ export function assertVenueInPilotScope(venue: { cityId: string; category: strin
 /** Serializes venue activation/creation so the global closed-pilot cap cannot be raced. */
 export async function enforcePilotVenueCapacity(tx: Prisma.TransactionClient, excludeVenueId?: string): Promise<void> {
   const config = getPilotConfig();
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('foodgood:pilot:venues'))`;
+  // pg_advisory_xact_lock returns PostgreSQL's unsupported `void` type. Keep
+  // the lock call materialized, but expose only an integer to Prisma so pooled
+  // production drivers do not attempt to deserialize `void`.
+  await tx.$queryRaw<Array<{ lockAcquired: number }>>`
+    WITH lock AS MATERIALIZED (
+      SELECT pg_advisory_xact_lock(hashtext('foodgood:pilot:venues'))
+    )
+    SELECT 1::int AS "lockAcquired" FROM lock
+  `;
   const active = await tx.venue.findMany({
     where: { status: "ACTIVE", ...(excludeVenueId ? { id: { not: excludeVenueId } } : {}) },
     select: { cityId: true, category: true, lat: true, lng: true },
