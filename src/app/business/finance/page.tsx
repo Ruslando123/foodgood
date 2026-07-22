@@ -1,14 +1,15 @@
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
+import { getBusinessAccess } from "@/modules/auth/business";
 import FinanceExportControls from "@/components/FinanceExportControls";
 
 const price = (value: number) => `${value.toLocaleString("ru-RU")} ₸`;
 
 export default async function BusinessFinancePage() {
-  const user = await getSessionUser();
-  if (!user) return null;
+  const { actor, owner } = await getBusinessAccess();
+  if (!owner) redirect(actor?.role === "ADMIN" ? "/admin/owners?select=1" : "/");
   const orders = await prisma.order.findMany({
-    where: { bag: { venue: { ownerId: user.id } }, status: "COMPLETED" },
+    where: { bag: { venue: { ownerId: owner.id } }, status: "COMPLETED" },
     include: { bag: { include: { venue: true } } },
     orderBy: { completedAt: "desc" },
     take: 500,

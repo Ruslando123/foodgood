@@ -1,7 +1,8 @@
 import { Prisma } from "@prisma/client";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
+import { getBusinessAccess } from "@/modules/auth/business";
 
 const LABELS: Record<string, string> = { RESERVED: "Забронирован", READY_FOR_PICKUP: "Готов к выдаче", COMPLETED: "Выдан", CANCELLED_BY_USER: "Отменён клиентом", CANCELLED_BY_PARTNER: "Отменён заведением", NO_SHOW: "Неявка", DISPUTED: "Спор" };
 const STATUSES = Object.keys(LABELS);
@@ -9,19 +10,19 @@ function price(value: number) { return `${value.toLocaleString("ru-RU")} ₸`; }
 function statusClass(status: string) { if (["COMPLETED", "READY_FOR_PICKUP"].includes(status)) return "bg-green-50 text-green-700"; if (status === "RESERVED") return "bg-amber-50 text-amber-800"; return "bg-black/[0.05] text-muted"; }
 
 export default async function BusinessOrdersPage({ searchParams }: { searchParams: Promise<{ q?: string; status?: string }> }) {
-  const user = await getSessionUser();
-  if (!user) return null;
+  const { actor, owner } = await getBusinessAccess();
+  if (!owner) redirect(actor?.role === "ADMIN" ? "/admin/owners?select=1" : "/");
   const params = await searchParams;
   const query = (params.q ?? "").trim();
   const status = params.status ?? "ALL";
   const where: Prisma.OrderWhereInput = {
-    bag: { venue: { ownerId: user.id } },
+    bag: { venue: { ownerId: owner.id } },
     ...(STATUSES.includes(status) ? { status } : {}),
     ...(query ? { OR: [{ pickupCode: { contains: query, mode: "insensitive" } }, { id: { contains: query, mode: "insensitive" } }, { user: { phone: { contains: query } } }, { bag: { title: { contains: query, mode: "insensitive" } } }] } : {}),
   };
   const [orders, grouped] = await Promise.all([
     prisma.order.findMany({ where, include: { user: true, bag: { include: { venue: true } } }, orderBy: { createdAt: "desc" }, take: 100 }),
-    prisma.order.groupBy({ by: ["status"], where: { bag: { venue: { ownerId: user.id } } }, _count: { _all: true } }),
+    prisma.order.groupBy({ by: ["status"], where: { bag: { venue: { ownerId: owner.id } } }, _count: { _all: true } }),
   ]);
   const counts = Object.fromEntries(grouped.map((item) => [item.status, item._count._all]));
   const total = grouped.reduce((sum, item) => sum + item._count._all, 0);

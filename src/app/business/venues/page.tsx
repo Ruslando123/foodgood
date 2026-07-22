@@ -1,15 +1,16 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
+import { getBusinessAccess } from "@/modules/auth/business";
 import VenuePhoto from "@/components/VenuePhoto";
 import BusinessVenuePhotoEditor from "@/components/BusinessVenuePhotoEditor";
 import { kazakhstanCityById } from "@/lib/kazakhstan";
 
 export default async function BusinessVenuesPage() {
-  const user = await getSessionUser();
-  if (!user) return null;
+  const { actor, owner } = await getBusinessAccess();
+  if (!owner) redirect(actor?.role === "ADMIN" ? "/admin/owners?select=1" : "/");
   const venues = await prisma.venue.findMany({
-    where: { ownerId: user.id },
+    where: { ownerId: owner.id },
     include: {
       bags: { where: { status: "ACTIVE", pickupEnd: { gt: new Date() } }, select: { id: true } },
       _count: { select: { bags: true } },

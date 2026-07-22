@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireMerchant } from "@/modules/auth/server";
+import { requireBusinessAccess } from "@/modules/auth/business";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
@@ -9,9 +9,9 @@ import { assertVenueInPilotScope, getPilotConfig } from "@/lib/pilot";
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
-    const user = await requireMerchant();
+    const { owner } = await requireBusinessAccess();
     const bags = await prisma.bag.findMany({
-      where: { venue: { ownerId: user.id } },
+      where: { venue: { ownerId: owner.id } },
       include: {
         venue: true,
         orders: {
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
 /** Публикация пакета-сюрприза «в 2 клика». */
 export async function POST(req: NextRequest) {
   return apiRoute(req, async () => {
-    const user = await requireMerchant();
+    const { actor, owner } = await requireBusinessAccess(req);
     const body = await readJsonObject(req);
     const safety = parseSafetyAttestations(body.safetyAttestations);
     const venueId = requiredString(body.venueId, "venueId", { max: 64 });
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     const end = dateValue(body.pickupEnd, "pickupEnd");
 
     const venue = await prisma.venue.findUnique({ where: { id: venueId } });
-    if (!venue || venue.ownerId !== user.id) {
+    if (!venue || venue.ownerId !== owner.id) {
       throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
     }
     if (venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     const bag = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "Venue" WHERE id = ${venue.id} FOR UPDATE`;
       const lockedVenue = await tx.venue.findUnique({ where: { id: venue.id } });
-      if (!lockedVenue || lockedVenue.ownerId !== user.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
+      if (!lockedVenue || lockedVenue.ownerId !== owner.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
       if (lockedVenue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
       assertVenueInPilotScope(lockedVenue);
       const activeBagCount = await tx.bag.count({ where: { venueId: venue.id, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } } });
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
           quantityLeft: qty,
           pickupStart: start,
           pickupEnd: end,
-          ...safetyAttestationData(safety, user.id),
+          ...safetyAttestationData(safety, actor.id),
         },
         include: { venue: true },
       });
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
       });
       await recordProductEvent(tx, {
         name: "partner_offer_created",
-        userId: user.id,
+        userId: actor.id,
         venueId: created.venueId,
         bagId: created.id,
         amount: created.price,
@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
         dedupeKey: `partner_offer_created:${created.id}`,
       });
       await tx.auditLog.create({
-        data: { actorId: user.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: venue.id, safetyAttestations: true }) },
+        data: { actorId: actor.id, action: "BAG_PUBLISHED", entityType: "Bag", entityId: created.id, metadataJson: JSON.stringify({ venueId: venue.id, ownerId: owner.id, safetyAttestations: true }) },
       });
       return created;
     });

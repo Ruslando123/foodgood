@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
+import { getBusinessAccess } from "@/modules/auth/business";
 import BusinessOrderActions from "@/components/BusinessOrderActions";
 
 const LABELS: Record<string, string> = { RESERVED: "Забронирован · оплата при получении", READY_FOR_PICKUP: "Готов к выдаче", COMPLETED: "Выдан", CANCELLED_BY_USER: "Отменён клиентом", CANCELLED_BY_PARTNER: "Отменён заведением", NO_SHOW: "Неявка", DISPUTED: "Спор" };
@@ -9,10 +9,10 @@ const REASONS: Record<string, string> = { RESERVATION_CREATED: "Бронь со�
 const price = (value: number) => `${value.toLocaleString("ru-RU")} ₸`;
 
 export default async function BusinessOrderPage({ params }: { params: Promise<{ id: string }> }) {
-  const user = await getSessionUser();
-  if (!user) return null;
+  const { actor, owner } = await getBusinessAccess();
+  if (!owner) redirect(actor?.role === "ADMIN" ? "/admin/owners?select=1" : "/");
   const { id } = await params;
-  const order = await prisma.order.findFirst({ where: { id, bag: { venue: { ownerId: user.id } } }, include: { user: true, bag: { include: { venue: true } }, review: true, statusHistory: { orderBy: { timestamp: "desc" } }, pickupJournal: true } });
+  const order = await prisma.order.findFirst({ where: { id, bag: { venue: { ownerId: owner.id } } }, include: { user: true, bag: { include: { venue: true } }, review: true, statusHistory: { orderBy: { timestamp: "desc" } }, pickupJournal: true } });
   if (!order) notFound();
   return <main className="mx-auto max-w-2xl space-y-5 p-5 sm:pt-6"><header><Link href="/business/orders" className="text-sm font-semibold text-primary">← К броням</Link><h1 className="mt-3 text-2xl font-bold">Заказ {order.pickupCode}</h1><p className="mt-1 text-sm text-muted">{LABELS[order.status] ?? order.status}</p></header><section className="space-y-4 rounded-2xl border bg-white p-5"><div><p className="text-xs text-muted">Пакет</p><p className="font-semibold">{order.bag.title} × {order.quantity}</p><p className="text-sm text-muted">{order.bag.venue.name}</p></div><div className="grid grid-cols-2 gap-3"><div><p className="text-xs text-muted">Сумма</p><p className="font-semibold">{price(order.totalPrice)}</p></div><div><p className="text-xs text-muted">Оплата</p><p className="font-semibold">В заведении</p></div></div><div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">Примите {price(order.totalPrice)} на кассе и выдайте покупателю чек до подтверждения кода.</div><div><p className="text-xs text-muted">Покупатель</p><p className="font-semibold">{order.user.name ?? "Без имени"}</p><p className="text-sm text-muted">{order.user.phone ?? "Телефон не указан"}</p></div><div><p className="text-xs text-muted">Окно выдачи</p><p className="font-semibold">{new Date(order.bag.pickupStart).toLocaleString("ru-RU")}–{new Date(order.bag.pickupEnd).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</p></div><div className="rounded-xl bg-primary/10 p-4 text-center"><p className="text-xs text-muted">Код выдачи</p><p className="font-mono text-3xl font-bold tracking-[0.25em] text-primary">{order.pickupCode}</p></div><BusinessOrderActions id={order.id} status={order.status} /></section><section className="rounded-2xl border bg-white p-5"><h2 className="font-semibold">Журнал заказа</h2>{order.pickupJournal && <p className="mt-2 rounded-xl bg-green-50 p-3 text-sm text-green-800">Выдача зафиксирована {order.pickupJournal.timestamp.toLocaleString("ru-RU")} · код …{order.pickupJournal.pickupCodeSuffix}</p>}<ol className="mt-3 space-y-3">{order.statusHistory.map((entry) => <li key={entry.id} className="border-l-2 border-primary/20 pl-3"><p className="text-sm font-semibold">{LABELS[entry.status] ?? entry.status}</p><p className="text-xs text-muted">{REASONS[entry.reason] ?? entry.reason} · {entry.actorRole} · {entry.timestamp.toLocaleString("ru-RU")}</p></li>)}</ol></section></main>;
 }

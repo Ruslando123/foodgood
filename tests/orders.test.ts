@@ -277,6 +277,22 @@ describe("выдача в заведении", () => {
     await expect(prisma.orderStatusHistory.count({ where: { orderId: order.id, status: "COMPLETED" } })).resolves.toBe(1);
   });
 
+  it("разделяет владельца заказа и администратора, выполнившего выдачу", async () => {
+    const { merchant, customer, bag } = await createFixtures();
+    const admin = await prisma.user.create({ data: { phone: "+77010004444", role: "ADMIN" } });
+    const order = await createOrder(customer.id, bag.id, 1);
+
+    await redeemOrder(merchant.id, order.pickupCode, true, admin.id, "ADMIN");
+
+    await expect(prisma.orderStatusHistory.findFirstOrThrow({
+      where: { orderId: order.id, status: "COMPLETED" },
+    })).resolves.toMatchObject({ actor: admin.id, actorRole: "ADMIN" });
+    await expect(prisma.pickupJournal.findUniqueOrThrow({ where: { orderId: order.id } })).resolves.toMatchObject({
+      actor: admin.id,
+      actorRole: "ADMIN",
+    });
+  });
+
   it("партнёр отменяет бронь с причиной, возвращает остаток и оставляет audit", async () => {
     const { merchant, customer, bag } = await createFixtures({ quantity: 2 });
     const order = await createOrder(customer.id, bag.id, 1);
