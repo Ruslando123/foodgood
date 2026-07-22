@@ -192,6 +192,14 @@ test("владелец публикует пакет", async ({ page }) => {
   await login(page, "+7 701 000 00 01", /\/$/);
   await page.goto("/business/new");
   await page.getByLabel("Название").fill("E2E вечерний пакет");
+  for (const label of [
+    "Еда пригодна к реализации в указанное окно выдачи",
+    "Условия и сроки хранения соблюдены",
+    "Информация о возможных аллергенах актуальна",
+    "Содержимое соответствует категории закрытого пилота",
+  ]) {
+    await page.getByLabel(label, { exact: true }).check();
+  }
   await page.getByRole("button", { name: "Опубликовать" }).click();
   await expect(page).toHaveURL(/\/business$/);
   await expect(page.getByText("E2E вечерний пакет", { exact: true })).toBeVisible();
