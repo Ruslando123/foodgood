@@ -4,15 +4,15 @@ import { VENUE_CATEGORIES, isPilotCategoryAllowed } from "@/lib/config";
 import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { normalizeTwoGisUrl } from "@/lib/maps";
-import { requireMerchant, requireUser } from "@/modules/auth/server";
+import { requireMerchant } from "@/modules/auth/server";
 import { apiRoute, ApiError, assertSameOrigin, json } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
 import { assertVenueInPilotScope, enforcePilotVenueCapacity } from "@/lib/pilot";
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
-    const user = await requireUser();
-    const venues = await prisma.venue.findMany({ where: user.role === "ADMIN" ? {} : { ownerId: user.id } });
+    const user = await requireMerchant();
+    const venues = await prisma.venue.findMany({ where: { ownerId: user.id } });
     return json({ venues });
   });
 }
