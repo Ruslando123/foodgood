@@ -69,6 +69,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     catch (error) {
       if (error instanceof Error && error.message === "PHOTO_SIZE") throw new ApiError(400, "PHOTO_TOO_LARGE", "Фото должно быть не больше 5 МБ");
       if (error instanceof Error && error.message === "PHOTO_DIMENSIONS") throw new ApiError(400, "PHOTO_DIMENSIONS", "Фото должно быть от 240×160 пикселей и не больше 36 мегапикселей");
+      if (error instanceof Error && error.message === "PHOTO_STORAGE_UNAVAILABLE") throw new ApiError(503, "PHOTO_STORAGE_UNAVAILABLE", "Хранилище фотографий временно недоступно. Попробуйте ещё раз");
       throw new ApiError(400, "PHOTO_FORMAT", "Поддерживаются только JPG, PNG и WebP");
     }
     try {
