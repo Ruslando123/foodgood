@@ -41,7 +41,9 @@ function formatKazakhstanPhone(value: string): string {
 
 function LoginContent() {
   const router = useRouter();
-  const next = safeInternalPath(useSearchParams().get("next"));
+  const searchParams = useSearchParams();
+  const next = safeInternalPath(searchParams.get("next"));
+  const clientMode = searchParams.get("mode") === "client";
   const [user, setUser] = useState<SessionUser | null | undefined>(undefined);
   const [step, setStep] = useState<"phone" | "code">("phone");
   const [phone, setPhone] = useState("+7");
@@ -69,15 +71,9 @@ function LoginContent() {
         setUser(data.user);
         setStats(data.stats);
         setName(data.user?.name ?? "");
-        // У администратора нет сценария профиля покупателя: при любой
-        // активной сессии сразу открываем рабочую админ-панель.
-        if (data.user?.role === "ADMIN") {
-          router.replace("/admin/venues");
-          return;
-        }
       })
       .catch(() => setUser(null));
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -121,7 +117,7 @@ function LoginContent() {
       setUser(user);
       // Администратор всегда попадает в рабочий кабинет, даже если ранее
       // открывал профиль или пришёл с параметром next.
-      router.replace(user.role === "ADMIN" ? "/admin/venues" : next);
+      router.replace(user.role === "ADMIN" && !clientMode ? "/admin/venues" : clientMode ? "/login?mode=client" : next);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка");
     } finally {
