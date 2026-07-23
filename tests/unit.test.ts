@@ -68,10 +68,13 @@ describe("подсказки адресов", () => {
           housenumber: "10",
           city: "Алматы",
           country: "Казахстан",
+          osm_key: "amenity",
         },
       }],
     })).toMatchObject([{
       address: "проспект Абая, 10, Алматы, Казахстан",
+      name: "Абая",
+      osmKey: "amenity",
       primary: "проспект Абая, 10",
       secondary: "Алматы, Казахстан",
       lat: 43.255,

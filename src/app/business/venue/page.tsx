@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api } from "@/lib/client/api";
 import VenueAddressPicker from "@/components/VenueAddressPicker";
+import VenueNamePicker from "@/components/VenueNamePicker";
 
 export default function VenueRegistrationPage() {
   const router = useRouter();
@@ -38,7 +39,14 @@ export default function VenueRegistrationPage() {
     <h1 className="mb-1 mt-3 text-2xl font-bold">Новое заведение</h1>
     <p className="mb-5 text-sm text-muted">Эти данные будут видны покупателям.</p>
     <form onSubmit={submit} className="space-y-3 rounded-2xl border bg-white p-4 sm:p-5">
-      <input required value={form.name} onChange={(event) => set("name", event.target.value)} placeholder="Название" className="w-full rounded-xl border p-3" />
+      <VenueNamePicker
+        name={form.name}
+        onNameChange={(name) => set("name", name)}
+        onSelect={(suggestion) => {
+          setForm((current) => ({ ...current, name: suggestion.name, address: suggestion.address, lat: suggestion.lat, lng: suggestion.lng }));
+          setAddressConfirmed(true);
+        }}
+      />
       <VenueAddressPicker address={form.address} lat={form.lat} lng={form.lng} onChange={(location) => setForm((current) => ({ ...current, ...location }))} onValidityChange={setAddressConfirmed} />
       <label className="block">
         <span className="text-xs font-semibold text-muted">Ссылка на карточку в 2GIS</span>

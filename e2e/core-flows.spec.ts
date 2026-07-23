@@ -142,7 +142,7 @@ test("сервер принимает все поддерживаемые гор
   expect((await request.get("/api/bags?city=almaty&category=SUPERMARKET")).status()).toBe(200);
 });
 
-test("владелец выбирает адрес из подсказок и видит точку на карте", async ({ page }) => {
+test("владелец находит заведение по названию и получает адрес с точкой на карте", async ({ page }) => {
   await login(page, "+7 701 000 00 01", /\/$/);
   await page.route("**/api/geocoding/search?*", async (route) => {
     await route.fulfill({
@@ -150,6 +150,8 @@ test("владелец выбирает адрес из подсказок и в
       body: JSON.stringify({
         suggestions: [{
           id: "address-1",
+          name: "Coffee Boom",
+          osmKey: "amenity",
           address: "проспект Абая, 10, Алматы, Қазақстан",
           primary: "проспект Абая, 10",
           secondary: "Алматы, Қазақстан",
@@ -160,9 +162,11 @@ test("владелец выбирает адрес из подсказок и в
     });
   });
   await page.goto("/business/venue");
-  const address = page.getByRole("combobox", { name: "Адрес" });
-  await address.fill("Абая 10");
-  await page.getByRole("button", { name: /проспект Абая, 10/ }).click();
+    const venueName = page.getByRole("combobox", { name: /^Название/ });
+    const address = page.getByRole("combobox", { name: /^Адрес/ });
+  await venueName.fill("Coffee");
+  await page.getByRole("button", { name: /Coffee Boom.*проспект Абая, 10/ }).click();
+  await expect(venueName).toHaveValue("Coffee Boom");
   await expect(address).toHaveValue("проспект Абая, 10, Алматы, Қазақстан");
   await expect(page.getByLabel("Карта: нажмите, чтобы выбрать точку заведения")).toBeVisible();
 });
