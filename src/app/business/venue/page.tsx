@@ -4,14 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api } from "@/lib/client/api";
+import VenueAddressPicker from "@/components/VenueAddressPicker";
 
 export default function VenueRegistrationPage() {
   const router = useRouter();
-  const [form, setForm] = useState({ name: "", address: "", category: "CAFE", lat: "43.2389", lng: "76.8897", description: "", twoGisUrl: "" });
+  const [form, setForm] = useState({ name: "", address: "", category: "CAFE", lat: 43.2389, lng: 76.8897, description: "", twoGisUrl: "" });
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [addressConfirmed, setAddressConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const set = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const set = (key: "name" | "address" | "category" | "description" | "twoGisUrl", value: string) => setForm((current) => ({ ...current, [key]: value }));
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -19,8 +21,9 @@ export default function VenueRegistrationPage() {
     setError(null);
     try {
       if (!photoFile) throw new Error("Добавьте фотографию заведения");
+      if (!addressConfirmed) throw new Error("Выберите адрес из подсказок или укажите точку на карте");
       const upload = new FormData();
-      for (const [key, value] of Object.entries(form)) upload.set(key, value);
+      for (const [key, value] of Object.entries(form)) upload.set(key, String(value));
       upload.set("photo", photoFile);
       await api<{ venue: { id: string } }>("/api/business/venues", { method: "POST", body: upload });
       router.replace("/business");
@@ -35,8 +38,8 @@ export default function VenueRegistrationPage() {
     <h1 className="mb-1 mt-3 text-2xl font-bold">Новое заведение</h1>
     <p className="mb-5 text-sm text-muted">Эти данные будут видны покупателям.</p>
     <form onSubmit={submit} className="space-y-3 rounded-2xl border bg-white p-4 sm:p-5">
-      {(["name", "address"] as const).map((key) => <input key={key} required value={form[key]} onChange={(event) => set(key, event.target.value)} placeholder={{ name: "Название", address: "Адрес" }[key]} className="w-full rounded-xl border p-3" />)}
-      <div className="grid grid-cols-2 gap-3">{(["lat", "lng"] as const).map((key) => <input key={key} required value={form[key]} onChange={(event) => set(key, event.target.value)} placeholder={{ lat: "Широта", lng: "Долгота" }[key]} className="w-full min-w-0 rounded-xl border p-3" />)}</div>
+      <input required value={form.name} onChange={(event) => set("name", event.target.value)} placeholder="Название" className="w-full rounded-xl border p-3" />
+      <VenueAddressPicker address={form.address} lat={form.lat} lng={form.lng} onChange={(location) => setForm((current) => ({ ...current, ...location }))} onValidityChange={setAddressConfirmed} />
       <label className="block">
         <span className="text-xs font-semibold text-muted">Ссылка на карточку в 2GIS</span>
         <input value={form.twoGisUrl} onChange={(event) => set("twoGisUrl", event.target.value)} inputMode="url" placeholder="https://2gis.kz/almaty/firm/…" className="mt-1 w-full rounded-xl border p-3" />
@@ -48,7 +51,7 @@ export default function VenueRegistrationPage() {
         <input id="new-venue-photo" required type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setPhotoFile(event.target.files?.[0] ?? null)} className="mt-1 block w-full rounded-xl border p-3 text-sm" />
         <p className="mt-1 text-xs text-muted">JPG, PNG или WebP · до 5 МБ</p>
       </div>
-      <select value={form.category} onChange={(event) => set("category", event.target.value)} className="w-full rounded-xl border p-3"><option value="CAFE">Кофейня</option><option value="BAKERY">Пекарня</option><option value="RESTAURANT">Ресторан</option></select>
+      <select value={form.category} onChange={(event) => set("category", event.target.value)} className="w-full rounded-xl border p-3"><option value="CAFE">Кофейня</option><option value="BAKERY">Пекарня</option><option value="SUPERMARKET">Супермаркет</option><option value="RESTAURANT">Ресторан</option></select>
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       <button disabled={busy} className="w-full rounded-xl bg-primary p-3 font-bold text-white disabled:opacity-60">{busy ? "Добавляем…" : "Добавить заведение"}</button>
     </form>
