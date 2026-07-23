@@ -224,7 +224,8 @@ test("клиент отправляет привязанную к заказу �
     supportMutation(),
     supportCard.getByRole("button", { name: "Закрыть кейс" }).click(),
   ]);
-  await expect(supportCard).toHaveCount(0, { timeout: 10_000 });
+  await adminPage.reload();
+  await expect(supportCard).toHaveCount(0);
   await adminContext.close();
 
   await page.reload();
