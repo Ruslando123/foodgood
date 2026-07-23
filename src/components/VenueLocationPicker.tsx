@@ -8,6 +8,8 @@ export default function VenueLocationPicker({ lat, lng, onChange }: { lat: numbe
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -16,7 +18,7 @@ export default function VenueLocationPicker({ lat, lng, onChange }: { lat: numbe
       const map = L.map(containerRef.current).setView([lat, lng], 14);
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap", maxZoom: 19 }).addTo(map);
       markerRef.current = L.marker([lat, lng]).addTo(map);
-      map.on("click", (event) => onChange({ lat: Number(event.latlng.lat.toFixed(6)), lng: Number(event.latlng.lng.toFixed(6)) }));
+      map.on("click", (event) => onChangeRef.current({ lat: Number(event.latlng.lat.toFixed(6)), lng: Number(event.latlng.lng.toFixed(6)) }));
       mapRef.current = map;
     })();
     return () => { cancelled = true; mapRef.current?.remove(); mapRef.current = null; markerRef.current = null; };

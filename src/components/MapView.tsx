@@ -12,7 +12,7 @@ type Props = {
   userLocation?: { lat: number; lng: number } | null;
 };
 
-/** Карта заведений: маркеры-эмодзи с попапом пакета и переходом к покупке. */
+/** Карта заведений: зелёная точка с названием и попапом пакета. */
 export default function MapView({ bags, userLocation }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<LeafletMap | null>(null);
@@ -46,15 +46,21 @@ export default function MapView({ bags, userLocation }: Props) {
 
       for (const bag of bags) {
         const markerContent = document.createElement("div");
-        markerContent.style.cssText =
-          "width:40px;height:40px;border-radius:50%;background:#fff;border:2px solid #1a7f4e;display:flex;align-items:center;justify-content:center;font-size:20px;box-shadow:0 2px 6px rgba(0,0,0,.25)";
-        markerContent.textContent = /^https?:\/\//i.test(bag.venue.photo) ? "🍽️" : bag.venue.photo;
+        markerContent.style.cssText = "display:flex;align-items:center;gap:6px;white-space:nowrap";
+        const markerDot = document.createElement("span");
+        markerDot.style.cssText =
+          "display:block;width:14px;height:14px;flex:0 0 14px;border-radius:50%;background:#138a46;border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.35)";
+        const markerLabel = document.createElement("span");
+        markerLabel.style.cssText =
+          "display:block;max-width:130px;overflow:hidden;text-overflow:ellipsis;border:1px solid rgba(0,0,0,.08);border-radius:7px;background:rgba(255,255,255,.96);padding:3px 7px;color:#132018;font:600 12px/16px system-ui,-apple-system,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.16)";
+        markerLabel.textContent = bag.venue.name;
+        markerContent.append(markerDot, markerLabel);
         const icon = L.divIcon({
           className: "",
           html: markerContent,
-          iconSize: [40, 40],
-          iconAnchor: [20, 40],
-          popupAnchor: [0, -40],
+          iconSize: [156, 24],
+          iconAnchor: [7, 12],
+          popupAnchor: [0, -14],
         });
         const popup = document.createElement("div");
         popup.style.minWidth = "180px";
