@@ -24,6 +24,7 @@ import { hasAcceptedCurrentTerms, TERMS_VERSION } from "@/lib/legal";
 import { assertDisposableLoadDatabase } from "@/lib/load-safety";
 import { parseSafetyAttestations } from "@/lib/publication-safety";
 import { canAccessBusiness } from "@/modules/auth/policy";
+import { photonSuggestions } from "@/lib/geocoding";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -53,6 +54,38 @@ describe("geo", () => {
     expect(isInKazakhstan(51.18, 71.43)).toBe(true);
     expect(isInKazakhstan(41.3, 69.2)).toBe(false);
     expect(isInKazakhstan(55.75, 37.62)).toBe(false);
+  });
+});
+
+describe("подсказки адресов", () => {
+  it("преобразует Photon GeoJSON в адрес и координаты Казахстана", () => {
+    expect(photonSuggestions({
+      features: [{
+        geometry: { type: "Point", coordinates: [76.945, 43.255] },
+        properties: {
+          name: "Абая",
+          street: "проспект Абая",
+          housenumber: "10",
+          city: "Алматы",
+          country: "Казахстан",
+        },
+      }],
+    })).toMatchObject([{
+      address: "проспект Абая, 10, Алматы, Казахстан",
+      primary: "проспект Абая, 10",
+      secondary: "Алматы, Казахстан",
+      lat: 43.255,
+      lng: 76.945,
+    }]);
+  });
+
+  it("отбрасывает результаты за пределами Казахстана", () => {
+    expect(photonSuggestions({
+      features: [{
+        geometry: { type: "Point", coordinates: [37.6173, 55.7558] },
+        properties: { name: "Москва" },
+      }],
+    })).toEqual([]);
   });
 });
 

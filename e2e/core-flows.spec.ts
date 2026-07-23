@@ -142,6 +142,31 @@ test("сервер принимает все поддерживаемые гор
   expect((await request.get("/api/bags?city=almaty&category=SUPERMARKET")).status()).toBe(200);
 });
 
+test("владелец выбирает адрес из подсказок и видит точку на карте", async ({ page }) => {
+  await login(page, "+7 701 000 00 01", /\/$/);
+  await page.route("**/api/geocoding/search?*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        suggestions: [{
+          id: "address-1",
+          address: "проспект Абая, 10, Алматы, Қазақстан",
+          primary: "проспект Абая, 10",
+          secondary: "Алматы, Қазақстан",
+          lat: 43.238,
+          lng: 76.945,
+        }],
+      }),
+    });
+  });
+  await page.goto("/business/venue");
+  const address = page.getByRole("combobox", { name: "Адрес" });
+  await address.fill("Абая 10");
+  await page.getByRole("button", { name: /проспект Абая, 10/ }).click();
+  await expect(address).toHaveValue("проспект Абая, 10, Алматы, Қазақстан");
+  await expect(page.getByLabel("Карта: нажмите, чтобы выбрать точку заведения")).toBeVisible();
+});
+
 test("клиент отправляет привязанную к заказу обратную связь в поддержку", async ({ page, browser }) => {
   await page.addInitScript(() => localStorage.setItem("foodgood-location", JSON.stringify({ lat: 43.2389, lng: 76.8897, cityId: "almaty" })));
   await login(page, "+7 707 000 00 04", /\/$/);
