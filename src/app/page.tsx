@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   IconCalendar,
@@ -18,13 +18,35 @@ import BottomNav from "@/components/BottomNav";
 import BrandMark from "@/components/BrandMark";
 import NotificationBell from "@/components/NotificationBell";
 import { api, Bag, pluralRu } from "@/lib/client/api";
+import {
+  isLocationPreferenceFresh,
+  locationsMatch,
+  parseCatalogCache,
+  parseLocationPreference,
+} from "@/lib/client/catalog-cache";
+import type { CatalogCacheEntry, CatalogCacheParams, LocationPreference } from "@/lib/client/catalog-cache";
 import { VENUE_CATEGORIES } from "@/lib/config";
 import { isInKazakhstan, KAZAKHSTAN_CITIES, KazakhstanCity, nearestKazakhstanCity } from "@/lib/kazakhstan";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const LOCATION_STORAGE_KEY = "foodgood-location";
+const CATALOG_CACHE_KEY = "foodgood:catalog-cache:v1";
 type GeoState = "requesting" | "ready" | "manual" | "denied" | "unavailable" | "outside";
 type Sort = "soon" | "distance" | "price" | "discount";
+
+function saveCatalogCache(bags: Bag[], nextCursor: string | null, params: CatalogCacheParams) {
+  try {
+    window.sessionStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({
+      version: 1,
+      savedAt: Date.now(),
+      params,
+      bags,
+      nextCursor,
+    }));
+  } catch {
+    // Storage can be unavailable or full; network loading remains the fallback.
+  }
+}
 
 export default function HomePage() {
   const [bags, setBags] = useState<Bag[] | null>(null);
@@ -33,10 +55,13 @@ export default function HomePage() {
   const [view, setView] = useState<"list" | "map">("list");
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [city, setCity] = useState<KazakhstanCity | null>(null);
+  const [locationSource, setLocationSource] = useState<LocationPreference["source"] | null>(null);
+  const [locationSavedAt, setLocationSavedAt] = useState<number | null>(null);
   const [geoState, setGeoState] = useState<GeoState>("requesting");
   const [locationOpen, setLocationOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initialized, setInitialized] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
@@ -60,15 +85,30 @@ export default function HomePage() {
         if (!isInKazakhstan(point.lat, point.lng)) {
           setLocation(null);
           setCity(null);
+          setLocationSource(null);
+          setLocationSavedAt(null);
           setGeoState("outside");
+          try {
+            window.localStorage.removeItem(LOCATION_STORAGE_KEY);
+          } catch {}
           return;
         }
         const nearestCity = nearestKazakhstanCity(point.lat, point.lng);
+        const preference: LocationPreference = {
+          ...point,
+          cityId: nearestCity.id,
+          source: "automatic",
+          savedAt: Date.now(),
+        };
         setLocation(point);
         setCity(nearestCity);
+        setLocationSource(preference.source);
+        setLocationSavedAt(preference.savedAt);
         setGeoState("ready");
         setLocationOpen(false);
-        window.localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify({ ...point, cityId: nearestCity.id }));
+        try {
+          window.localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify(preference));
+        } catch {}
         setSort((current) => (current === "soon" ? "distance" : current));
       },
       () => setGeoState("denied"),
@@ -77,43 +117,103 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(LOCATION_STORAGE_KEY);
-    if (saved) {
-      try {
-        const value = JSON.parse(saved) as { lat?: number; lng?: number; cityId?: string };
-        if (typeof value.lat === "number" && typeof value.lng === "number" && isInKazakhstan(value.lat, value.lng)) {
-          setLocation({ lat: value.lat, lng: value.lng });
-          const savedCity = KAZAKHSTAN_CITIES.find((item) => item.id === value.cityId);
-          setCity(savedCity ?? nearestKazakhstanCity(value.lat, value.lng));
-          setGeoState("manual");
-          setSort("distance");
-        }
-      } catch {
+    let cached: CatalogCacheEntry | null = null;
+    let savedLocation: LocationPreference | null = null;
+    try {
+      const rawCache = window.sessionStorage.getItem(CATALOG_CACHE_KEY);
+      cached = parseCatalogCache(rawCache);
+      if (rawCache && !cached) window.sessionStorage.removeItem(CATALOG_CACHE_KEY);
+
+      const rawLocation = window.localStorage.getItem(LOCATION_STORAGE_KEY);
+      savedLocation = parseLocationPreference(rawLocation);
+      if (rawLocation && !savedLocation) {
         window.localStorage.removeItem(LOCATION_STORAGE_KEY);
       }
+    } catch {
+      // Storage can be disabled; the catalogue still works via the network.
     }
-    requestLocation();
+
+    const cachedLocation = cached?.params.location ?? null;
+    const preferredLocation =
+      !cachedLocation
+        ? savedLocation
+        : !savedLocation
+          ? cachedLocation
+          : savedLocation.savedAt > cachedLocation.savedAt
+            ? savedLocation
+            : cachedLocation.savedAt > savedLocation.savedAt
+              ? cachedLocation
+              : savedLocation.source === "manual"
+                ? savedLocation
+                : cachedLocation;
+
+    if (cached) {
+      const params = cached.params;
+      setSearch(params.search);
+      setCategory(params.category);
+      setMaxPrice(params.maxPrice);
+      setMinDiscount(params.minDiscount);
+      setMinRating(params.minRating);
+      setMaxDistance(params.maxDistance);
+      setTodayOnly(params.todayOnly);
+      setSort(params.sort === "distance" && !preferredLocation ? "soon" : params.sort);
+      setView(params.view);
+      if (locationsMatch(params.location, preferredLocation)) {
+        setBags(cached.bags);
+        setNextCursor(cached.nextCursor);
+      }
+    }
+
+    if (preferredLocation) {
+      setLocation({ lat: preferredLocation.lat, lng: preferredLocation.lng });
+      setCity(
+        KAZAKHSTAN_CITIES.find((item) => item.id === preferredLocation.cityId)
+          ?? nearestKazakhstanCity(preferredLocation.lat, preferredLocation.lng)
+      );
+      setLocationSource(preferredLocation.source);
+      setLocationSavedAt(preferredLocation.savedAt);
+      setGeoState(preferredLocation.source === "manual" ? "manual" : "ready");
+      if (!cached) setSort("distance");
+    }
+
+    setInitialized(true);
+    if (!preferredLocation || !isLocationPreferenceFresh(preferredLocation)) requestLocation();
   }, [requestLocation]);
 
   function selectCity(cityId: string) {
     const selected = KAZAKHSTAN_CITIES.find((item) => item.id === cityId);
     if (!selected) return;
     const point = { lat: selected.lat, lng: selected.lng };
+    const preference: LocationPreference = {
+      ...point,
+      cityId: selected.id,
+      source: "manual",
+      savedAt: Date.now(),
+    };
     setLocation(point);
     setCity(selected);
+    setLocationSource(preference.source);
+    setLocationSavedAt(preference.savedAt);
     setGeoState("manual");
     setLocationOpen(false);
     setSort((current) => (current === "soon" ? "distance" : current));
-    window.localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify({ ...point, cityId: selected.id }));
+    try {
+      window.localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify(preference));
+    } catch {}
   }
 
   function clearLocation() {
     setLocation(null);
     setCity(null);
+    setLocationSource(null);
+    setLocationSavedAt(null);
     setGeoState("denied");
     setMaxDistance("");
     setSort("soon");
-    window.localStorage.removeItem(LOCATION_STORAGE_KEY);
+    try {
+      window.localStorage.removeItem(LOCATION_STORAGE_KEY);
+      window.sessionStorage.removeItem(CATALOG_CACHE_KEY);
+    } catch {}
   }
 
   const locationLabel = city?.name ?? (geoState === "requesting" ? "Определяем город…" : geoState === "outside" ? "Только Казахстан" : "Выберите город");
@@ -145,7 +245,42 @@ export default function HomePage() {
     return query.toString();
   }, [category, city, location, maxDistance, maxPrice, minDiscount, minRating, search, sort, todayOnly]);
 
+  const cacheParams = useMemo<CatalogCacheParams>(() => ({
+    location: location && city && locationSource && locationSavedAt !== null
+      ? { ...location, cityId: city.id, source: locationSource, savedAt: locationSavedAt }
+      : null,
+    search,
+    category,
+    maxPrice,
+    minDiscount,
+    minRating,
+    maxDistance,
+    todayOnly,
+    sort,
+    view,
+  }), [
+    category,
+    city,
+    location,
+    locationSavedAt,
+    locationSource,
+    maxDistance,
+    maxPrice,
+    minDiscount,
+    minRating,
+    search,
+    sort,
+    todayOnly,
+    view,
+  ]);
+  const cacheParamsRef = useRef(cacheParams);
+
   useEffect(() => {
+    cacheParamsRef.current = cacheParams;
+  }, [cacheParams]);
+
+  useEffect(() => {
+    if (!initialized) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setLoading(true);
@@ -154,6 +289,7 @@ export default function HomePage() {
         const data = await api<{ bags: Bag[]; nextCursor: string | null }>(`/api/bags?${queryString}`, { signal: controller.signal });
         setBags(data.bags);
         setNextCursor(data.nextCursor);
+        saveCatalogCache(data.bags, data.nextCursor, cacheParamsRef.current);
       } catch (e) {
         if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Не удалось загрузить пакеты");
       } finally {
@@ -164,7 +300,7 @@ export default function HomePage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [queryString, reloadKey, search]);
+  }, [initialized, queryString, reloadKey, search]);
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
@@ -173,7 +309,11 @@ export default function HomePage() {
       const query = new URLSearchParams(queryString);
       query.set("cursor", nextCursor);
       const data = await api<{ bags: Bag[]; nextCursor: string | null }>(`/api/bags?${query}`);
-      setBags((current) => [...(current ?? []), ...data.bags]);
+      setBags((current) => {
+        const merged = [...(current ?? []), ...data.bags];
+        saveCatalogCache(merged, data.nextCursor, cacheParamsRef.current);
+        return merged;
+      });
       setNextCursor(data.nextCursor);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось загрузить следующую страницу");

@@ -1,0 +1,140 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "@/lib/client/api";
+
+export type AdminVenueStatusFilter = "ALL" | "ACTIVE" | "SUSPENDED";
+
+export type AdminVenueListItem = {
+  id: string;
+  name: string;
+  status: "ACTIVE" | "SUSPENDED";
+  createdAt: string;
+  owner: { phone: string | null; name: string | null };
+  bags: { id: string }[];
+};
+
+type VenuePage = {
+  venues: AdminVenueListItem[];
+  page: number;
+  pages: number;
+};
+
+export default function AdminVenuesClient({
+  initialData,
+  initialStatus,
+}: {
+  initialData: VenuePage;
+  initialStatus: AdminVenueStatusFilter;
+}) {
+  const [venues, setVenues] = useState(initialData.venues);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<AdminVenueStatusFilter>(initialStatus);
+  const [page, setPage] = useState(initialData.page);
+  const [pages, setPages] = useState(initialData.pages);
+  const [error, setError] = useState<string | null>(null);
+  const initialRequest = useRef<{
+    page: number;
+    query: string;
+    status: AdminVenueStatusFilter;
+  } | null>({ page: initialData.page, query: "", status: initialStatus });
+
+  const load = useCallback(async (signal: AbortSignal) => {
+    const params = new URLSearchParams({ page: String(page), q: query, status });
+    const result = await api<VenuePage>(`/api/admin/venues?${params}`, { signal });
+    setVenues(result.venues);
+    setPage(result.page);
+    setPages(result.pages);
+    setError(null);
+  }, [page, query, status]);
+
+  useEffect(() => {
+    const first = initialRequest.current;
+    if (first && first.page === page && first.query === query && first.status === status) {
+      initialRequest.current = null;
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void load(controller.signal).catch((reason: unknown) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setError(reason instanceof Error ? reason.message : "Не удалось загрузить заведения");
+      });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [load, page, query, status]);
+
+  return (
+    <main className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
+      <header>
+        <h1 className="text-2xl font-bold">Заведения</h1>
+        <p className="mt-1 text-sm text-muted">Проверяйте данные заведений и управляйте их публикацией.</p>
+      </header>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <label className="sr-only" htmlFor="venue-search">Поиск заведений</label>
+        <input
+          id="venue-search"
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setPage(1);
+          }}
+          placeholder="Название, адрес или владелец"
+          className="min-w-0 flex-1 rounded-xl border px-3 py-2.5"
+        />
+        <label className="sr-only" htmlFor="venue-status">Статус</label>
+        <select
+          id="venue-status"
+          value={status}
+          onChange={(event) => {
+            setStatus(event.target.value as AdminVenueStatusFilter);
+            setPage(1);
+          }}
+          className="rounded-xl border px-3 py-2.5"
+        >
+          <option value="ALL">Все статусы</option>
+          <option value="ACTIVE">Активные</option>
+          <option value="SUSPENDED">Приостановленные</option>
+        </select>
+      </div>
+      {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      <section className="overflow-hidden rounded-2xl border border-black/10 bg-white">
+        {venues.length === 0
+          ? <p className="p-6 text-center text-sm text-muted">Заведений не найдено.</p>
+          : venues.map((venue) => (
+            <Link
+              key={venue.id}
+              href={`/admin/venues/${venue.id}`}
+              className="flex items-center justify-between gap-3 border-b border-black/[0.07] p-4 last:border-b-0 hover:bg-black/[0.02]"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-semibold">{venue.name}</p>
+                <p className="truncate text-sm text-muted">
+                  {venue.owner.name ?? venue.owner.phone ?? "Владелец не указан"} · {venue.bags.length} активных пакетов
+                </p>
+                <p className="mt-1 text-xs text-muted">
+                  Зарегистрировано {new Date(venue.createdAt).toLocaleDateString("ru-RU", { timeZone: "Asia/Almaty" })}
+                </p>
+              </div>
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${venue.status === "ACTIVE" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800"}`}>
+                {venue.status === "ACTIVE" ? "Активно" : "Приостановлено"}
+              </span>
+            </Link>
+          ))}
+      </section>
+      {pages > 1 && (
+        <div className="flex items-center justify-center gap-3">
+          <button disabled={page === 1} onClick={() => setPage((value) => value - 1)} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-40">Назад</button>
+          <span className="text-sm text-muted">{page} из {pages}</span>
+          <button disabled={page === pages} onClick={() => setPage((value) => value + 1)} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-40">Далее</button>
+        </div>
+      )}
+    </main>
+  );
+}
