@@ -34,6 +34,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (!lockedVenue || lockedVenue.ownerId !== owner.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
       if (lockedVenue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено");
       const created = await tx.bag.create({ data: { venueId: source.venueId, title: source.title, description: source.description, composition: source.composition || source.description, allergens: source.allergens, storage: source.storage || "Уточнить у продавца при получении", examplePhoto: source.examplePhoto, price: source.price, originalPrice: source.originalPrice, quantityTotal: source.quantityTotal, quantityLeft: source.quantityTotal, pickupStart, pickupEnd, ...safetyAttestationData(safety, actor.id) }, include: { venue: true } });
+      await tx.batchJob.create({
+        data: {
+          queue: "notifications",
+          type: "FANOUT_NEW_BAG",
+          dedupeKey: `fanout-new-bag:${created.id}`,
+          payloadJson: JSON.stringify({ bagId: created.id }),
+          nextAttemptAt: new Date(0),
+        },
+      });
       await recordProductEvent(tx, {
         name: "partner_offer_created",
         userId: actor.id,

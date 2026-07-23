@@ -25,6 +25,7 @@ import { assertDisposableLoadDatabase } from "@/lib/load-safety";
 import { parseSafetyAttestations } from "@/lib/publication-safety";
 import { canAccessBusiness } from "@/modules/auth/policy";
 import { photonSuggestions } from "@/lib/geocoding";
+import { businessBagStatus } from "@/lib/bag-status";
 
 describe("geo", () => {
   it("нулевое расстояние для одной точки", () => {
@@ -275,6 +276,26 @@ describe("безопасная публикация пакета", () => {
       allergensCurrentAttested: true,
       categoryAllowedAttested: true,
     });
+  });
+});
+
+describe("статус пакета в кабинете заведения", () => {
+  const now = new Date("2026-07-24T00:00:00.000Z");
+
+  it("показывает завершённое окно как неактивное до обработки worker", () => {
+    expect(businessBagStatus({
+      status: "ACTIVE",
+      quantityLeft: 5,
+      pickupEnd: new Date("2026-07-23T23:59:59.000Z"),
+    }, now)).toBe("INACTIVE");
+  });
+
+  it("оставляет будущий доступный пакет в продаже", () => {
+    expect(businessBagStatus({
+      status: "ACTIVE",
+      quantityLeft: 5,
+      pickupEnd: new Date("2026-07-24T01:00:00.000Z"),
+    }, now)).toBe("ACTIVE");
   });
 });
 

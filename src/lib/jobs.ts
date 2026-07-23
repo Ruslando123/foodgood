@@ -4,6 +4,7 @@ import { PRIVACY_POLICY_VERSION } from "./privacy";
 import { startLeaseHeartbeat } from "./lease-heartbeat";
 import { workerClaims, workerFailures, workerJobDuration, workerLeaseLost, workerSuccesses } from "./metrics";
 import { VENUE_CATEGORY_VALUES } from "./config";
+import { sendTelegramBotMessage, telegramNotificationsEnabled } from "./telegram";
 
 export type BatchQueue = "notifications";
 type BatchJobType = "FANOUT_NEW_BAG" | "PICKUP_REMINDER";
@@ -220,7 +221,7 @@ async function fanoutNewBag(bagId: string, cursor: string | undefined, batchSize
     },
     orderBy: { id: "asc" },
     take: batchSize,
-    select: { id: true, userId: true },
+    select: { id: true, userId: true, user: { select: { telegramId: true } } },
   });
   if (followers.length) {
     await prisma.notification.createMany({
@@ -236,8 +237,91 @@ async function fanoutNewBag(bagId: string, cursor: string | undefined, batchSize
       })),
       skipDuplicates: true,
     });
+    if (telegramNotificationsEnabled()) {
+      for (const follower of followers) {
+        if (!follower.user.telegramId) continue;
+        await deliverNewBagTelegram({
+          userId: follower.userId,
+          telegramId: follower.user.telegramId,
+          bagId: bag.id,
+          venueId: bag.venueId,
+          venueName: bag.venue.name,
+          title: bag.title,
+          price: bag.price,
+          pickupStart: bag.pickupStart,
+        });
+      }
+    }
   }
   return followers.length < batchSize
     ? { done: true }
     : { done: false, payloadJson: JSON.stringify({ bagId, cursor: followers.at(-1)!.id }) };
+}
+
+async function deliverNewBagTelegram(input: {
+  userId: string;
+  telegramId: string;
+  bagId: string;
+  venueId: string;
+  venueName: string;
+  title: string;
+  price: number;
+  pickupStart: Date;
+}): Promise<void> {
+  const dedupeKey = `new-bag-telegram:${input.bagId}:${input.userId}`;
+  const payloadJson = JSON.stringify({
+    bagId: input.bagId,
+    venueId: input.venueId,
+    venueName: input.venueName,
+    title: input.title,
+  });
+  const notification = await prisma.notification.upsert({
+    where: { dedupeKey },
+    update: {},
+    create: {
+      userId: input.userId,
+      channel: "TELEGRAM",
+      recipient: input.telegramId,
+      type: "NEW_FAVORITE_VENUE_BAG",
+      status: "PENDING",
+      dedupeKey,
+      payloadJson,
+    },
+  });
+  if (notification.status === "SENT") return;
+
+  const pickupTime = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Asia/Almaty",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(input.pickupStart);
+  const baseUrl = (process.env.APP_BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const bagUrl = `${baseUrl}/bag/${encodeURIComponent(input.bagId)}`;
+  const text = [
+    `💚 Новинка в ${input.venueName}`,
+    "",
+    `«${input.title}» — ${input.price.toLocaleString("ru-RU")} ₸`,
+    `Выдача: ${pickupTime}`,
+    "",
+    "Посмотрите, пока пакет не забрали.",
+  ].join("\n");
+
+  try {
+    await sendTelegramBotMessage(input.telegramId, text, {
+      replyMarkup: { inline_keyboard: [[{ text: "Посмотреть пакет", url: bagUrl }]] },
+    });
+    await prisma.notification.update({
+      where: { id: notification.id },
+      data: { status: "SENT", sentAt: new Date(), error: null },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await prisma.notification.update({
+      where: { id: notification.id },
+      data: { status: "FAILED", error: message.slice(0, 1000) },
+    });
+    throw error;
+  }
 }

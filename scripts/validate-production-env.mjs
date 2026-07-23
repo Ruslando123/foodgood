@@ -22,7 +22,7 @@ if (new Set(secretValues).size !== secretValues.length) errors.push(`${secretNam
 
 requiredExact("TELEGRAM_OTP_ENABLED", "true");
 requiredExact("TELEGRAM_AUTH_ENABLED", "false");
-requiredExact("TELEGRAM_NOTIFICATIONS_ENABLED", "false");
+requiredExact("TELEGRAM_NOTIFICATIONS_ENABLED", "true");
 if (!/^\d+:[A-Za-z0-9_-]{20,}$/.test(process.env.TELEGRAM_BOT_TOKEN ?? "")) errors.push("TELEGRAM_BOT_TOKEN has an invalid format");
 if (!/^[A-Za-z0-9_]{5,32}$/.test((process.env.TELEGRAM_BOT_USERNAME ?? "").replace(/^@/, ""))) errors.push("TELEGRAM_BOT_USERNAME has an invalid format");
 

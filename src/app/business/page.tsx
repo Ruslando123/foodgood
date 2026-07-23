@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { BUSINESS_BAG_STATUS_LABELS, businessBagStatus } from "@/lib/bag-status";
 import { getBusinessAccess } from "@/modules/auth/business";
 import { IconCircleCheckFilled, IconClock, IconPackage, IconQrcode } from "@tabler/icons-react";
 import BusinessRepeatBagButton from "@/components/BusinessRepeatBagButton";
@@ -23,6 +24,7 @@ export default async function BusinessDashboard() {
     prisma.order.findMany({ where: { bag: ownerScope }, include: { user: true, bag: { include: { venue: true } } }, orderBy: { createdAt: "desc" }, take: 6 }),
     prisma.bag.findMany({ where: ownerScope, include: { venue: true }, orderBy: { createdAt: "desc" }, take: 5 }),
   ]);
+  const now = new Date();
   const gross = completed._sum.totalPrice ?? 0;
   const stats = [
     { label: "Принято на кассе", value: price(gross), hint: "FoodGood не участвует в оплате", href: "/business/orders?status=COMPLETED" },
@@ -49,7 +51,7 @@ export default async function BusinessDashboard() {
     {venues === 0 && <section className="rounded-2xl border border-primary/20 bg-primary/5 p-6 text-center"><h2 className="font-semibold">Добавьте первое заведение</h2><p className="mt-1 text-sm text-muted">После этого вы сможете публиковать пакеты-сюрпризы.</p><Link href="/business/venue" className="mt-4 inline-block rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white">Добавить заведение</Link></section>}
     <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
       <section className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white"><div className="flex items-center justify-between border-b p-4"><div><h2 className="font-semibold">Последние заказы</h2><p className="text-xs text-muted">Новая активность покупателей</p></div><Link href="/business/orders" className="text-sm font-semibold text-primary">Все заказы</Link></div>{recentOrders.length === 0 ? <p className="p-6 text-sm text-muted">Заказов пока нет.</p> : <div className="divide-y">{recentOrders.map((order) => <Link key={order.id} href={`/business/orders?q=${order.pickupCode}`} className="grid gap-2 p-4 hover:bg-black/[0.02] sm:grid-cols-[1fr_auto]"><div><p className="font-semibold">{order.bag.title} · {order.quantity} шт.</p><p className="text-xs text-muted">{order.bag.venue.name} · код {order.pickupCode}</p></div><div className="sm:text-right"><p className="font-semibold">{price(order.totalPrice)}</p><p className="text-xs text-muted">{ORDER_LABELS[order.status] ?? order.status}</p></div></Link>)}</div>}</section>
-      <section className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white"><div className="flex items-center justify-between border-b p-4"><div><h2 className="font-semibold">Последние пакеты</h2><p className="text-xs text-muted">Остатки на продаже</p></div><Link href="/business/bags" className="text-sm font-semibold text-primary">Управлять</Link></div>{recentBags.length === 0 ? <p className="p-6 text-sm text-muted">Пакетов пока нет.</p> : <div className="divide-y">{recentBags.map((bag) => <div key={bag.id} className="flex justify-between gap-3 p-4"><div className="min-w-0"><p className="truncate font-semibold">{bag.title}</p><p className="truncate text-xs text-muted">{bag.venue.name}</p></div><div className="text-right"><p className="font-semibold">{bag.quantityLeft}/{bag.quantityTotal}</p><p className="text-xs text-muted">{bag.status === "ACTIVE" ? "В продаже" : bag.status === "SOLD_OUT" ? "Распродано" : "Закрыт"}</p></div></div>)}</div>}</section>
+      <section className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white"><div className="flex items-center justify-between border-b p-4"><div><h2 className="font-semibold">Последние пакеты</h2><p className="text-xs text-muted">Остатки на продаже</p></div><Link href="/business/bags" className="text-sm font-semibold text-primary">Управлять</Link></div>{recentBags.length === 0 ? <p className="p-6 text-sm text-muted">Пакетов пока нет.</p> : <div className="divide-y">{recentBags.map((bag) => { const displayStatus = businessBagStatus(bag, now); return <div key={bag.id} className="flex justify-between gap-3 p-4"><div className="min-w-0"><p className="truncate font-semibold">{bag.title}</p><p className="truncate text-xs text-muted">{bag.venue.name}</p></div><div className="text-right"><p className="font-semibold">{bag.quantityLeft}/{bag.quantityTotal}</p><p className="text-xs text-muted">{BUSINESS_BAG_STATUS_LABELS[displayStatus]}</p></div></div>; })}</div>}</section>
     </div>
   </main>;
 }
