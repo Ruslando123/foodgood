@@ -28,6 +28,7 @@ export default function VenueAddressPicker({ address, lat, lng, onChange, onVali
   useEffect(() => {
     if (address !== lastEmittedAddress.current && address !== query) {
       selectedAddress.current = address;
+      lastEmittedAddress.current = address;
       setQuery(address);
     }
   }, [address, query]);
@@ -90,6 +91,7 @@ export default function VenueAddressPicker({ address, lat, lng, onChange, onVali
             aria-expanded={open && suggestions.length > 0}
             aria-controls={listId}
             value={query}
+            maxLength={300}
             onChange={(event) => {
               lastEmittedAddress.current = event.target.value;
               setQuery(event.target.value);
@@ -132,7 +134,9 @@ export default function VenueAddressPicker({ address, lat, lng, onChange, onVali
             lat={lat}
             lng={lng}
             onChange={(point) => {
-              onChange({ address: query, ...point });
+              // После выбора заведения внешний address обновляется раньше локального query.
+              // Не позволяем клику по карте затереть уже найденный адрес пустым старым значением.
+              onChange({ address: address.trim() || query.trim(), ...point });
               onValidityChange?.(true);
             }}
           />
