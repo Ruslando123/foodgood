@@ -1,16 +1,55 @@
-"use client";
+import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/db";
+import AdminVenuesClient, {
+  type AdminVenueListItem,
+  type AdminVenueStatusFilter,
+} from "./AdminVenuesClient";
 
-import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { api } from "@/lib/client/api";
+const PAGE_SIZE = 10;
 
-type Venue = { id: string; name: string; address: string; status: "ACTIVE" | "SUSPENDED"; createdAt: string; owner: { phone: string | null; name: string | null }; bags: { id: string }[] };
+export default async function AdminVenuesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string }>;
+}) {
+  const params = await searchParams;
+  const status: AdminVenueStatusFilter = params.status === "SUSPENDED" ? "SUSPENDED" : "ALL";
+  const where: Prisma.VenueWhereInput = status === "SUSPENDED" ? { status } : {};
 
-export default function AdminVenuesPage() {
-  const searchParams = useSearchParams();
-  const [venues, setVenues] = useState<Venue[]>([]); const [query, setQuery] = useState(""); const [status, setStatus] = useState(searchParams.get("status") === "SUSPENDED" ? "SUSPENDED" : "ALL"); const [page, setPage] = useState(1); const [pages, setPages] = useState(1); const [error, setError] = useState<string | null>(null);
-  const load = useCallback(async () => { try { const params = new URLSearchParams({ page: String(page), q: query, status }); const result = await api<{ venues: Venue[]; page: number; pages: number }>(`/api/admin/venues?${params}`); setVenues(result.venues); setPage(result.page); setPages(result.pages); setError(null); } catch (e) { setError(e instanceof Error ? e.message : "Не удалось загрузить заведения"); } }, [page, query, status]);
-  useEffect(() => { const timer = window.setTimeout(() => void load(), 250); return () => window.clearTimeout(timer); }, [load]);
-  return <main className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6"><header><h1 className="text-2xl font-bold">Заведения</h1><p className="mt-1 text-sm text-muted">Проверяйте данные заведений и управляйте их публикацией.</p></header><div className="flex flex-col gap-2 sm:flex-row"><label className="sr-only" htmlFor="venue-search">Поиск заведений</label><input id="venue-search" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="Название, адрес или владелец" className="min-w-0 flex-1 rounded-xl border px-3 py-2.5" /><label className="sr-only" htmlFor="venue-status">Статус</label><select id="venue-status" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }} className="rounded-xl border px-3 py-2.5"><option value="ALL">Все статусы</option><option value="ACTIVE">Активные</option><option value="SUSPENDED">Приостановленные</option></select></div>{error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}<section className="overflow-hidden rounded-2xl border border-black/10 bg-white">{venues.length === 0 ? <p className="p-6 text-center text-sm text-muted">Заведений не найдено.</p> : venues.map((venue) => <Link key={venue.id} href={`/admin/venues/${venue.id}`} className="flex items-center justify-between gap-3 border-b border-black/[0.07] p-4 last:border-b-0 hover:bg-black/[0.02]"><div className="min-w-0"><p className="truncate font-semibold">{venue.name}</p><p className="truncate text-sm text-muted">{venue.owner.name ?? venue.owner.phone ?? "Владелец не указан"} · {venue.bags.length} активных пакетов</p><p className="mt-1 text-xs text-muted">Зарегистрировано {new Date(venue.createdAt).toLocaleDateString("ru-RU")}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${venue.status === "ACTIVE" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800"}`}>{venue.status === "ACTIVE" ? "Активно" : "Приостановлено"}</span></Link>)}</section>{pages > 1 && <div className="flex items-center justify-center gap-3"><button disabled={page === 1} onClick={() => setPage((value) => value - 1)} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-40">Назад</button><span className="text-sm text-muted">{page} из {pages}</span><button disabled={page === pages} onClick={() => setPage((value) => value + 1)} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-40">Далее</button></div>}</main>;
+  const [total, venueRows] = await Promise.all([
+    prisma.venue.count({ where }),
+    prisma.venue.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        createdAt: true,
+        owner: { select: { phone: true, name: true } },
+        bags: { where: { status: "ACTIVE" }, select: { id: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: PAGE_SIZE,
+    }),
+  ]);
+
+  const venues: AdminVenueListItem[] = venueRows.map((venue) => ({
+    id: venue.id,
+    name: venue.name,
+    status: venue.status === "SUSPENDED" ? "SUSPENDED" : "ACTIVE",
+    createdAt: venue.createdAt.toISOString(),
+    owner: venue.owner,
+    bags: venue.bags,
+  }));
+
+  return (
+    <AdminVenuesClient
+      initialData={{
+        venues,
+        page: 1,
+        pages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+      }}
+      initialStatus={status}
+    />
+  );
 }
