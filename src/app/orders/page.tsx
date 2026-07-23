@@ -10,6 +10,7 @@ import NotificationBell from "@/components/NotificationBell";
 import QrCanvas from "@/components/QrCanvas";
 import OrderSupportButton from "@/components/OrderSupportButton";
 import OrderFeedbackForm from "@/components/OrderFeedbackForm";
+import OrderReviewForm from "@/components/OrderReviewForm";
 import { api, ApiError, Order, formatPrice, formatPickupWindow } from "@/lib/client/api";
 import { twoGisDirectionsUrl } from "@/lib/maps";
 import { trackProductEvent } from "@/lib/client/product-analytics";
@@ -233,6 +234,7 @@ function OrderCard({
             Заказать снова
           </Link>
           {order.status === "COMPLETED" && (order.feedback ? <p className="rounded-xl bg-emerald-50 px-3 py-2.5 text-center text-sm font-semibold text-emerald-700">Приватная оценка сохранена</p> : <OrderFeedbackForm id={order.id} />)}
+          {order.status === "COMPLETED" && (order.review ? <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-center text-sm font-semibold text-amber-700">Публичный отзыв сохранён</p> : <OrderReviewForm id={order.id} />)}
         </div>
       )}
       {(order.complaints ?? []).map((complaint) => <ComplaintTimeline key={complaint.id} complaint={complaint} />)}

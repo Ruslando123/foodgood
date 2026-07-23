@@ -5,7 +5,6 @@ import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
 import { parseSafetyAttestations, safetyAttestationData } from "@/lib/publication-safety";
-import { assertVenueInPilotScope, getPilotConfig } from "@/lib/pilot";
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
@@ -46,8 +45,7 @@ export async function POST(req: NextRequest) {
       min: priceNum,
       max: 10_000_000,
     });
-    const pilot = getPilotConfig();
-    const qty = integer(body.quantity, "quantity", { min: 1, max: pilot.limits.quantityPerBag });
+    const qty = integer(body.quantity, "quantity", { min: 1 });
     const start = dateValue(body.pickupStart, "pickupStart");
     const end = dateValue(body.pickupEnd, "pickupEnd");
 
@@ -56,23 +54,14 @@ export async function POST(req: NextRequest) {
       throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
     }
     if (venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
-    assertVenueInPilotScope(venue);
     if (end <= start || end <= new Date()) {
       throw new ApiError(400, "INVALID_PICKUP_WINDOW", "Некорректное окно выдачи");
-    }
-    if (end.getTime() - start.getTime() > pilot.limits.pickupWindowHours * 60 * 60_000) {
-      throw new ApiError(400, "PICKUP_WINDOW_TOO_LONG", `Окно выдачи пилота — не более ${pilot.limits.pickupWindowHours} ч`);
     }
     const bag = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "Venue" WHERE id = ${venue.id} FOR UPDATE`;
       const lockedVenue = await tx.venue.findUnique({ where: { id: venue.id } });
       if (!lockedVenue || lockedVenue.ownerId !== owner.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
       if (lockedVenue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено администратором");
-      assertVenueInPilotScope(lockedVenue);
-      const activeBagCount = await tx.bag.count({ where: { venueId: venue.id, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } } });
-      if (activeBagCount >= pilot.limits.activeBagsPerVenue) {
-        throw new ApiError(409, "PILOT_BAG_LIMIT", `Для заведения доступно не более ${pilot.limits.activeBagsPerVenue} активных пакетов`);
-      }
       const created = await tx.bag.create({
         data: {
           venueId: venue.id,

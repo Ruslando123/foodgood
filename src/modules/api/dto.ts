@@ -1,5 +1,4 @@
 import { Prisma } from "@prisma/client";
-import { getPilotConfig } from "@/lib/pilot";
 
 export type PublicVenueDto = {
   id: string;
@@ -50,6 +49,7 @@ export type CustomerOrderDto = {
   completedAt: string | null;
   bag: PublicBagDto;
   feedback: { id: string; quality: number; freshness: number; match: number; value: number; pickup: number; comment: string } | null;
+  review: { id: string } | null;
   complaints: Array<{
     id: string;
     category: string;
@@ -114,6 +114,7 @@ export const customerOrderSelect = {
   offerSnapshotJson: true,
   bag: { select: publicBagSelect },
   feedback: { select: { id: true, quality: true, freshness: true, match: true, value: true, pickup: true, comment: true } },
+  review: { select: { id: true } },
   complaints: {
     orderBy: { createdAt: "desc" },
     take: 10,
@@ -139,13 +140,15 @@ export const merchantOrderSelect = {
 type PublicVenueSource = Prisma.VenueGetPayload<{ select: typeof publicVenueSelect }>;
 type CustomerOrderSource = Prisma.OrderGetPayload<{ select: typeof customerOrderSelect }>;
 type MerchantOrderSource = Prisma.OrderGetPayload<{ select: typeof merchantOrderSelect }>;
-type CustomerOrderMappable = Omit<CustomerOrderSource, "feedback" | "complaints"> & {
+type CustomerOrderMappable = Omit<CustomerOrderSource, "feedback" | "complaints" | "review"> & {
   feedback?: CustomerOrderSource["feedback"];
   complaints?: CustomerOrderSource["complaints"];
+  review?: CustomerOrderSource["review"];
 };
-type MerchantOrderMappable = Omit<MerchantOrderSource, "feedback" | "complaints"> & {
+type MerchantOrderMappable = Omit<MerchantOrderSource, "feedback" | "complaints" | "review"> & {
   feedback?: CustomerOrderSource["feedback"];
   complaints?: CustomerOrderSource["complaints"];
+  review?: CustomerOrderSource["review"];
 };
 
 function isoDate(value: Date | string): string {
@@ -156,7 +159,6 @@ export function toPublicVenueDto(
   venue: PublicVenueSource,
   overrides: { rating?: number | null; reviewCount?: number } = {}
 ): PublicVenueDto {
-  const reviewsEnabled = getPilotConfig().features.publicReviews;
   return {
     id: venue.id,
     name: venue.name,
@@ -172,9 +174,9 @@ export function toPublicVenueDto(
     openingHours: venue.openingHours,
     sellerLegalName: venue.name,
     sellerLegalType: "",
-    rating: reviewsEnabled ? (overrides.rating ?? (venue.ratingCount > 0 ? venue.ratingAverage : null)) : null,
-    ...(overrides.reviewCount === undefined ? {} : { reviewCount: reviewsEnabled ? overrides.reviewCount : 0 }),
-    publicRatingsEnabled: reviewsEnabled,
+    rating: overrides.rating ?? (venue.ratingCount > 0 ? venue.ratingAverage : null),
+    ...(overrides.reviewCount === undefined ? {} : { reviewCount: overrides.reviewCount }),
+    publicRatingsEnabled: true,
   };
 }
 
@@ -228,6 +230,7 @@ export function toCustomerOrderDto(order: CustomerOrderMappable): CustomerOrderD
     completedAt: order.completedAt ? isoDate(order.completedAt) : null,
     bag: toPublicBagDto(order.bag, parseOfferSnapshot(order.offerSnapshotJson)),
     feedback: order.feedback ? { ...order.feedback } : null,
+    review: order.review ? { id: order.review.id } : null,
     complaints: (order.complaints ?? []).map((complaint) => ({
       id: complaint.id,
       category: complaint.category,

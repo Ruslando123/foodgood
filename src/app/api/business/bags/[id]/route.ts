@@ -6,7 +6,6 @@ import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { dateValue, integer, optionalString, requiredString } from "@/shared/validation";
 import { clientSourceFromRequest, recordProductEvent } from "@/lib/product-analytics";
 import { parseSafetyAttestations, safetyAttestationData } from "@/lib/publication-safety";
-import { assertVenueInPilotScope, getPilotConfig } from "@/lib/pilot";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(_req, async () => {
@@ -25,8 +24,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const source = await prisma.bag.findUnique({ where: { id }, include: { venue: true } });
     if (!source || source.venue.ownerId !== owner.id) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
     if (source.venue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено");
-    assertVenueInPilotScope(source.venue);
-    const pilot = getPilotConfig();
     const duration = source.pickupEnd.getTime() - source.pickupStart.getTime();
     const pickupStart = new Date(source.pickupStart); const now = new Date();
     do { pickupStart.setDate(pickupStart.getDate() + 1); } while (pickupStart <= now);
@@ -36,9 +33,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const lockedVenue = await tx.venue.findUnique({ where: { id: source.venueId } });
       if (!lockedVenue || lockedVenue.ownerId !== owner.id) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
       if (lockedVenue.status !== "ACTIVE") throw new ApiError(409, "VENUE_SUSPENDED", "Заведение приостановлено");
-      assertVenueInPilotScope(lockedVenue);
-      const activeBagCount = await tx.bag.count({ where: { venueId: source.venueId, status: { in: ["ACTIVE", "SOLD_OUT"] }, pickupEnd: { gt: new Date() } } });
-      if (activeBagCount >= pilot.limits.activeBagsPerVenue) throw new ApiError(409, "PILOT_BAG_LIMIT", `Для заведения доступно не более ${pilot.limits.activeBagsPerVenue} активных пакетов`);
       const created = await tx.bag.create({ data: { venueId: source.venueId, title: source.title, description: source.description, composition: source.composition || source.description, allergens: source.allergens, storage: source.storage || "Уточнить у продавца при получении", examplePhoto: source.examplePhoto, price: source.price, originalPrice: source.originalPrice, quantityTotal: source.quantityTotal, quantityLeft: source.quantityTotal, pickupStart, pickupEnd, ...safetyAttestationData(safety, actor.id) }, include: { venue: true } });
       await recordProductEvent(tx, {
         name: "partner_offer_created",

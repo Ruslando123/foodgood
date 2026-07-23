@@ -8,7 +8,6 @@ import { consumeRateLimit } from "@/shared/server/rate-limit";
 import { integer, requiredString } from "@/shared/validation";
 import { customerOrderSelect, toCustomerOrderDto } from "@/modules/api/dto";
 import { clientSourceFromRequest } from "@/lib/product-analytics";
-import { getPilotConfig } from "@/lib/pilot";
 import { hasAcceptedCurrentPrivacyPolicy } from "@/lib/privacy";
 import { hasAcceptedCurrentTerms } from "@/lib/legal";
 
@@ -28,7 +27,7 @@ export async function GET(request: NextRequest) {
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
     const nextCursor = orders.length > limit ? orders.pop()!.id : null;
-    return json({ orders: orders.map(toCustomerOrderDto), nextCursor, features: { publicReviews: getPilotConfig().features.publicReviews } });
+    return json({ orders: orders.map(toCustomerOrderDto), nextCursor, features: { publicReviews: true } });
   });
 }
 
@@ -42,7 +41,7 @@ export async function POST(req: NextRequest) {
     await consumeRateLimit(`order:create:${user.id}`, { limit: 10, windowMs: 60 * 1000 });
     const body = await readJsonObject(req);
     const bagId = requiredString(body.bagId, "bagId", { max: 64 });
-    const quantity = integer(body.quantity ?? 1, "quantity", { min: 1, max: getPilotConfig().limits.quantityPerOrder });
+    const quantity = integer(body.quantity ?? 1, "quantity", { min: 1 });
     const idempotencyKey = normalizeIdempotencyKey(req.headers.get("idempotency-key"));
     try {
       const create = (idempotencyRecordId: string, ownerToken: string) =>

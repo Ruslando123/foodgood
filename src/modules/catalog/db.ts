@@ -1,8 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { CatalogQuery, CatalogSort } from "./query";
-import { PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
-import { getPilotConfig } from "@/lib/pilot";
+import { VENUE_CATEGORY_VALUES } from "@/lib/config";
 
 type CatalogRow = {
   id: string;
@@ -64,7 +63,6 @@ export async function queryCatalog(input: {
   limit: number;
 }) {
   const { query, cityId, lat, lng, limit } = input;
-  const pilot = getPilotConfig();
   const hasLocation = lat !== undefined && lng !== undefined;
   const effectiveSort: CatalogSort = query.sort === "distance" && !hasLocation ? "soon" : query.sort;
   const cursor = decodeCursor(input.cursor ?? null, effectiveSort);
@@ -92,14 +90,7 @@ export async function queryCatalog(input: {
     Prisma.sql`bag."storageCompliantAttested" = true`,
     Prisma.sql`bag."allergensCurrentAttested" = true`,
     Prisma.sql`bag."categoryAllowedAttested" = true`,
-    Prisma.sql`venue.category IN (${Prisma.join(PILOT_CATEGORY_ALLOWLIST)})`,
-    Prisma.sql`venue."cityId" = ${pilot.cityId}`,
-    Prisma.sql`venue.category IN (${Prisma.join(pilot.allowedCategories)})`,
-    Prisma.sql`ST_DWithin(
-      ST_SetSRID(ST_MakePoint(venue.lng, venue.lat), 4326)::geography,
-      ST_SetSRID(ST_MakePoint(${pilot.district.centerLng}, ${pilot.district.centerLat}), 4326)::geography,
-      ${pilot.district.radiusKm * 1000}
-    )`,
+    Prisma.sql`venue.category IN (${Prisma.join(VENUE_CATEGORY_VALUES)})`,
   ];
   if (cityId) filters.push(Prisma.sql`venue."cityId" = ${cityId}`);
   if (query.q) {
@@ -186,8 +177,8 @@ export async function queryCatalog(input: {
         photo: row.venuePhoto,
         sellerLegalName: row.sellerLegalName ?? row.venueName,
         sellerLegalType: row.sellerLegalType ?? "",
-        rating: pilot.features.publicReviews ? row.venueRating || null : null,
-        publicRatingsEnabled: pilot.features.publicReviews,
+        rating: row.venueRating || null,
+        publicRatingsEnabled: true,
       },
     })),
     nextCursor: hasMore && last

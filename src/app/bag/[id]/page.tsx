@@ -16,7 +16,6 @@ import {
   formatPrice,
   formatPickupWindow,
   discountPct,
-  PublicPilotConfig,
 } from "@/lib/client/api";
 import { twoGisDirectionsUrl } from "@/lib/maps";
 import { trackProductEvent } from "@/lib/client/product-analytics";
@@ -36,7 +35,6 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
   const viewedBagId = useRef<string | null>(null);
   const bagRequest = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 });
   const [similar, setSimilar] = useState<Bag[]>([]);
-  const [pilot, setPilot] = useState<PublicPilotConfig | null>(null);
 
   const checkoutStorageKey = `foodgood:checkout:${id}`;
 
@@ -138,12 +136,11 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
       const sequence = ++request.sequence;
       request.controller = controller;
       try {
-        const data = await api<{ bag: Bag; pilot: PublicPilotConfig }>(`/api/bags/${id}`, { signal: controller.signal });
+        const data = await api<{ bag: Bag }>(`/api/bags/${id}`, { signal: controller.signal });
         if (!mounted || sequence !== request.sequence) return;
         setBag(data.bag);
-        setPilot(data.pilot);
         if (!checkoutKey.current) {
-          changeQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1, data.pilot.limits.quantityPerOrder)));
+          changeQuantity((current) => Math.max(1, Math.min(current, data.bag.quantityLeft || 1)));
         }
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
@@ -194,10 +191,9 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
     try {
       const [{ user }, latestResponse] = await Promise.all([
         api<{ user: SessionUser | null }>("/api/auth/me"),
-        api<{ bag: Bag; pilot: PublicPilotConfig }>(`/api/bags/${id}`),
+        api<{ bag: Bag }>(`/api/bags/${id}`),
       ]);
       const latest = latestResponse.bag;
-      setPilot(latestResponse.pilot);
       setBag(latest);
       if (!user) {
         router.push(`/login?next=/bag/${id}`);
@@ -208,7 +204,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
         return;
       }
       if (latest.status !== "ACTIVE" || latest.quantityLeft < quantity) {
-        changeQuantity((current) => Math.max(1, Math.min(current, latest.quantityLeft || 1, latestResponse.pilot.limits.quantityPerOrder)));
+        changeQuantity((current) => Math.max(1, Math.min(current, latest.quantityLeft || 1)));
         setError("Остаток изменился. Проверьте количество и попробуйте снова.");
         return;
       }
@@ -286,7 +282,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
             {bag.venue.name} →
           </Link>
           <p className="mt-0.5 text-[12px] text-muted">{bag.venue.address}</p>
-          {pilot?.features.publicReviews && <Link href={`/venue/${bag.venue.id}`} className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[12px] font-semibold text-amber-700">★ {bag.venue.rating != null ? bag.venue.rating.toFixed(1) : "Новый"} · {bag.venue.reviewCount ?? 0} отзывов</Link>}
+          <Link href={`/venue/${bag.venue.id}`} className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[12px] font-semibold text-amber-700">★ {bag.venue.rating != null ? bag.venue.rating.toFixed(1) : "Новый"} · {bag.venue.reviewCount ?? 0} отзывов</Link>
         </div>
 
         <div className="space-y-3 rounded-[17px] border border-black/[0.07] bg-white p-4 text-[13px] shadow-[0_2px_10px_rgba(20,40,28,0.04)]">
@@ -340,7 +336,7 @@ export default function BagPage({ params }: { params: Promise<{ id: string }> })
               </button>
               <span className="font-bold w-5 text-center">{quantity}</span>
               <button
-                onClick={() => changeQuantity((q) => Math.min(bag.quantityLeft, pilot?.limits.quantityPerOrder ?? 1, q + 1))}
+                onClick={() => changeQuantity((q) => Math.min(bag.quantityLeft, q + 1))}
                 aria-label="Увеличить количество"
                 className="flex h-11 w-11 items-center justify-center rounded-full bg-[#f2f4f2]"
               >

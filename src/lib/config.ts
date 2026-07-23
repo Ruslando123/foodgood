@@ -7,10 +7,9 @@ export const VENUE_CATEGORIES: Record<string, string> = {
   RESTAURANT: "Ресторан",
 };
 
-// The closed pilot intentionally starts with prepared-food venues. Grocery
-// retail remains modelled for existing data but cannot publish pilot offers.
-export const PILOT_CATEGORY_ALLOWLIST = ["CAFE", "BAKERY", "RESTAURANT"] as const;
+// All supported venue categories can publish offers across Kazakhstan.
+export const VENUE_CATEGORY_VALUES = ["CAFE", "BAKERY", "SUPERMARKET", "RESTAURANT"] as const;
 
-export function isPilotCategoryAllowed(category: string): boolean {
-  return (PILOT_CATEGORY_ALLOWLIST as readonly string[]).includes(category);
+export function isVenueCategory(category: string): boolean {
+  return (VENUE_CATEGORY_VALUES as readonly string[]).includes(category);
 }

@@ -132,18 +132,14 @@ test("клиент бронирует PAY_AT_VENUE пакет, владелец 
   await page.getByRole("button", { name: "Сохранить", exact: true }).click();
   await expect(page.getByText("Спасибо! Оценка сохранена приватно.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Оценить заказ приватно" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Оставить отзыв" })).toHaveCount(0);
-  const rejectedReview = await page.request.post(`/api/orders/${orderId}/review`, { data: { rating: 5, comment: "Тест" } });
-  expect(rejectedReview.status()).toBe(403);
+  await expect(page.getByRole("button", { name: "Оставить отзыв" })).toBeVisible();
+  const review = await page.request.post(`/api/orders/${orderId}/review`, { data: { rating: 5, comment: "Тест" } });
+  expect(review.status()).toBe(201);
 });
 
-test("сервер отклоняет непилотный город и категорию", async ({ request }) => {
-  const outsideCity = await request.get("/api/bags?city=astana");
-  expect(outsideCity.status()).toBe(409);
-  expect(await outsideCity.json()).toMatchObject({ error: { code: "OUTSIDE_PILOT_CITY" } });
-  const disabledCategory = await request.get("/api/bags?city=almaty&category=SUPERMARKET");
-  expect(disabledCategory.status()).toBe(409);
-  expect(await disabledCategory.json()).toMatchObject({ error: { code: "CATEGORY_DISABLED_FOR_PILOT" } });
+test("сервер принимает все поддерживаемые города и категории", async ({ request }) => {
+  expect((await request.get("/api/bags?city=astana")).status()).toBe(200);
+  expect((await request.get("/api/bags?city=almaty&category=SUPERMARKET")).status()).toBe(200);
 });
 
 test("клиент отправляет привязанную к заказу обратную связь в поддержку", async ({ page, browser }) => {
@@ -196,7 +192,7 @@ test("владелец публикует пакет", async ({ page }) => {
     "Еда пригодна к реализации в указанное окно выдачи",
     "Условия и сроки хранения соблюдены",
     "Информация о возможных аллергенах актуальна",
-    "Содержимое соответствует категории закрытого пилота",
+    "Содержимое соответствует выбранной категории заведения",
   ]) {
     await page.getByLabel(label, { exact: true }).check();
   }
@@ -253,13 +249,13 @@ test("повторяет бронирование тем же ключом по�
   expect(retriedOrderId).toBe(firstOrderId);
 });
 
-test("каталог принудительно ограничен пилотным городом", async ({ request }) => {
+test("каталог фильтруется по выбранному городу", async ({ request }) => {
   const astana = await request.get("/api/bags?city=astana");
-  expect(astana.status()).toBe(409);
+  expect(astana.status()).toBe(200);
   const almaty = await request.get("/api/bags?city=almaty");
   const bags = (await almaty.json()).bags as Array<{ venue: { cityId: string; category: string } }>;
   expect(bags.length).toBeGreaterThan(0);
-  expect(bags.every((bag) => bag.venue.cityId === "almaty" && ["CAFE", "BAKERY"].includes(bag.venue.category))).toBe(true);
+  expect(bags.every((bag) => bag.venue.cityId === "almaty")).toBe(true);
 });
 
 test("запрос удаления деактивирует аккаунт и завершает сессию", async ({ page }) => {
