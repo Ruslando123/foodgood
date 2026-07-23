@@ -152,6 +152,7 @@ test("владелец находит заведение по названию �
           id: "address-1",
           name: "Coffee Boom",
           osmKey: "amenity",
+          city: "Алматы",
           address: "проспект Абая, 10, Алматы, Қазақстан",
           primary: "проспект Абая, 10",
           secondary: "Алматы, Қазақстан",
