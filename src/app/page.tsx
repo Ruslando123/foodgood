@@ -72,6 +72,12 @@ export default function HomePage() {
   const [todayOnly, setTodayOnly] = useState(false);
   const [sort, setSort] = useState<Sort>("soon");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [catalogNow, setCatalogNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setCatalogNow(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const requestLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -322,9 +328,17 @@ export default function HomePage() {
     }
   }
 
+  const visibleBags = useMemo(
+    () => bags?.filter((bag) =>
+      bag.status === "ACTIVE"
+      && bag.quantityLeft > 0
+      && new Date(bag.pickupEnd).getTime() > catalogNow
+    ) ?? null,
+    [bags, catalogNow]
+  );
   const totalSaved = useMemo(
-    () => (bags ?? []).reduce((sum, bag) => sum + (bag.originalPrice - bag.price) * bag.quantityLeft, 0),
-    [bags]
+    () => (visibleBags ?? []).reduce((sum, bag) => sum + (bag.originalPrice - bag.price) * bag.quantityLeft, 0),
+    [visibleBags]
   );
   const activeFilters = [category, maxPrice, minDiscount, minRating, maxDistance, todayOnly].filter(Boolean).length;
 
@@ -428,14 +442,14 @@ export default function HomePage() {
 
       {view === "map" ? (
         <div className="relative mx-4 h-[calc(100dvh-19rem)] min-h-[420px] overflow-hidden rounded-[18px] border border-black/[0.08]">
-          <MapView bags={bags ?? []} userLocation={location} />
+          <MapView bags={visibleBags ?? []} userLocation={location} />
           {loading && <div className="absolute inset-x-3 top-3 rounded-xl bg-white/90 p-2 text-center text-[11px] shadow">Обновляем карту…</div>}
         </div>
       ) : (
         <main className="min-w-0 space-y-2.5 px-4">
-          {bags && bags.length > 0 && (
+          {visibleBags && visibleBags.length > 0 && (
             <div className="rounded-[10px] bg-[#edf7f1] px-3 py-2 text-[11px] font-medium text-[#226442]">
-              Найдено {bags.length} {pluralRu(bags.length, "пакет", "пакета", "пакетов")} {location ? "с учётом местоположения" : "по Казахстану"} · можно сэкономить до {totalSaved.toLocaleString("ru-RU")} ₸
+              Найдено {visibleBags.length} {pluralRu(visibleBags.length, "пакет", "пакета", "пакетов")} {location ? "с учётом местоположения" : "по Казахстану"} · можно сэкономить до {totalSaved.toLocaleString("ru-RU")} ₸
             </div>
           )}
           {error && (
@@ -444,7 +458,7 @@ export default function HomePage() {
             </div>
           )}
           {bags === null && loading && <CatalogSkeleton />}
-          {bags?.length === 0 && !loading && !error && (
+          {visibleBags?.length === 0 && !loading && !error && (
             <div className="w-[calc(100vw-2rem)] max-w-full overflow-hidden rounded-[18px] border border-black/[0.07] bg-[#fafbfa] px-4 py-12 text-center sm:px-6 sm:py-14">
               <IconSearch size={38} stroke={1.4} className="mx-auto text-muted" />
               <h2 className="mt-3 break-words font-bold leading-6">{city && !activeFilters && !search ? `В городе ${city.name} пока нет пакетов` : "Ничего не найдено"}</h2>
@@ -456,7 +470,7 @@ export default function HomePage() {
               </div>
             </div>
           )}
-          {bags?.map((bag) => <BagCard key={bag.id} bag={bag} />)}
+          {visibleBags?.map((bag) => <BagCard key={bag.id} bag={bag} />)}
           {nextCursor && !loading && <button onClick={loadMore} disabled={loadingMore} className="w-full rounded-xl border border-primary/20 py-3 text-sm font-semibold text-primary disabled:opacity-50">{loadingMore ? "Загружаем…" : "Показать ещё"}</button>}
           {loading && bags !== null && <p className="py-2 text-center text-[11px] text-muted">Обновляем результаты…</p>}
         </main>

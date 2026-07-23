@@ -16,8 +16,15 @@ export default function SettingsPreferences({ embedded = false }: { embedded?: b
   }, []);
 
   async function toggleReminders() {
+    await savePreferences({ ...preferences, reminders: !preferences.reminders });
+  }
+
+  async function toggleOffers() {
+    await savePreferences({ ...preferences, offers: !preferences.offers });
+  }
+
+  async function savePreferences(next: typeof preferences) {
     const previous = preferences;
-    const next = { ...previous, reminders: !previous.reminders };
     setPreferences(next);
     setBusy(true);
     setSaved(false);
@@ -37,6 +44,7 @@ export default function SettingsPreferences({ embedded = false }: { embedded?: b
 
   return <section className={embedded ? "" : "overflow-hidden rounded-[17px] border border-black/[0.08] bg-white"}>
     <SettingToggle label="Напоминать о выдаче" description="Показывать напоминание перед окном выдачи" checked={preferences.reminders} disabled={busy} onClick={toggleReminders} />
+    <SettingToggle label="Новые пакеты любимых мест" description="Присылать уведомление, когда избранное заведение публикует пакет" checked={preferences.offers} disabled={busy} onClick={toggleOffers} />
     {saved && <p role="status" className="border-t px-4 py-2 text-center text-xs font-semibold text-primary">Настройки сохранены</p>}
     {error && <p role="alert" className="border-t border-red-100 bg-red-50 px-4 py-2 text-center text-xs font-medium text-red-700">{error}</p>}
   </section>;

@@ -36,6 +36,8 @@ beforeEach(() => resetDb());
 afterEach(() => {
   qrMock.pickupCodes.length = 0;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -386,6 +388,54 @@ describe("выдача в заведении", () => {
 });
 
 describe("пакетные уведомления", () => {
+  it("отправляет новый пакет любимого заведения в Telegram без дублей", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "123456:test-token");
+    vi.stubEnv("TELEGRAM_NOTIFICATIONS_ENABLED", "true");
+    vi.stubEnv("APP_BASE_URL", "https://foodgood.kz");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ ok: true, result: { message_id: 123 } }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const { venue, bag } = await createFixtures();
+    const follower = await prisma.user.create({ data: {
+      telegramId: "telegram-favorite-user",
+      role: "CUSTOMER",
+      communicationsConsent: true,
+      privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+      privacyAcceptedAt: new Date(),
+    } });
+    await prisma.favorite.create({ data: { userId: follower.id, venueId: venue.id } });
+    await enqueueBatchJob({
+      queue: "notifications",
+      type: "FANOUT_NEW_BAG",
+      payload: { bagId: bag.id },
+      dedupeKey: `telegram-fanout-test:${bag.id}`,
+    });
+
+    await runBatchJobs("notifications");
+    await runBatchJobs("notifications");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      chat_id: "telegram-favorite-user",
+      reply_markup: {
+        inline_keyboard: [[{ text: "Посмотреть пакет", url: `https://foodgood.kz/bag/${bag.id}` }]],
+      },
+    });
+    await expect(prisma.notification.findUnique({
+      where: { dedupeKey: `new-bag-telegram:${bag.id}:${follower.id}` },
+    })).resolves.toMatchObject({
+      channel: "TELEGRAM",
+      status: "SENT",
+      recipient: "telegram-favorite-user",
+    });
+    await expect(prisma.notification.findUnique({
+      where: { dedupeKey: `new-bag:${bag.id}:${follower.id}` },
+    })).resolves.toMatchObject({ channel: "IN_APP", status: "SENT" });
+  });
+
   it("продолжает fanout, если последний favorite предыдущей страницы удалён", async () => {
     const { venue, bag } = await createFixtures();
     const followers = await Promise.all(Array.from({ length: 4 }, async (_, index) => {

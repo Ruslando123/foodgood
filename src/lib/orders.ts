@@ -46,7 +46,7 @@ export async function expireStale(limit = 250): Promise<number> {
     const expiredBags = await tx.$queryRaw<Array<{ id: string }>>`
       WITH candidates AS (
         SELECT id FROM "Bag"
-        WHERE status IN ('ACTIVE', 'SOLD_OUT') AND "pickupEnd" < now()
+        WHERE status IN ('ACTIVE', 'SOLD_OUT') AND "pickupEnd" <= now()
         ORDER BY "pickupEnd", id FOR UPDATE SKIP LOCKED LIMIT ${limit}
       )
       UPDATE "Bag" bag SET status = 'EXPIRED'
@@ -57,7 +57,7 @@ export async function expireStale(limit = 250): Promise<number> {
       SELECT orders.id FROM "Order" orders
       JOIN "Bag" bag ON bag.id = orders."bagId"
       WHERE orders.status IN ('RESERVED', 'READY_FOR_PICKUP')
-        AND bag."pickupEnd" < now()
+        AND bag."pickupEnd" <= now()
       ORDER BY bag."pickupEnd", orders.id
       FOR UPDATE OF orders SKIP LOCKED LIMIT ${limit}
     `;
