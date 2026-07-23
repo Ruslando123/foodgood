@@ -23,6 +23,14 @@ export default function VenueAddressPicker({ address, lat, lng, onChange, onVali
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedAddress = useRef(address);
+  const lastEmittedAddress = useRef(address);
+
+  useEffect(() => {
+    if (address !== lastEmittedAddress.current && address !== query) {
+      selectedAddress.current = address;
+      setQuery(address);
+    }
+  }, [address, query]);
 
   useEffect(() => {
     const normalized = query.trim();
@@ -58,6 +66,7 @@ export default function VenueAddressPicker({ address, lat, lng, onChange, onVali
 
   function select(suggestion: AddressSuggestion) {
     selectedAddress.current = suggestion.address;
+    lastEmittedAddress.current = suggestion.address;
     setQuery(suggestion.address);
     setSuggestions([]);
     setOpen(false);
@@ -82,6 +91,7 @@ export default function VenueAddressPicker({ address, lat, lng, onChange, onVali
             aria-controls={listId}
             value={query}
             onChange={(event) => {
+              lastEmittedAddress.current = event.target.value;
               setQuery(event.target.value);
               selectedAddress.current = "";
               onValidityChange?.(false);

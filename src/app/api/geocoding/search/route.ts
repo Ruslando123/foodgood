@@ -12,6 +12,7 @@ export async function GET(req: NextRequest) {
     await consumeRateLimit(`geocoding:search:${user.id}`, { limit: 60, windowMs: 60_000 });
 
     const query = (req.nextUrl.searchParams.get("q") ?? "").trim();
+    const mode = req.nextUrl.searchParams.get("mode") === "venue" ? "venue" : "address";
     if (query.length < 3 || query.length > 120) {
       throw new ApiError(400, "INVALID_ADDRESS_QUERY", "Введите минимум 3 символа адреса");
     }
@@ -41,7 +42,13 @@ export async function GET(req: NextRequest) {
       throw new ApiError(503, "GEOCODING_UNAVAILABLE", "Поиск адресов временно недоступен");
     }
 
-    const suggestions = photonSuggestions(await response.json());
+    const parsed = photonSuggestions(await response.json());
+    const suggestions = mode === "venue"
+      ? parsed.filter((suggestion) =>
+          suggestion.name
+          && ["amenity", "shop", "tourism", "office", "craft", "leisure"].includes(suggestion.osmKey)
+        )
+      : parsed;
     return json({ suggestions }, {
       headers: { "Cache-Control": "private, max-age=60" },
     });
