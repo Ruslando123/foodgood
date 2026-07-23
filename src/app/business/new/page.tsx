@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, Venue } from "@/lib/client/api";
 import SafetyAttestationChecklist, { allSafetyConfirmed, EMPTY_SAFETY_CHECKLIST } from "@/components/SafetyAttestationChecklist";
-import { isPilotCategoryAllowed } from "@/lib/config";
 
 /** Публикация пакета «в 2 клика»: разумные значения по умолчанию на вечер. */
 export default function NewBagPage() {
@@ -30,9 +29,8 @@ export default function NewBagPage() {
   useEffect(() => {
     api<{ venues: Venue[] }>("/api/business/venues")
       .then(({ venues }) => {
-        const pilotVenues = venues.filter(({ category }) => isPilotCategoryAllowed(category));
-        setVenues(pilotVenues);
-        if (pilotVenues[0]) setVenueId(pilotVenues[0].id);
+        setVenues(venues);
+        if (venues[0]) setVenueId(venues[0].id);
       })
       .catch((e) => setError(e.message));
   }, []);

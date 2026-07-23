@@ -1,18 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
-import { enforcePilotVenueCapacity } from "@/lib/pilot";
 import { queryCatalog } from "@/modules/catalog/db";
 import { parseCatalogQuery } from "@/modules/catalog/query";
 import { createFixtures, resetDb } from "./helpers";
 
 beforeEach(() => resetDb());
 
-describe("публичная граница закрытого пилота", () => {
+describe("публичная публикация пакетов", () => {
   const query = parseCatalogQuery(new URLSearchParams());
-
-  it("получает advisory lock без десериализации PostgreSQL void", async () => {
-    await expect(prisma.$transaction((tx) => enforcePilotVenueCapacity(tx))).resolves.toBeUndefined();
-  });
 
   it("показывает пакет без профиля, договора и проверки партнёра", async () => {
     const { bag } = await createFixtures();

@@ -15,23 +15,6 @@ requiredUrl("S3_PUBLIC_BASE_URL", ["https:"]);
 
 for (const name of ["S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"]) required(name);
 if (!/^\+7\d{10}$/.test(process.env.ADMIN_PHONE ?? "")) errors.push("ADMIN_PHONE must be a normalized +7 phone number");
-requiredExact("FOODGOOD_PILOT_CITY_ID", "almaty");
-required("FOODGOOD_PILOT_DISTRICT_NAME");
-requiredPilotNumber("FOODGOOD_PILOT_CENTER_LAT", -90, 90);
-requiredPilotNumber("FOODGOOD_PILOT_CENTER_LNG", -180, 180);
-requiredPilotNumber("FOODGOOD_PILOT_RADIUS_KM", 0.1, 100);
-requiredPilotNumber("FOODGOOD_PILOT_MAX_VENUES", 1, 100, true);
-requiredPilotNumber("FOODGOOD_PILOT_MAX_ACTIVE_BAGS_PER_VENUE", 1, 100, true);
-requiredPilotNumber("FOODGOOD_PILOT_MAX_BAG_QUANTITY", 1, 1000, true);
-requiredPilotNumber("FOODGOOD_PILOT_MAX_ORDER_QUANTITY", 1, 10, true);
-requiredPilotNumber("FOODGOOD_PILOT_MAX_ACTIVE_ORDERS_PER_CUSTOMER", 1, 100, true);
-requiredPilotNumber("FOODGOOD_PILOT_MAX_PICKUP_WINDOW_HOURS", 0.25, 24);
-requiredExact("FOODGOOD_PILOT_PUBLIC_REVIEWS", "false");
-const pilotCategories = (process.env.FOODGOOD_PILOT_CATEGORIES ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-if (!pilotCategories.length || pilotCategories.some((value) => !["CAFE", "BAKERY"].includes(value))) {
-  errors.push("FOODGOOD_PILOT_CATEGORIES must contain only CAFE and/or BAKERY");
-}
-
 const secretNames = ["SESSION_SECRET", "OTP_SECRET", "TELEGRAM_WEBHOOK_SECRET", "METRICS_SECRET"];
 for (const name of secretNames) requireSecret(name);
 const secretValues = secretNames.map((name) => process.env[name]).filter(Boolean);
@@ -92,12 +75,4 @@ function requireDatabaseTls(name, url) {
 function requireSecret(name) {
   const value = process.env[name] ?? "";
   if (Buffer.byteLength(value, "utf8") < 32) errors.push(`${name} must contain at least 32 bytes`);
-}
-
-function requiredPilotNumber(name, min, max, integer = false) {
-  const raw = process.env[name];
-  const value = Number(raw);
-  if (!raw || !Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
-    errors.push(`${name} must be ${integer ? "an integer " : "a number "}between ${min} and ${max}`);
-  }
 }

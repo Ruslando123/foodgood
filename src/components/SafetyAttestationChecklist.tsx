@@ -20,7 +20,7 @@ const labels: Array<[keyof SafetyChecklistState, string]> = [
   ["suitableForSaleAttested", "Еда пригодна к реализации в указанное окно выдачи"],
   ["storageCompliantAttested", "Условия и сроки хранения соблюдены"],
   ["allergensCurrentAttested", "Информация о возможных аллергенах актуальна"],
-  ["categoryAllowedAttested", "Содержимое соответствует категории закрытого пилота"],
+  ["categoryAllowedAttested", "Содержимое соответствует выбранной категории заведения"],
 ];
 
 export default function SafetyAttestationChecklist({ value, onChange, compact = false }: { value: SafetyChecklistState; onChange: (value: SafetyChecklistState) => void; compact?: boolean }) {

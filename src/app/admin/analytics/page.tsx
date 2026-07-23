@@ -133,7 +133,7 @@ export default async function AdminAnalyticsPage({
         </section>
 
         <section className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white">
-          <div className="border-b border-black/[0.07] p-4"><h2 className="font-semibold">Контроль закрытого пилота</h2><p className="text-xs text-muted">Исходы по броням, созданным в выбранный период.</p></div>
+          <div className="border-b border-black/[0.07] p-4"><h2 className="font-semibold">Контроль бронирований</h2><p className="text-xs text-muted">Исходы по броням, созданным в выбранный период.</p></div>
           <div className="grid gap-3 p-4 sm:grid-cols-3">
             <div className="rounded-xl bg-red-50 p-4"><p className="text-xs text-red-700">Жалобы</p><p className="mt-1 text-2xl font-bold text-red-700">{s.complaint_created.events}</p></div>
             <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs text-amber-800">Отмены</p><p className="mt-1 text-2xl font-bold text-amber-800">{outcomes.cancelled}</p><p className="text-xs text-amber-800">{conversion(outcomes.cancelled, outcomes.orders)}</p></div>

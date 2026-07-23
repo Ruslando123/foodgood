@@ -2,8 +2,6 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { apiRoute, ApiError, json } from "@/shared/server/api";
 import { publicVenueSelect, toPublicVenueDto } from "@/modules/api/dto";
-import { PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
-import { getPilotConfig, isVenueInPilotScope, publicPilotConfig } from "@/lib/pilot";
 
 export async function GET(
   _req: NextRequest,
@@ -22,7 +20,6 @@ export async function GET(
         categoryAllowedAttested: true,
         venue: {
           status: "ACTIVE",
-          category: { in: [...PILOT_CATEGORY_ALLOWLIST] },
         },
       },
       select: {
@@ -32,17 +29,17 @@ export async function GET(
         venue: {
           select: {
             ...publicVenueSelect,
-            ...(getPilotConfig().features.publicReviews ? { reviews: {
+            reviews: {
               where: { moderationStatus: "PUBLISHED" },
               select: { id: true, rating: true, comment: true, createdAt: true, user: { select: { name: true } } },
               orderBy: { createdAt: "desc" },
               take: 3,
-            } } : {}),
+            },
           },
         },
       },
     });
-    if (!bag || !isVenueInPilotScope(bag.venue)) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
+    if (!bag) throw new ApiError(404, "BAG_NOT_FOUND", "Пакет не найден");
     return json({
       bag: {
         id: bag.id,
@@ -68,7 +65,6 @@ export async function GET(
           })),
         },
       },
-      pilot: publicPilotConfig(),
     }, { headers: { "Cache-Control": "public, s-maxage=5, stale-while-revalidate=15" } });
   });
 }

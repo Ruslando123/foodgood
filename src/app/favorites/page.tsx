@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { IconHeart } from "@tabler/icons-react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { PILOT_CATEGORY_ALLOWLIST, VENUE_CATEGORIES } from "@/lib/config";
+import { VENUE_CATEGORY_VALUES, VENUE_CATEGORIES } from "@/lib/config";
 import { kazakhstanCityById } from "@/lib/kazakhstan";
 import BottomNav from "@/components/BottomNav";
 import FavoriteVenueCard from "@/components/FavoriteVenueCard";
@@ -19,7 +19,7 @@ export default async function FavoritesPage({ searchParams }: { searchParams: Pr
     userId: user.id,
     venue: {
       status: "ACTIVE",
-      category: { in: [...PILOT_CATEGORY_ALLOWLIST] },
+      category: { in: [...VENUE_CATEGORY_VALUES] },
     },
   };
   const requestedPage = Math.max(1, Number.parseInt((await searchParams).page ?? "1", 10) || 1);

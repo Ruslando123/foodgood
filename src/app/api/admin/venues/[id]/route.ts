@@ -6,7 +6,6 @@ import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { requireAdmin } from "@/modules/auth/server";
 import { apiRoute, ApiError, json, readJsonObject } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
-import { assertVenueInPilotScope, enforcePilotVenueCapacity } from "@/lib/pilot";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return apiRoute(_request, async () => {
@@ -34,9 +33,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const suspensionReason = status === "SUSPENDED"
         ? requiredString(body.suspensionReason, "suspensionReason", { max: 500 })
         : null;
-      if (status === "ACTIVE") assertVenueInPilotScope(existing);
       const venue = await prisma.$transaction(async (tx) => {
-        if (status === "ACTIVE") await enforcePilotVenueCapacity(tx, id);
         const updated = await tx.venue.update({ where: { id }, data: { status, suspensionReason } });
         await tx.auditLog.create({
           data: {
@@ -63,10 +60,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const lat = finiteNumber(body.lat, "lat", { min: -90, max: 90 });
     const lng = finiteNumber(body.lng, "lng", { min: -180, max: 180 });
     const cityId = nearestKazakhstanCity(lat, lng).id;
-    assertVenueInPilotScope({ cityId, category, lat, lng });
 
     const venue = await prisma.$transaction(async (tx) => {
-      if (existing.status === "ACTIVE") await enforcePilotVenueCapacity(tx, id);
       const updated = await tx.venue.update({
         where: { id },
         data: {

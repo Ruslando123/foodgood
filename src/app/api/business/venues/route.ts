@@ -1,13 +1,12 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { VENUE_CATEGORIES, isPilotCategoryAllowed } from "@/lib/config";
+import { VENUE_CATEGORIES } from "@/lib/config";
 import { nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { normalizeTwoGisUrl } from "@/lib/maps";
 import { requireBusinessAccess } from "@/modules/auth/business";
 import { apiRoute, ApiError, assertSameOrigin, json } from "@/shared/server/api";
 import { finiteNumber, optionalString, requiredString } from "@/shared/validation";
-import { assertVenueInPilotScope, enforcePilotVenueCapacity } from "@/lib/pilot";
 
 export async function GET(request: Request) {
   return apiRoute(request, async () => {
@@ -37,11 +36,8 @@ export async function POST(req: NextRequest) {
     let twoGisUrl: string;
     try { twoGisUrl = normalizeTwoGisUrl(optionalString(body.twoGisUrl, "twoGisUrl", 1000)); }
     catch { throw new ApiError(400, "INVALID_TWO_GIS_URL", "Укажите ссылку на карточку заведения с сайта 2GIS"); }
-    if (!(cat in VENUE_CATEGORIES) || !isPilotCategoryAllowed(cat)) {
-      throw new ApiError(400, "CATEGORY_NOT_ALLOWED_IN_PILOT", "Категория пока не входит в закрытый пилот");
-    }
+    if (!(cat in VENUE_CATEGORIES)) throw new ApiError(400, "UNKNOWN_VENUE_CATEGORY", "Неизвестная категория");
     const candidate = { cityId: nearestKazakhstanCity(lat, lng).id, category: cat, lat, lng };
-    assertVenueInPilotScope(candidate);
     let photo: string;
     try { photo = await saveVenuePhoto(file); }
     catch (error) {
@@ -51,11 +47,8 @@ export async function POST(req: NextRequest) {
       throw new ApiError(400, "PHOTO_FORMAT", "Поддерживаются только JPG, PNG и WebP");
     }
     try {
-      const venue = await prisma.$transaction(async (tx) => {
-        await enforcePilotVenueCapacity(tx);
-        return tx.venue.create({
-          data: { name, address, lat, lng, cityId: candidate.cityId, category: cat, description, contactPhone, openingHours, twoGisUrl, photo, ownerId: owner.id },
-        });
+      const venue = await prisma.venue.create({
+        data: { name, address, lat, lng, cityId: candidate.cityId, category: cat, description, contactPhone, openingHours, twoGisUrl, photo, ownerId: owner.id },
       });
       return json({ venue }, { status: 201 });
     } catch (error) {

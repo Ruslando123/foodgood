@@ -57,6 +57,7 @@ export type Order = {
   createdAt: string;
   bag: Bag;
   feedback?: { id: string; quality: number; freshness: number; match: number; value: number; pickup: number; comment: string } | null;
+  review?: { id: string } | null;
   complaints?: Array<{
     id: string; category: string; status: string; note: string; partnerResponse: string; resolution: string; openedAt: string;
     events: Array<{ id: string; type: string; status: string | null; message: string; createdAt: string }>;
@@ -70,16 +71,6 @@ export type SessionUser = {
   name: string | null;
   role: string;
   status?: string;
-};
-
-export type PublicPilotConfig = {
-  mode: "PAY_AT_VENUE";
-  cityId: string;
-  cityName: string;
-  district: { name: string; radiusKm: number };
-  limits: { venues: number; activeBagsPerVenue: number; quantityPerBag: number; quantityPerOrder: number; activeOrdersPerCustomer: number; pickupWindowHours: number };
-  features: { publicReviews: boolean; delivery: false; prepaid: false; loyalty: false; ai: false };
-  allowedCategories: string[];
 };
 
 export class ApiError extends Error {

@@ -9,8 +9,7 @@ import {
   type OrderActorRole,
 } from "@/modules/orders/state-machine";
 import { normalizeClientSource } from "./product-analytics";
-import { PILOT_CATEGORY_ALLOWLIST } from "./config";
-import { getPilotConfig } from "./pilot";
+import { VENUE_CATEGORY_VALUES } from "./config";
 
 export class OrderError extends Error {}
 
@@ -107,8 +106,7 @@ export async function createOrder(
   idempotencyOwnerToken?: string,
   clientSource = "direct"
 ) {
-  const pilot = getPilotConfig();
-  if (!Number.isInteger(quantity) || quantity < 1 || quantity > pilot.limits.quantityPerOrder) {
+  if (!Number.isInteger(quantity) || quantity < 1) {
     throw new OrderError("Некорректное количество");
   }
 
@@ -170,14 +168,7 @@ async function createReservedOrder(
     idempotencyRecordId?: string;
   }
 ): Promise<string> {
-  const pilot = getPilotConfig();
   await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${input.userId} FOR UPDATE`;
-  const activeOrders = await tx.order.count({
-    where: { userId: input.userId, status: { in: ACTIVE_PICKUP_ORDER_STATUSES }, bag: { pickupEnd: { gt: new Date() } } },
-  });
-  if (activeOrders >= pilot.limits.activeOrdersPerCustomer) {
-    throw new OrderError(`В пилоте доступно не более ${pilot.limits.activeOrdersPerCustomer} активных броней`);
-  }
   const orderId = randomUUID();
   const pickupCode = generatePickupCode();
   const reminderId = randomUUID();
@@ -201,14 +192,7 @@ async function createReservedOrder(
       JOIN "Bag" candidate ON candidate."venueId" = venue.id
       WHERE candidate.id = ${input.bagId}
         AND venue.status = 'ACTIVE'
-        AND venue.category IN (${Prisma.join(PILOT_CATEGORY_ALLOWLIST)})
-        AND venue."cityId" = ${pilot.cityId}
-        AND venue.category IN (${Prisma.join(pilot.allowedCategories)})
-        AND ST_DWithin(
-          ST_SetSRID(ST_MakePoint(venue.lng, venue.lat), 4326)::geography,
-          ST_SetSRID(ST_MakePoint(${pilot.district.centerLng}, ${pilot.district.centerLat}), 4326)::geography,
-          ${pilot.district.radiusKm * 1000}
-        )
+        AND venue.category IN (${Prisma.join(VENUE_CATEGORY_VALUES)})
         AND candidate."suitableForSaleAttested" = true
         AND candidate."storageCompliantAttested" = true
         AND candidate."allergensCurrentAttested" = true
@@ -341,21 +325,13 @@ async function createReservedOrder(
 }
 
 async function diagnoseReservationFailure(tx: Prisma.TransactionClient, bagId: string): Promise<never> {
-  const pilot = getPilotConfig();
   const rows = await tx.$queryRaw<ReservationFailure[]>`
     SELECT
       bag.status AS "bagStatus",
       bag."pickupEnd" <= clock_timestamp() AS "pickupEnded",
       venue.status AS "venueStatus",
       (
-        venue.category IN (${Prisma.join(PILOT_CATEGORY_ALLOWLIST)})
-        AND venue."cityId" = ${pilot.cityId}
-        AND venue.category IN (${Prisma.join(pilot.allowedCategories)})
-        AND ST_DWithin(
-          ST_SetSRID(ST_MakePoint(venue.lng, venue.lat), 4326)::geography,
-          ST_SetSRID(ST_MakePoint(${pilot.district.centerLng}, ${pilot.district.centerLat}), 4326)::geography,
-          ${pilot.district.radiusKm * 1000}
-        )
+        venue.category IN (${Prisma.join(VENUE_CATEGORY_VALUES)})
         AND bag."suitableForSaleAttested" = true
         AND bag."storageCompliantAttested" = true
         AND bag."allergensCurrentAttested" = true

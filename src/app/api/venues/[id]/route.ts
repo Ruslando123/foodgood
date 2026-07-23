@@ -2,8 +2,6 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { apiRoute, ApiError, json } from "@/shared/server/api";
 import { publicVenueSelect, toPublicVenueDto } from "@/modules/api/dto";
-import { PILOT_CATEGORY_ALLOWLIST } from "@/lib/config";
-import { getPilotConfig, isVenueInPilotScope, publicPilotConfig } from "@/lib/pilot";
 
 export async function GET(
   _req: NextRequest,
@@ -15,7 +13,6 @@ export async function GET(
       where: {
         id,
         status: "ACTIVE",
-        category: { in: [...PILOT_CATEGORY_ALLOWLIST] },
       },
       select: {
         ...publicVenueSelect,
@@ -29,15 +26,15 @@ export async function GET(
             pickupStart: true, pickupEnd: true, status: true,
           },
         },
-        ...(getPilotConfig().features.publicReviews ? { reviews: {
+        reviews: {
           where: { moderationStatus: "PUBLISHED" },
           select: { id: true, rating: true, comment: true, createdAt: true, user: { select: { name: true } } },
           orderBy: { createdAt: "desc" },
           take: 20,
-        } } : {}),
+        },
       },
     });
-    if (!venue || !isVenueInPilotScope(venue)) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
+    if (!venue) throw new ApiError(404, "VENUE_NOT_FOUND", "Заведение не найдено");
     return json({
       venue: {
         ...toPublicVenueDto(venue),
@@ -51,7 +48,6 @@ export async function GET(
           createdAt: review.createdAt.toISOString(),
         })),
       },
-      pilot: publicPilotConfig(),
     });
   });
 }

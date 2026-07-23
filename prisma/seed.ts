@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { PRIVACY_POLICY_VERSION } from "../src/lib/privacy";
-import { isPilotCategoryAllowed } from "../src/lib/config";
+import { isVenueCategory } from "../src/lib/config";
 import { TERMS_VERSION } from "../src/lib/legal";
 
 const prisma = new PrismaClient();
@@ -226,7 +226,7 @@ async function main() {
       suitableForSaleAttested: true,
       storageCompliantAttested: true,
       allergensCurrentAttested: true,
-      categoryAllowedAttested: isPilotCategoryAllowed(venue.category),
+      categoryAllowedAttested: isVenueCategory(venue.category),
       safetyAttestedAt: new Date(),
       safetyAttestedById: venue.ownerId,
     } });
