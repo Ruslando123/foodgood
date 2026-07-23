@@ -310,7 +310,6 @@ export default function HomePage() {
         </div>
       ) : (
         <main className="min-w-0 space-y-2.5 px-4">
-          {pilot && <div role="status" className="rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-900"><b>Пилот PAY_AT_VENUE:</b> {pilot.cityName}, {pilot.district.name}. Бронь бесплатна; оплата и кассовый чек — у продавца при получении.</div>}
           {bags && bags.length > 0 && (
             <div className="rounded-[10px] bg-[#edf7f1] px-3 py-2 text-[11px] font-medium text-[#226442]">
               Найдено {bags.length} {pluralRu(bags.length, "пакет", "пакета", "пакетов")} {location ? "с учётом местоположения" : "по Казахстану"} · можно сэкономить до {totalSaved.toLocaleString("ru-RU")} ₸
