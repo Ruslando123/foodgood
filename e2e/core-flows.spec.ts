@@ -169,7 +169,10 @@ test("владелец находит заведение по названию �
   await page.getByRole("button", { name: /Coffee Boom.*проспект Абая, 10/ }).click();
   await expect(venueName).toHaveValue("Coffee Boom");
   await expect(address).toHaveValue("проспект Абая, 10, Алматы, Қазақстан");
-  await expect(page.getByLabel("Карта: нажмите, чтобы выбрать точку заведения")).toBeVisible();
+  const map = page.getByLabel("Карта: нажмите, чтобы выбрать точку заведения");
+  await expect(map).toBeVisible();
+  await map.click({ position: { x: 120, y: 90 } });
+  await expect(address).toHaveValue("проспект Абая, 10, Алматы, Қазақстан");
 });
 
 test("клиент отправляет привязанную к заказу обратную связь в поддержку", async ({ page, browser }) => {

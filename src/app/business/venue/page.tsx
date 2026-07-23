@@ -23,6 +23,8 @@ export default function VenueRegistrationPage() {
     try {
       if (!photoFile) throw new Error("Добавьте фотографию заведения");
       if (!addressConfirmed) throw new Error("Выберите адрес из подсказок или укажите точку на карте");
+      if (!form.address.trim()) throw new Error("Адрес не заполнен. Выберите заведение или адрес из подсказок");
+      if (form.address.trim().length > 300) throw new Error("Адрес слишком длинный — оставьте улицу, номер дома и город");
       const upload = new FormData();
       for (const [key, value] of Object.entries(form)) upload.set(key, String(value));
       upload.set("photo", photoFile);
