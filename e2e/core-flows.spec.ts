@@ -199,17 +199,32 @@ test("клиент отправляет привязанную к заказу �
   const adminPage = await adminContext.newPage();
   await login(adminPage, "+7 701 000 00 03", /\/admin\/venues/);
   await adminPage.goto("/admin/support");
-  await expect(adminPage.getByText(orderId, { exact: false })).toBeVisible();
-  await expect(adminPage.getByText("Нужна помощь с окном выдачи", { exact: true })).toBeVisible();
-  await adminPage.getByRole("button", { name: "Отметить первый контакт" }).click();
-  await expect(adminPage.getByText(/Первый контакт отмечен/)).toBeVisible();
-  await adminPage.getByLabel("Ответ партнёра").fill("Заведение подтвердило новое окно выдачи");
-  await adminPage.getByLabel("Решение для покупателя").fill("Клиент согласовал получение в новое время");
-  await adminPage.getByRole("radio", { name: "Да" }).check();
-  await adminPage.getByRole("button", { name: "Зафиксировать решение" }).click();
-  await expect(adminPage.getByText("Решено", { exact: true })).toBeVisible();
-  await adminPage.getByRole("button", { name: "Закрыть кейс" }).click();
-  await expect(adminPage.getByText(orderId, { exact: false })).toHaveCount(0);
+  const supportCard = adminPage.locator("article").filter({ hasText: orderId });
+  const supportMutation = () => adminPage.waitForResponse((response) =>
+    response.request().method() === "PATCH"
+    && response.url().includes("/api/admin/complaints/")
+    && response.ok()
+  );
+  await expect(supportCard).toBeVisible();
+  await expect(supportCard.getByText("Нужна помощь с окном выдачи", { exact: true })).toBeVisible();
+  await Promise.all([
+    supportMutation(),
+    supportCard.getByRole("button", { name: "Отметить первый контакт" }).click(),
+  ]);
+  await expect(supportCard.getByText(/Первый контакт отмечен/)).toBeVisible({ timeout: 10_000 });
+  await supportCard.getByLabel("Ответ партнёра").fill("Заведение подтвердило новое окно выдачи");
+  await supportCard.getByLabel("Решение для покупателя").fill("Клиент согласовал получение в новое время");
+  await supportCard.getByRole("radio", { name: "Да" }).check();
+  await Promise.all([
+    supportMutation(),
+    supportCard.getByRole("button", { name: "Зафиксировать решение" }).click(),
+  ]);
+  await expect(supportCard.getByText("Решено", { exact: true })).toBeVisible({ timeout: 10_000 });
+  await Promise.all([
+    supportMutation(),
+    supportCard.getByRole("button", { name: "Закрыть кейс" }).click(),
+  ]);
+  await expect(supportCard).toHaveCount(0, { timeout: 10_000 });
   await adminContext.close();
 
   await page.reload();
