@@ -18,6 +18,7 @@ export type AddressSuggestion = {
   id: string;
   name: string;
   osmKey: string;
+  city: string;
   address: string;
   primary: string;
   secondary: string;
@@ -50,6 +51,7 @@ export function photonSuggestions(payload: unknown): AddressSuggestion[] {
     const properties = feature.properties ?? {};
     const name = text(properties.name);
     const osmKey = text(properties.osm_key);
+    const city = text(properties.city);
     const street = text(properties.street);
     const house = text(properties.housenumber);
     const primary = street
@@ -58,7 +60,7 @@ export function photonSuggestions(payload: unknown): AddressSuggestion[] {
     if (!primary) return [];
 
     const secondaryParts = unique([
-      text(properties.city),
+      city,
       text(properties.district),
       text(properties.state),
       text(properties.country),
@@ -69,6 +71,7 @@ export function photonSuggestions(payload: unknown): AddressSuggestion[] {
       id: `${lng}:${lat}:${index}`,
       name,
       osmKey,
+      city,
       address,
       primary,
       secondary,
