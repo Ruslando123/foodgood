@@ -8,7 +8,7 @@ import { haversineKm, formatDistance } from "@/lib/geo";
 import { generatePickupCode } from "@/lib/qr";
 import { isDevOtpEnabled, isLocalAppBaseUrl, normalizePhone } from "@/lib/auth";
 import { sendTelegramBotMessage, verifyTelegramInitData } from "@/lib/telegram";
-import { pluralRu } from "@/lib/client/api";
+import { formatPickupWindow, pluralRu } from "@/lib/client/api";
 import { safeInternalPath } from "@/shared/navigation";
 import { integer, requiredString } from "@/shared/validation";
 import { idempotentOrderRequest, normalizeIdempotencyKey } from "@/modules/orders/idempotency";
@@ -17,7 +17,7 @@ import { filterAndSortCatalog, parseCatalogQuery } from "@/modules/catalog/query
 import { isInKazakhstan, kazakhstanCityById, nearestKazakhstanCity } from "@/lib/kazakhstan";
 import { readVenuePhoto, removeVenuePhoto, saveVenuePhoto } from "@/lib/venue-photos";
 import { csvCell, parseFinanceDateRange } from "@/lib/csv";
-import { zonedDayBounds } from "@/lib/timezone";
+import { addDaysToDateInput, dateInputValueAt, zonedDateTimeToUtc, zonedDayBounds } from "@/lib/timezone";
 import { otpSecretValue, sessionSecretValue } from "@/lib/secrets";
 import { hasAcceptedCurrentPrivacyPolicy, PRIVACY_POLICY_VERSION } from "@/lib/privacy";
 import { hasAcceptedCurrentTerms, TERMS_VERSION } from "@/lib/legal";
@@ -296,6 +296,24 @@ describe("статус пакета в кабинете заведения", () 
       quantityLeft: 5,
       pickupEnd: new Date("2026-07-24T01:00:00.000Z"),
     }, now)).toBe("ACTIVE");
+  });
+});
+
+describe("дата и время выдачи", () => {
+  it("сохраняет выбранные 21:00 Алматы как 16:00 UTC", () => {
+    expect(zonedDateTimeToUtc("2026-07-25", "21:00", "Asia/Almaty").toISOString())
+      .toBe("2026-07-25T16:00:00.000Z");
+  });
+
+  it("одинаково показывает окно выдачи в клиентских карточках", () => {
+    expect(formatPickupWindow("2026-07-25T16:00:00.000Z", "2026-07-25T17:00:00.000Z"))
+      .toContain("21:00–22:00");
+  });
+
+  it("вычисляет календарную дату Алматы и следующий день", () => {
+    const lateUtc = new Date("2026-07-24T20:30:00.000Z");
+    expect(dateInputValueAt(lateUtc, "Asia/Almaty")).toBe("2026-07-25");
+    expect(addDaysToDateInput("2026-07-31", 1)).toBe("2026-08-01");
   });
 });
 

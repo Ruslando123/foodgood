@@ -16,10 +16,22 @@ function partsAt(date: Date, timeZone: string): LocalDateParts {
 }
 
 function localMidnightToUtc(year: number, month: number, day: number, timeZone: string): Date {
-  const localAsUtc = Date.UTC(year, month - 1, day);
+  return localDateTimeToUtc(year, month, day, 0, 0, 0, timeZone);
+}
+
+function localDateTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  timeZone: string
+): Date {
+  const localAsUtc = Date.UTC(year, month - 1, day, hour, minute, second);
   let candidate = localAsUtc;
   // A second pass handles offset changes close to midnight without a timezone dependency.
-  for (let pass = 0; pass < 2; pass += 1) {
+  for (let pass = 0; pass < 3; pass += 1) {
     const actual = partsAt(new Date(candidate), timeZone);
     const representedAsUtc = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, actual.second);
     candidate += localAsUtc - representedAsUtc;
@@ -34,4 +46,29 @@ export function zonedDayBounds(now: Date, timeZone: string): { startUtc: Date; e
     startUtc: localMidnightToUtc(current.year, current.month, current.day, timeZone),
     endUtc: localMidnightToUtc(nextDate.getUTCFullYear(), nextDate.getUTCMonth() + 1, nextDate.getUTCDate(), timeZone),
   };
+}
+
+export function dateInputValueAt(date: Date, timeZone: string): string {
+  const value = partsAt(date, timeZone);
+  return `${String(value.year).padStart(4, "0")}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
+}
+
+export function addDaysToDateInput(value: string, days: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) throw new Error("Invalid date input");
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days));
+  return date.toISOString().slice(0, 10);
+}
+
+export function zonedDateTimeToUtc(dateValue: string, timeValue: string, timeZone: string): Date {
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue);
+  const timeMatch = /^(\d{2}):(\d{2})$/.exec(timeValue);
+  if (!dateMatch || !timeMatch) throw new Error("Invalid local date or time");
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  if (hour > 23 || minute > 59) throw new Error("Invalid local time");
+  return localDateTimeToUtc(year, month, day, hour, minute, 0, timeZone);
 }

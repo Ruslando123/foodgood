@@ -5,6 +5,18 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, Venue } from "@/lib/client/api";
 import SafetyAttestationChecklist, { allSafetyConfirmed, EMPTY_SAFETY_CHECKLIST } from "@/components/SafetyAttestationChecklist";
+import { addDaysToDateInput, dateInputValueAt, zonedDateTimeToUtc } from "@/lib/timezone";
+
+const BUSINESS_TIME_ZONE = "Asia/Almaty";
+const DEFAULT_END_TIME = "22:00";
+
+function initialPickupDate(): string {
+  const now = new Date();
+  const today = dateInputValueAt(now, BUSINESS_TIME_ZONE);
+  return zonedDateTimeToUtc(today, DEFAULT_END_TIME, BUSINESS_TIME_ZONE) > now
+    ? today
+    : addDaysToDateInput(today, 1);
+}
 
 /** Публикация пакета «в 2 клика»: разумные значения по умолчанию на вечер. */
 export default function NewBagPage() {
@@ -20,8 +32,9 @@ export default function NewBagPage() {
   const [price, setPrice] = useState("1500");
   const [originalPrice, setOriginalPrice] = useState("4500");
   const [quantity, setQuantity] = useState("5");
+  const [pickupDate, setPickupDate] = useState(initialPickupDate);
   const [startTime, setStartTime] = useState("21:00");
-  const [endTime, setEndTime] = useState("22:00");
+  const [endTime, setEndTime] = useState(DEFAULT_END_TIME);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [safety, setSafety] = useState(EMPTY_SAFETY_CHECKLIST);
@@ -35,26 +48,18 @@ export default function NewBagPage() {
       .catch((e) => setError(e.message));
   }, []);
 
-  function timeToday(hhmm: string): Date {
-    const [h, m] = hhmm.split(":").map(Number);
-    const d = new Date();
-    d.setHours(h, m, 0, 0);
-    return d;
-  }
-
   async function publish() {
     setBusy(true);
     setError(null);
     try {
-      const pickupStart = timeToday(startTime);
-      const pickupEnd = timeToday(endTime);
+      const pickupStart = zonedDateTimeToUtc(pickupDate, startTime, BUSINESS_TIME_ZONE);
+      let pickupEnd = zonedDateTimeToUtc(pickupDate, endTime, BUSINESS_TIME_ZONE);
       // Окно через полночь (например, 23:00–00:30)
-      if (pickupEnd <= pickupStart) pickupEnd.setDate(pickupEnd.getDate() + 1);
-      // Окно сегодня уже закончилось — публикуем на завтра;
-      // если оно ещё идёт, оставляем сегодняшним
+      if (pickupEnd <= pickupStart) {
+        pickupEnd = zonedDateTimeToUtc(addDaysToDateInput(pickupDate, 1), endTime, BUSINESS_TIME_ZONE);
+      }
       if (pickupEnd <= new Date()) {
-        pickupStart.setDate(pickupStart.getDate() + 1);
-        pickupEnd.setDate(pickupEnd.getDate() + 1);
+        throw new Error("Окно выдачи уже закончилось. Выберите будущую дату или время.");
       }
       await api("/api/business/bags", {
         method: "POST",
@@ -152,6 +157,17 @@ export default function NewBagPage() {
           </Field>
         </div>
 
+        <Field label="Дата выдачи">
+          <input
+            type="date"
+            min={dateInputValueAt(new Date(), BUSINESS_TIME_ZONE)}
+            value={pickupDate}
+            onChange={(e) => setPickupDate(e.target.value)}
+            className="w-full bg-card border border-black/10 rounded-xl px-3 py-3"
+          />
+          <p className="mt-1 text-[11px] font-normal text-muted">Дата указана по времени Алматы (UTC+5). Проверьте её перед публикацией.</p>
+        </Field>
+
         <div className="grid grid-cols-3 gap-3">
           <Field label="Кол-во">
             <input type="number" value={quantity} onChange={(e) => setQuantity(e.target.value)} className="w-full bg-card border border-black/10 rounded-xl px-3 py-3" />
@@ -173,7 +189,7 @@ export default function NewBagPage() {
           disabled={busy || !venueId || !allSafetyConfirmed(safety)}
           className="w-full py-3.5 rounded-2xl bg-primary text-white font-bold disabled:opacity-60"
         >
-          {busy ? "Публикуем…" : `Опубликовать ${quantity || 0} шт. · ${startTime}–${endTime}`}
+          {busy ? "Публикуем…" : `Опубликовать ${quantity || 0} шт. · ${formatDateLabel(pickupDate)}, ${startTime}–${endTime}`}
         </button>
         <p className="text-xs text-muted text-center">
           FoodGood создаёт бесплатную бронь. Покупатель платит продавцу на кассе при получении, а продавец выдаёт кассовый чек.
@@ -191,4 +207,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
+}
+
+function formatDateLabel(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return "выберите дату";
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
 }
