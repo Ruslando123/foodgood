@@ -1,4 +1,5 @@
 // Типы API-ответов и хелперы для клиентских компонентов
+import { dateInputValueAt } from "@/lib/timezone";
 
 export type Venue = {
   id: string;
@@ -131,14 +132,15 @@ export function formatPrice(kzt: number): string {
 }
 
 export function formatPickupWindow(startIso: string, endIso: string): string {
+  const timeZone = "Asia/Almaty";
   const fmt = (iso: string) =>
-    new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Almaty" });
+    new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone });
   const start = new Date(startIso);
   const today = new Date();
   const dayLabel =
-    start.toDateString() === today.toDateString()
+    dateInputValueAt(start, timeZone) === dateInputValueAt(today, timeZone)
       ? "сегодня"
-      : start.toLocaleDateString("ru-RU", { day: "numeric", month: "short", timeZone: "Asia/Almaty" });
+      : start.toLocaleDateString("ru-RU", { day: "numeric", month: "short", timeZone });
   return `${dayLabel} ${fmt(startIso)}–${fmt(endIso)}`;
 }
 
